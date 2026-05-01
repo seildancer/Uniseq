@@ -4,6 +4,8 @@ This folder is the rebuild spec for `uniseq`.
 
 Use it as a handoff package for agents building the app from scratch. The goal is to make it as much as compatible as logseq but with the deliberate divergences from Logseq.
 
+The original Logseq source code is available at `../og` from the repository root and should be used as the reference implementation when checking Logseq behavior or visual details.
+
 Uniseq is not a Logseq clone.
 
 It keeps the strongest parts of the local-first markdown workflow and drops the block-addressable graph as the center of the product.
@@ -42,6 +44,7 @@ If a decision is ambiguous, use this tiebreaker:
 - Manual block refs and block embeds are intentionally out of scope.
 - Rust owns correctness-sensitive and latency-sensitive work.
 - React + TypeScript own UI composition, editor integration, and JS-heavy feature surfaces.
+- The UI style should stay as close to Logseq as practical unless a documented Uniseq product divergence requires otherwise.
 - Persisted caches are allowed, but they are disposable and rebuildable.
 
 ## Recommended Reading By Concern

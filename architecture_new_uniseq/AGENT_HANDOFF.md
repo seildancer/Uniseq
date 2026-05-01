@@ -163,6 +163,12 @@ React + TypeScript own:
 
 TypeScript must not write workspace files directly.
 
+UI style guidance:
+
+- Keep Uniseq's visual style, interaction feel, spacing, and information density as close to Logseq as practical.
+- Use the original Logseq source code at `../og` from the repository root as the reference when checking existing Logseq UI behavior or implementation details.
+- Deviate visually only when the Uniseq product model explicitly requires it, and document the reason.
+
 Detailed docs:
 
 - [engine/modules.md](./engine/modules.md)
