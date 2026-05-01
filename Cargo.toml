@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/uniseq_engine", "src-tauri"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/uniseq/uniseq"
