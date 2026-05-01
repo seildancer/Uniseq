@@ -1,0 +1,8 @@
+[package]
+name = "uniseq"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "uniseq"
+path = "src/lib.rs"
