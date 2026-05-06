@@ -135,6 +135,7 @@ pub enum CoreError {
     InvalidParse(ParserError),
     Io { path: PathBuf, kind: io::ErrorKind },
     MissingPage,
+    MissingBlock,
     StalePageRevision,
 }
 
@@ -149,6 +150,7 @@ impl fmt::Display for CoreError {
                 write!(f, "i/o error at '{}': {kind}", path.display())
             }
             Self::MissingPage => write!(f, "page does not exist in cache"),
+            Self::MissingBlock => write!(f, "block does not exist in page"),
             Self::StalePageRevision => write!(f, "page revision does not match cache"),
         }
     }

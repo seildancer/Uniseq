@@ -28,6 +28,39 @@ impl PageRefOccurrence {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHandle {
+    source_page_id: PageId,
+    source_page_fingerprint: FileFingerprint,
+    block_span: SourceSpan,
+}
+
+impl BlockHandle {
+    pub fn new(
+        source_page_id: PageId,
+        source_page_fingerprint: FileFingerprint,
+        block_span: SourceSpan,
+    ) -> Self {
+        Self {
+            source_page_id,
+            source_page_fingerprint,
+            block_span,
+        }
+    }
+
+    pub fn source_page_id(&self) -> &PageId {
+        &self.source_page_id
+    }
+
+    pub fn source_page_fingerprint(&self) -> FileFingerprint {
+        self.source_page_fingerprint
+    }
+
+    pub fn block_span(&self) -> SourceSpan {
+        self.block_span
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub kind: BlockKind,
     pub block_span: SourceSpan,
@@ -182,5 +215,21 @@ mod tests {
 
         assert_eq!(explicit.kind, BlockKind::Plaintext(PlaintextKind::Explicit));
         assert_eq!(implicit.kind, BlockKind::Plaintext(PlaintextKind::Implicit));
+    }
+
+    #[test]
+    fn block_handle_exposes_shared_source_anchor_fields() {
+        let handle = BlockHandle::new(
+            PageId::new(["A"]).unwrap(),
+            FileFingerprint::from_text("- a\n"),
+            SourceSpan::unchecked(0, 4),
+        );
+
+        assert_eq!(handle.source_page_id(), &PageId::new(["A"]).unwrap());
+        assert_eq!(
+            handle.source_page_fingerprint(),
+            FileFingerprint::from_text("- a\n")
+        );
+        assert_eq!(handle.block_span(), SourceSpan::unchecked(0, 4));
     }
 }
