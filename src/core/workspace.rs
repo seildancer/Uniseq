@@ -1,14 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Block, CoreError, FileFingerprint, IncomingRef, Page, PageId, SourceSpan};
+use super::{
+    Block, BlockHandle, CoreError, FileFingerprint, IncomingRef, Page, PageId, parse_blocks,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IncrementalUpdate {
-    pub page_id: PageId,
-    pub expected_fingerprint: FileFingerprint,
-    pub replaced_block_span: SourceSpan,
-    pub replacement_blocks: Vec<Block>,
-    pub new_text: String,
+pub struct BlockSubtreeEdit {
+    pub block_handle: BlockHandle,
+    pub replacement_markdown: String,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -55,41 +54,14 @@ impl WorkspaceCache {
         self.rebuild_all_incoming_refs();
     }
 
-    pub fn replace_page_blocks(
+    pub fn reparse_and_upsert_page_markdown(
         &mut self,
         page_id: &PageId,
         text: impl Into<String>,
-        blocks: Vec<Block>,
     ) -> Result<(), CoreError> {
-        let page = self.pages.get_mut(page_id).ok_or(CoreError::MissingPage)?;
-        page.set_text_and_blocks(text, blocks);
-        self.rebuild_incoming_refs_after_source_change(page_id);
-        Ok(())
-    }
-
-    pub fn apply_incremental_update(&mut self, update: IncrementalUpdate) -> Result<(), CoreError> {
-        let page = self
-            .pages
-            .get_mut(&update.page_id)
-            .ok_or(CoreError::MissingPage)?;
-
-        if page.fingerprint != update.expected_fingerprint {
-            return Err(CoreError::StalePageRevision);
-        }
-
-        replace_blocks_by_span(
-            &mut page.blocks,
-            update.replaced_block_span,
-            update.replacement_blocks,
-        )
-        .ok_or(CoreError::InvalidSpan(super::SpanError::OutOfBounds {
-            span_end: update.replaced_block_span.end(),
-            text_len: page.fingerprint.len_bytes(),
-        }))?;
-
-        page.text = update.new_text;
-        page.fingerprint = FileFingerprint::from_text(&page.text);
-        self.rebuild_incoming_refs_after_source_change(&update.page_id);
+        let text = text.into();
+        let blocks = parse_blocks(&text)?;
+        self.upsert_page(Page::new(page_id.clone(), text).with_blocks(blocks));
         Ok(())
     }
 
@@ -136,15 +108,6 @@ impl WorkspaceCache {
         for source_page_id in source_page_ids {
             self.insert_incoming_refs_from_source(&source_page_id);
         }
-    }
-
-    fn rebuild_incoming_refs_after_source_change(&mut self, source_page_id: &PageId) {
-        for page in self.pages.values_mut() {
-            page.incoming_refs
-                .retain(|incoming| &incoming.source_page_id != source_page_id);
-        }
-
-        self.insert_incoming_refs_from_source(source_page_id);
     }
 
     fn insert_incoming_refs_from_source(&mut self, source_page_id: &PageId) {
@@ -202,38 +165,10 @@ fn incoming_refs_from_block(
     refs
 }
 
-fn replace_blocks_by_span(
-    blocks: &mut Vec<Block>,
-    replaced_block_span: SourceSpan,
-    replacement_blocks: Vec<Block>,
-) -> Option<()> {
-    if let Some(index) = blocks
-        .iter()
-        .position(|block| block.block_span == replaced_block_span)
-    {
-        blocks.splice(index..=index, replacement_blocks);
-        return Some(());
-    }
-
-    for block in blocks {
-        if replace_blocks_by_span(
-            &mut block.children,
-            replaced_block_span,
-            replacement_blocks.clone(),
-        )
-        .is_some()
-        {
-            return Some(());
-        }
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SpanError, parse_blocks};
+    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SourceSpan, parse_blocks};
 
     fn page(id: &[&str], text: &str, blocks: Vec<Block>) -> Page {
         Page::new(PageId::new(id.iter().copied()).unwrap(), text).with_blocks(blocks)
@@ -304,24 +239,15 @@ mod tests {
     }
 
     #[test]
-    fn incremental_update_rewrites_only_refs_from_changed_subtree() {
+    fn reparse_and_upsert_page_markdown_reparses_and_rebuilds_incoming_refs() {
         let mut cache = WorkspaceCache::new();
-        let original_text = "- [[B]]\n";
-        let original_fingerprint = FileFingerprint::from_text(original_text);
         let source_page_id = PageId::new(["A"]).unwrap();
-        let old_block = ref_block(
-            SourceSpan::unchecked(0, 8),
-            &["B"],
-            SourceSpan::unchecked(2, 7),
-        );
-        let new_block = ref_block(
-            SourceSpan::unchecked(0, 8),
-            &["C"],
-            SourceSpan::unchecked(2, 7),
-        );
-
         cache.upsert_page(
-            Page::new(source_page_id.clone(), original_text).with_blocks(vec![old_block]),
+            Page::new(source_page_id.clone(), "- [[B]]\n").with_blocks(vec![ref_block(
+                SourceSpan::unchecked(0, 8),
+                &["B"],
+                SourceSpan::unchecked(2, 7),
+            )]),
         );
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache.upsert_page(page(&["C"], "", Vec::new()));
@@ -344,13 +270,7 @@ mod tests {
         );
 
         cache
-            .apply_incremental_update(IncrementalUpdate {
-                page_id: source_page_id,
-                expected_fingerprint: original_fingerprint,
-                replaced_block_span: SourceSpan::unchecked(0, 8),
-                replacement_blocks: vec![new_block],
-                new_text: "- [[C]]\n".to_owned(),
-            })
+            .reparse_and_upsert_page_markdown(&source_page_id, "- [[C]]\n")
             .unwrap();
 
         assert_eq!(
@@ -372,47 +292,14 @@ mod tests {
     }
 
     #[test]
-    fn stale_incremental_update_is_rejected() {
-        let mut cache = WorkspaceCache::new();
-        let source_page_id = PageId::new(["A"]).unwrap();
-        cache.upsert_page(page(
-            &["A"],
-            "- old\n",
-            vec![Block::leaf(
-                BlockKind::Outliner,
-                SourceSpan::unchecked(0, 6),
-                SourceSpan::unchecked(2, 5),
-            )],
-        ));
-
-        let result = cache.apply_incremental_update(IncrementalUpdate {
-            page_id: source_page_id,
-            expected_fingerprint: FileFingerprint::from_text("- stale\n"),
-            replaced_block_span: SourceSpan::unchecked(0, 6),
-            replacement_blocks: Vec::new(),
-            new_text: String::new(),
-        });
-
-        assert_eq!(result.unwrap_err(), CoreError::StalePageRevision);
-    }
-
-    #[test]
-    fn whole_page_replacement_rebuilds_incoming_refs_for_fallbacks() {
+    fn reparse_and_upsert_page_markdown_rebuilds_incoming_refs_for_whole_page_updates() {
         let mut cache = WorkspaceCache::new();
         let source_page_id = PageId::new(["A"]).unwrap();
 
         cache.upsert_page(page(&["A"], "", Vec::new()));
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache
-            .replace_page_blocks(
-                &source_page_id,
-                "- [[B]]\n",
-                vec![ref_block(
-                    SourceSpan::unchecked(0, 8),
-                    &["B"],
-                    SourceSpan::unchecked(2, 7),
-                )],
-            )
+            .reparse_and_upsert_page_markdown(&source_page_id, "- [[B]]\n")
             .unwrap();
 
         assert_eq!(
@@ -455,29 +342,19 @@ mod tests {
     }
 
     #[test]
-    fn incremental_update_accepts_real_parser_output() {
+    fn reparse_and_upsert_page_markdown_accepts_real_parser_output() {
         let mut cache = WorkspaceCache::new();
-        let original_text = "- [[B]]\n";
         let source_page_id = PageId::new(["A"]).unwrap();
 
         cache.upsert_page(
-            Page::new(source_page_id.clone(), original_text)
-                .with_blocks(parse_blocks(original_text).unwrap()),
+            Page::new(source_page_id.clone(), "- [[B]]\n")
+                .with_blocks(parse_blocks("- [[B]]\n").unwrap()),
         );
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache.upsert_page(page(&["C"], "", Vec::new()));
 
-        let replacement_text = "- [[C]]\n";
-        let replacement_blocks = parse_blocks(replacement_text).unwrap();
-
         cache
-            .apply_incremental_update(IncrementalUpdate {
-                page_id: source_page_id,
-                expected_fingerprint: FileFingerprint::from_text(original_text),
-                replaced_block_span: SourceSpan::unchecked(0, original_text.len()),
-                replacement_blocks,
-                new_text: replacement_text.to_owned(),
-            })
+            .reparse_and_upsert_page_markdown(&source_page_id, "- [[C]]\n")
             .unwrap();
 
         assert_eq!(
@@ -499,10 +376,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_block_span_is_reported_as_invalid_span() {
+    fn reparse_and_upsert_page_markdown_can_replace_page_with_empty_markdown() {
         let mut cache = WorkspaceCache::new();
         let source_page_id = PageId::new(["A"]).unwrap();
-        let fingerprint = FileFingerprint::from_text("- old\n");
         cache.upsert_page(
             Page::new(source_page_id.clone(), "- old\n").with_blocks(vec![Block::leaf(
                 BlockKind::Plaintext(PlaintextKind::Implicit),
@@ -511,20 +387,11 @@ mod tests {
             )]),
         );
 
-        let result = cache.apply_incremental_update(IncrementalUpdate {
-            page_id: source_page_id,
-            expected_fingerprint: fingerprint,
-            replaced_block_span: SourceSpan::unchecked(20, 25),
-            replacement_blocks: Vec::new(),
-            new_text: String::new(),
-        });
-
-        assert_eq!(
-            result.unwrap_err(),
-            CoreError::InvalidSpan(SpanError::OutOfBounds {
-                span_end: 25,
-                text_len: 6
-            })
-        );
+        cache
+            .reparse_and_upsert_page_markdown(&source_page_id, "")
+            .unwrap();
+        let page = cache.page(&source_page_id).unwrap();
+        assert_eq!(page.text, "");
+        assert!(page.blocks.is_empty());
     }
 }
