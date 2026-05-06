@@ -113,10 +113,26 @@ impl fmt::Display for SpanError {
 impl std::error::Error for SpanError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParserError {
+    InvalidFenceMarker,
+}
+
+impl fmt::Display for ParserError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidFenceMarker => write!(f, "invalid fenced code marker"),
+        }
+    }
+}
+
+impl std::error::Error for ParserError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
     InvalidName(NameError),
     InvalidPagePath(PagePathError),
     InvalidSpan(SpanError),
+    InvalidParse(ParserError),
     Io { path: PathBuf, kind: io::ErrorKind },
     MissingPage,
     StalePageRevision,
@@ -128,6 +144,7 @@ impl fmt::Display for CoreError {
             Self::InvalidName(err) => write!(f, "{err}"),
             Self::InvalidPagePath(err) => write!(f, "{err}"),
             Self::InvalidSpan(err) => write!(f, "{err}"),
+            Self::InvalidParse(err) => write!(f, "{err}"),
             Self::Io { path, kind } => {
                 write!(f, "i/o error at '{}': {kind}", path.display())
             }
@@ -154,6 +171,12 @@ impl From<PagePathError> for CoreError {
 impl From<SpanError> for CoreError {
     fn from(value: SpanError) -> Self {
         Self::InvalidSpan(value)
+    }
+}
+
+impl From<ParserError> for CoreError {
+    fn from(value: ParserError) -> Self {
+        Self::InvalidParse(value)
     }
 }
 

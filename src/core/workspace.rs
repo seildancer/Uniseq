@@ -232,7 +232,7 @@ fn replace_blocks_by_span(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PageRefOccurrence, SpanError};
+    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SpanError};
 
     fn page(id: &[&str], text: &str, blocks: Vec<Block>) -> Page {
         Page::new(
@@ -244,6 +244,7 @@ mod tests {
 
     fn ref_block(block_span: SourceSpan, target: &[&str], ref_span: SourceSpan) -> Block {
         Block::new(
+            BlockKind::Outliner,
             block_span,
             block_span,
             Vec::new(),
@@ -380,6 +381,7 @@ mod tests {
             &["A"],
             "- old\n",
             vec![Block::leaf(
+                BlockKind::Outliner,
                 SourceSpan::unchecked(0, 6),
                 SourceSpan::unchecked(2, 5),
             )],
@@ -432,6 +434,7 @@ mod tests {
         let fingerprint = FileFingerprint::from_text("- old\n");
         cache.upsert_page(
             Page::new(source_page_id.clone(), fingerprint).with_blocks(vec![Block::leaf(
+                BlockKind::Plaintext(PlaintextKind::Implicit),
                 SourceSpan::unchecked(0, 6),
                 SourceSpan::unchecked(2, 5),
             )]),

@@ -1,5 +1,17 @@
 use super::{FileFingerprint, PageId, SourceSpan};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaintextKind {
+    Explicit,
+    Implicit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockKind {
+    Outliner,
+    Plaintext(PlaintextKind),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageRefOccurrence {
     pub target_page_id: PageId,
@@ -17,6 +29,7 @@ impl PageRefOccurrence {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
+    pub kind: BlockKind,
     pub block_span: SourceSpan,
     pub content_span: SourceSpan,
     pub children: Vec<Block>,
@@ -25,6 +38,7 @@ pub struct Block {
 
 impl Block {
     pub fn new(
+        kind: BlockKind,
         block_span: SourceSpan,
         content_span: SourceSpan,
         children: Vec<Block>,
@@ -32,6 +46,7 @@ impl Block {
     ) -> Self {
         debug_assert!(block_span.contains_span(content_span));
         Self {
+            kind,
             block_span,
             content_span,
             children,
@@ -39,8 +54,28 @@ impl Block {
         }
     }
 
-    pub fn leaf(block_span: SourceSpan, content_span: SourceSpan) -> Self {
-        Self::new(block_span, content_span, Vec::new(), Vec::new())
+    pub fn leaf(kind: BlockKind, block_span: SourceSpan, content_span: SourceSpan) -> Self {
+        Self::new(kind, block_span, content_span, Vec::new(), Vec::new())
+    }
+
+    pub fn outliner(block_span: SourceSpan, content_span: SourceSpan) -> Self {
+        Self::leaf(BlockKind::Outliner, block_span, content_span)
+    }
+
+    pub fn explicit_plaintext(block_span: SourceSpan, content_span: SourceSpan) -> Self {
+        Self::leaf(
+            BlockKind::Plaintext(PlaintextKind::Explicit),
+            block_span,
+            content_span,
+        )
+    }
+
+    pub fn implicit_plaintext(block_span: SourceSpan, content_span: SourceSpan) -> Self {
+        Self::leaf(
+            BlockKind::Plaintext(PlaintextKind::Implicit),
+            block_span,
+            content_span,
+        )
     }
 
     pub fn walk(&self) -> BlockWalk<'_> {
@@ -100,8 +135,9 @@ mod tests {
 
     #[test]
     fn walks_blocks_in_source_order() {
-        let child = Block::leaf(SourceSpan::unchecked(4, 8), SourceSpan::unchecked(6, 8));
+        let child = Block::outliner(SourceSpan::unchecked(4, 8), SourceSpan::unchecked(6, 8));
         let parent = Block::new(
+            BlockKind::Outliner,
             SourceSpan::unchecked(0, 8),
             SourceSpan::unchecked(2, 3),
             vec![child],
@@ -119,8 +155,9 @@ mod tests {
 
     #[test]
     fn finds_block_by_span_without_a_block_id() {
-        let child = Block::leaf(SourceSpan::unchecked(4, 8), SourceSpan::unchecked(6, 8));
+        let child = Block::outliner(SourceSpan::unchecked(4, 8), SourceSpan::unchecked(6, 8));
         let parent = Block::new(
+            BlockKind::Outliner,
             SourceSpan::unchecked(0, 8),
             SourceSpan::unchecked(2, 3),
             vec![child],
@@ -134,5 +171,16 @@ mod tests {
                 .content_span,
             SourceSpan::unchecked(6, 8)
         );
+    }
+
+    #[test]
+    fn distinguishes_explicit_and_implicit_plaintext_blocks() {
+        let explicit =
+            Block::explicit_plaintext(SourceSpan::unchecked(0, 6), SourceSpan::unchecked(3, 6));
+        let implicit =
+            Block::implicit_plaintext(SourceSpan::unchecked(0, 4), SourceSpan::unchecked(0, 4));
+
+        assert_eq!(explicit.kind, BlockKind::Plaintext(PlaintextKind::Explicit));
+        assert_eq!(implicit.kind, BlockKind::Plaintext(PlaintextKind::Implicit));
     }
 }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CoreError, FileFingerprint, Page, PageId, WorkspaceCache};
+use super::{CoreError, FileFingerprint, Page, PageId, WorkspaceCache, parse_blocks};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceDiscovery {
@@ -120,8 +120,9 @@ fn load_page_from_relative_path(root: &Path, relative_path: &Path) -> Result<Pag
     let absolute_path = root.join(relative_path);
     let text =
         fs::read_to_string(&absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+    let blocks = parse_blocks(&text)?;
 
-    Ok(Page::new(page_id, FileFingerprint::from_text(&text)))
+    Ok(Page::new(page_id, FileFingerprint::from_text(&text)).with_blocks(blocks))
 }
 
 #[cfg(test)]
