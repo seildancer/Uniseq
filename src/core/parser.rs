@@ -1,4 +1,6 @@
-use super::{Block, BlockKind, CoreError, PlaintextKind, SourceSpan};
+use std::str::FromStr;
+
+use super::{Block, BlockKind, CoreError, PageId, PageRefOccurrence, PlaintextKind, SourceSpan};
 
 const TAB_WIDTH: usize = 4;
 const FENCE_MARKER: &str = "```";
@@ -57,6 +59,8 @@ pub fn parse_blocks(text: &str) -> Result<Vec<Block>, CoreError> {
     while !stack.is_empty() {
         close_top_block(&mut stack, &mut roots)?;
     }
+
+    populate_outgoing_refs(&mut roots, text)?;
 
     Ok(roots)
 }
@@ -253,6 +257,184 @@ fn close_top_block(stack: &mut Vec<OpenBlock>, roots: &mut Vec<Block>) -> Result
     Ok(())
 }
 
+fn populate_outgoing_refs(blocks: &mut [Block], text: &str) -> Result<(), CoreError> {
+    for block in blocks {
+        block.outgoing_refs = extract_page_refs(text, block.content_span)?;
+        populate_outgoing_refs(&mut block.children, text)?;
+    }
+
+    Ok(())
+}
+
+fn extract_page_refs(
+    text: &str,
+    content_span: SourceSpan,
+) -> Result<Vec<PageRefOccurrence>, CoreError> {
+    let content = content_span.slice(text)?;
+    let mut refs = Vec::new();
+    let mut in_fence = false;
+
+    for line_span in iter_lines(content) {
+        let line = line_span.slice(content)?;
+        let line_without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = line_without_newline.trim_start_matches([' ', '\t']);
+        let is_fence_line = trimmed.starts_with(FENCE_MARKER);
+
+        if !in_fence && !is_fence_line {
+            extract_inline_page_refs(
+                line_without_newline,
+                content_span.start() + line_span.start(),
+                &mut refs,
+            )?;
+        }
+
+        if is_fence_line {
+            in_fence = !in_fence;
+        }
+    }
+
+    Ok(refs)
+}
+
+fn extract_inline_page_refs(
+    line: &str,
+    line_start: usize,
+    refs: &mut Vec<PageRefOccurrence>,
+) -> Result<(), CoreError> {
+    let mut offset = 0;
+
+    while offset < line.len() {
+        let tail = &line[offset..];
+
+        if let Some((consumed, page_ref)) = parse_bracket_ref(tail, line_start + offset)? {
+            refs.push(page_ref);
+            offset += consumed;
+            continue;
+        }
+
+        if let Some((consumed, page_ref)) = parse_hashtag_ref(line, offset, line_start)? {
+            refs.push(page_ref);
+            offset += consumed;
+            continue;
+        }
+
+        let ch = tail
+            .chars()
+            .next()
+            .expect("offset is always positioned on a char boundary");
+        offset += ch.len_utf8();
+    }
+
+    Ok(())
+}
+
+fn parse_bracket_ref(
+    tail: &str,
+    absolute_start: usize,
+) -> Result<Option<(usize, PageRefOccurrence)>, CoreError> {
+    if !tail.starts_with("[[") {
+        return Ok(None);
+    }
+
+    let Some(closing_offset) = tail[2..].find("]]") else {
+        return Ok(None);
+    };
+
+    let closing_offset = closing_offset + 2;
+    let consumed = closing_offset + 2;
+    let candidate = &tail[2..closing_offset];
+
+    let Some(target_page_id) = parse_page_id_candidate(candidate) else {
+        return Ok(None);
+    };
+
+    let ref_span = SourceSpan::new(absolute_start, absolute_start + consumed)?;
+    Ok(Some((
+        consumed,
+        PageRefOccurrence::new(target_page_id, ref_span),
+    )))
+}
+
+fn parse_hashtag_ref(
+    line: &str,
+    offset: usize,
+    line_start: usize,
+) -> Result<Option<(usize, PageRefOccurrence)>, CoreError> {
+    let tail = &line[offset..];
+    if !tail.starts_with('#') {
+        return Ok(None);
+    }
+
+    let previous = line[..offset].chars().next_back();
+    if previous.is_some_and(is_hashtag_ref_char) {
+        return Ok(None);
+    }
+
+    let mut end = offset + '#'.len_utf8();
+    let mut consumed_all = true;
+    for (relative, ch) in line[end..].char_indices() {
+        if !is_hashtag_ref_char(ch) {
+            end += relative;
+            consumed_all = false;
+            break;
+        }
+    }
+
+    if consumed_all {
+        end = line.len();
+    }
+
+    if end == offset + '#'.len_utf8() {
+        return Ok(None);
+    }
+
+    let candidate_end = trim_trailing_hashtag_punctuation(line, offset + '#'.len_utf8(), end);
+    if candidate_end == offset + '#'.len_utf8() {
+        return Ok(None);
+    }
+
+    let candidate = &line[offset + '#'.len_utf8()..candidate_end];
+    let Some(target_page_id) = parse_page_id_candidate(candidate) else {
+        return Ok(None);
+    };
+
+    let ref_span = SourceSpan::new(line_start + offset, line_start + candidate_end)?;
+    Ok(Some((
+        candidate_end - offset,
+        PageRefOccurrence::new(target_page_id, ref_span),
+    )))
+}
+
+fn parse_page_id_candidate(candidate: &str) -> Option<PageId> {
+    let trimmed = candidate.trim();
+    (!trimmed.is_empty())
+        .then(|| PageId::from_str(trimmed).ok())
+        .flatten()
+}
+
+fn trim_trailing_hashtag_punctuation(line: &str, start: usize, end: usize) -> usize {
+    let mut trimmed_end = end;
+
+    while trimmed_end > start {
+        let ch = line[..trimmed_end]
+            .chars()
+            .next_back()
+            .expect("trimmed_end stays on a char boundary");
+
+        if !matches!(ch, '.' | ',' | '!' | '?' | ';' | ':' | ')' | ']' | '}') {
+            break;
+        }
+
+        trimmed_end -= ch.len_utf8();
+    }
+
+    trimmed_end
+}
+
+fn is_hashtag_ref_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '/' | '.')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +443,14 @@ mod tests {
         blocks
             .iter()
             .map(|block| (block.kind, block.block_span, block.content_span))
+            .collect()
+    }
+
+    fn ref_targets(block: &Block) -> Vec<String> {
+        block
+            .outgoing_refs
+            .iter()
+            .map(|page_ref| page_ref.target_page_id.hierarchy_display())
             .collect()
     }
 
@@ -470,5 +660,57 @@ mod tests {
             blocks[0].content_span.slice(text).unwrap(),
             "parent\n\t\u{25E6} child text\n"
         );
+    }
+
+    #[test]
+    fn extracts_bracket_and_hashtag_page_refs() {
+        let text = "- visit [[A/B]] and #C\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(ref_targets(&blocks[0]), vec!["A/B", "C"]);
+        assert_eq!(
+            blocks[0]
+                .outgoing_refs
+                .iter()
+                .map(|page_ref| page_ref.ref_span.slice(text).unwrap())
+                .collect::<Vec<_>>(),
+            vec!["[[A/B]]", "#C"]
+        );
+    }
+
+    #[test]
+    fn ignores_invalid_or_mid_word_reference_candidates() {
+        let text = "- bad [[A___B]] and prefix#Page and #\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert!(blocks[0].outgoing_refs.is_empty());
+    }
+
+    #[test]
+    fn ignores_references_inside_fenced_code_content() {
+        let text = "- before #A\n  ```rust\n  [[B]]\n  #C\n  ```\n  after [[D]]\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(ref_targets(&blocks[0]), vec!["A", "D"]);
+    }
+
+    #[test]
+    fn extracts_refs_from_parent_and_child_blocks_independently() {
+        let text = "- parent [[A]]\n\t- child #B\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(ref_targets(&blocks[0]), vec!["A"]);
+        assert_eq!(ref_targets(&blocks[0].children[0]), vec!["B"]);
+    }
+
+    #[test]
+    fn ignores_markdown_headings_when_scanning_hashtags() {
+        let text = "# Heading\n- body #Page\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].outgoing_refs.is_empty());
+        assert_eq!(ref_targets(&blocks[1]), vec!["Page"]);
     }
 }

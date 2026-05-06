@@ -229,6 +229,30 @@ mod tests {
     }
 
     #[test]
+    fn discovery_populates_incoming_refs_from_parsed_markdown() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "- see [[B]] and #C\n");
+        workspace.write_file("B.md", "");
+        workspace.write_file("C.md", "");
+
+        let discovery = discover_workspace(&workspace.root).unwrap();
+
+        let b = discovery.cache.page(&PageId::new(["B"]).unwrap()).unwrap();
+        let c = discovery.cache.page(&PageId::new(["C"]).unwrap()).unwrap();
+
+        assert_eq!(b.incoming_refs.len(), 1);
+        assert_eq!(c.incoming_refs.len(), 1);
+        assert_eq!(
+            b.incoming_refs[0].source_page_id,
+            PageId::new(["A"]).unwrap()
+        );
+        assert_eq!(
+            c.incoming_refs[0].source_page_id,
+            PageId::new(["A"]).unwrap()
+        );
+    }
+
+    #[test]
     fn rejects_nested_markdown_files() {
         let workspace = TestWorkspace::new();
         workspace.write_file("notes/A.md", "");

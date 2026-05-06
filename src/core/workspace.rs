@@ -233,7 +233,7 @@ fn replace_blocks_by_span(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SpanError};
+    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SpanError, parse_blocks};
 
     fn page(id: &[&str], text: &str, blocks: Vec<Block>) -> Page {
         Page::new(PageId::new(id.iter().copied()).unwrap(), text).with_blocks(blocks)
@@ -418,6 +418,79 @@ mod tests {
         assert_eq!(
             cache
                 .page(&PageId::new(["B"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn parsed_blocks_feed_incoming_ref_indexing() {
+        let mut cache = WorkspaceCache::new();
+        let text = "- [[B]]\n\t- #C\n";
+
+        cache.upsert_page(
+            Page::new(PageId::new(["A"]).unwrap(), text).with_blocks(parse_blocks(text).unwrap()),
+        );
+        cache.upsert_page(page(&["B"], "", Vec::new()));
+        cache.upsert_page(page(&["C"], "", Vec::new()));
+
+        assert_eq!(
+            cache
+                .page(&PageId::new(["B"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            1
+        );
+        assert_eq!(
+            cache
+                .page(&PageId::new(["C"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn incremental_update_accepts_real_parser_output() {
+        let mut cache = WorkspaceCache::new();
+        let original_text = "- [[B]]\n";
+        let source_page_id = PageId::new(["A"]).unwrap();
+
+        cache.upsert_page(
+            Page::new(source_page_id.clone(), original_text)
+                .with_blocks(parse_blocks(original_text).unwrap()),
+        );
+        cache.upsert_page(page(&["B"], "", Vec::new()));
+        cache.upsert_page(page(&["C"], "", Vec::new()));
+
+        let replacement_text = "- [[C]]\n";
+        let replacement_blocks = parse_blocks(replacement_text).unwrap();
+
+        cache
+            .apply_incremental_update(IncrementalUpdate {
+                page_id: source_page_id,
+                expected_fingerprint: FileFingerprint::from_text(original_text),
+                replaced_block_span: SourceSpan::unchecked(0, original_text.len()),
+                replacement_blocks,
+                new_text: replacement_text.to_owned(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            cache
+                .page(&PageId::new(["B"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            0
+        );
+        assert_eq!(
+            cache
+                .page(&PageId::new(["C"]).unwrap())
                 .unwrap()
                 .incoming_refs
                 .len(),
