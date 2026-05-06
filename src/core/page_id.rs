@@ -98,10 +98,8 @@ impl PageId {
 
         let file_name = file_name.to_str().ok_or(PagePathError::MissingFileName)?;
 
-        let stem = file_name
-            .strip_suffix(MARKDOWN_EXTENSION)
-            .or_else(|| file_name.strip_suffix(".MD"))
-            .ok_or(PagePathError::MissingMarkdownExtension)?;
+        let stem =
+            strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
 
         if stem.is_empty() || stem.split(HIERARCHY_DELIMITER).any(str::is_empty) {
             return Err(PagePathError::EmptyHierarchySegment);
@@ -211,6 +209,16 @@ fn validate_page_name(value: &str) -> Result<(), NameError> {
     Ok(())
 }
 
+fn strip_markdown_extension(file_name: &str) -> Option<&str> {
+    file_name
+        .get(file_name.len().checked_sub(MARKDOWN_EXTENSION.len())?..)
+        .and_then(|suffix| {
+            suffix
+                .eq_ignore_ascii_case(MARKDOWN_EXTENSION)
+                .then(|| &file_name[..file_name.len() - MARKDOWN_EXTENSION.len()])
+        })
+}
+
 fn is_windows_device_name(value: &str) -> bool {
     let upper = value.to_ascii_uppercase();
     matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
@@ -306,6 +314,16 @@ mod tests {
         assert_eq!(
             PageId::from_workspace_path("A______B.md").unwrap_err(),
             PagePathError::EmptyHierarchySegment
+        );
+    }
+
+    #[test]
+    fn accepts_mixed_case_markdown_extensions() {
+        assert_eq!(
+            PageId::from_workspace_path("A___B.Md")
+                .unwrap()
+                .hierarchy_display(),
+            "A/B"
         );
     }
 }

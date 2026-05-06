@@ -21,6 +21,21 @@ impl WorkspaceCache {
         Self::default()
     }
 
+    pub fn from_pages<I>(pages: I) -> Self
+    where
+        I: IntoIterator<Item = Page>,
+    {
+        let mut cache = Self {
+            pages: pages
+                .into_iter()
+                .map(|page| (page.page_id.clone(), page))
+                .collect(),
+        };
+        cache.rebuild_hierarchy();
+        cache.rebuild_all_incoming_refs();
+        cache
+    }
+
     pub fn pages(&self) -> &BTreeMap<PageId, Page> {
         &self.pages
     }

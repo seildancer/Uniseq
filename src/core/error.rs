@@ -1,4 +1,6 @@
 use std::fmt;
+use std::io;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NameError {
@@ -115,6 +117,7 @@ pub enum CoreError {
     InvalidName(NameError),
     InvalidPagePath(PagePathError),
     InvalidSpan(SpanError),
+    Io { path: PathBuf, kind: io::ErrorKind },
     MissingPage,
     StalePageRevision,
 }
@@ -125,6 +128,9 @@ impl fmt::Display for CoreError {
             Self::InvalidName(err) => write!(f, "{err}"),
             Self::InvalidPagePath(err) => write!(f, "{err}"),
             Self::InvalidSpan(err) => write!(f, "{err}"),
+            Self::Io { path, kind } => {
+                write!(f, "i/o error at '{}': {kind}", path.display())
+            }
             Self::MissingPage => write!(f, "page does not exist in cache"),
             Self::StalePageRevision => write!(f, "page revision does not match cache"),
         }
@@ -148,5 +154,14 @@ impl From<PagePathError> for CoreError {
 impl From<SpanError> for CoreError {
     fn from(value: SpanError) -> Self {
         Self::InvalidSpan(value)
+    }
+}
+
+impl CoreError {
+    pub fn io(path: impl Into<PathBuf>, error: &io::Error) -> Self {
+        Self::Io {
+            path: path.into(),
+            kind: error.kind(),
+        }
     }
 }
