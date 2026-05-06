@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::{
     BlockSubtreeEdit, CoreError, FileFingerprint, Page, PageId, SourceSpan, WorkspaceCache,
-    parse_blocks,
+    discover_workspace, parse_blocks,
 };
 
 pub fn apply_block_subtree_edit(
@@ -38,8 +38,34 @@ pub fn apply_block_subtree_edit(
 
     fs::write(&absolute_path, &updated_text)
         .map_err(|error| CoreError::io(&absolute_path, &error))?;
-    cache.reparse_and_upsert_page_markdown(page_id, updated_text)?;
+    refresh_page_in_cache(root, cache, page_id)?;
     Ok(())
+}
+
+pub(crate) fn refresh_workspace_cache(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+) -> Result<(), CoreError> {
+    *cache = load_workspace_cache(root)?;
+    Ok(())
+}
+
+pub(crate) fn load_workspace_cache(root: impl AsRef<Path>) -> Result<WorkspaceCache, CoreError> {
+    Ok(discover_workspace(root)?.cache)
+}
+
+pub(crate) fn refresh_page_in_cache(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    page_id: &PageId,
+) -> Result<(), CoreError> {
+    let page = load_page_from_page_id(root.as_ref(), page_id)?;
+    cache.upsert_page(page);
+    Ok(())
+}
+
+pub(crate) fn load_page_from_page_id(root: &Path, page_id: &PageId) -> Result<Page, CoreError> {
+    load_page_from_relative_path(root, &page_id.to_workspace_path())
 }
 
 pub(crate) fn load_page_from_relative_path(
@@ -53,7 +79,7 @@ pub(crate) fn load_page_from_relative_path(
     page_from_markdown(page_id, text)
 }
 
-fn page_from_markdown(page_id: PageId, text: String) -> Result<Page, CoreError> {
+pub(crate) fn page_from_markdown(page_id: PageId, text: String) -> Result<Page, CoreError> {
     let blocks = parse_blocks(&text)?;
     Ok(Page::new(page_id, text).with_blocks(blocks))
 }

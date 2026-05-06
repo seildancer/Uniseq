@@ -6,6 +6,7 @@ mod page;
 mod page_id;
 mod parser;
 mod read;
+mod rename;
 mod span;
 mod workspace;
 
@@ -19,6 +20,9 @@ pub use parser::parse_blocks;
 pub use read::{
     BlockSnapshot, BlockSnapshotKind, LinkedRefEntry, OutgoingPageRefSnapshot, PageDetail,
     PageSummary, WorkspaceReadApi,
+};
+pub use rename::{
+    PageMove, PageRename, apply_page_move, apply_page_rename, recover_workspace_transactions,
 };
 pub use span::SourceSpan;
 pub use workspace::{BlockSubtreeEdit, WorkspaceCache};

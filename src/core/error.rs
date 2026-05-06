@@ -135,8 +135,12 @@ pub enum CoreError {
     InvalidParse(ParserError),
     Io { path: PathBuf, kind: io::ErrorKind },
     MissingPage,
+    MissingDestinationParent,
     MissingBlock,
+    DestinationPageExists,
+    InvalidPageMove,
     StalePageRevision,
+    CorruptTransaction,
 }
 
 impl fmt::Display for CoreError {
@@ -150,8 +154,14 @@ impl fmt::Display for CoreError {
                 write!(f, "i/o error at '{}': {kind}", path.display())
             }
             Self::MissingPage => write!(f, "page does not exist in cache"),
+            Self::MissingDestinationParent => {
+                write!(f, "destination parent page does not exist")
+            }
             Self::MissingBlock => write!(f, "block does not exist in page"),
+            Self::DestinationPageExists => write!(f, "destination page already exists"),
+            Self::InvalidPageMove => write!(f, "page move would create an invalid hierarchy"),
             Self::StalePageRevision => write!(f, "page revision does not match cache"),
+            Self::CorruptTransaction => write!(f, "transaction record is missing or invalid"),
         }
     }
 }
