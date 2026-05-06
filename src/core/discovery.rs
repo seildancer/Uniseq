@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CoreError, FileFingerprint, Page, PageId, WorkspaceCache, parse_blocks};
+use super::{CoreError, Page, PageId, WorkspaceCache, parse_blocks};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceDiscovery {
@@ -57,7 +57,7 @@ where
 
         fs::write(&absolute_path, "")
             .map_err(|error| CoreError::io(absolute_path.clone(), &error))?;
-        cache.upsert_page(Page::new(page_id.clone(), FileFingerprint::from_text("")));
+        cache.upsert_page(Page::new(page_id.clone(), ""));
         created_or_loaded.push(page_id);
     }
 
@@ -122,12 +122,13 @@ fn load_page_from_relative_path(root: &Path, relative_path: &Path) -> Result<Pag
         fs::read_to_string(&absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
     let blocks = parse_blocks(&text)?;
 
-    Ok(Page::new(page_id, FileFingerprint::from_text(&text)).with_blocks(blocks))
+    Ok(Page::new(page_id, text).with_blocks(blocks))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileFingerprint;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestWorkspace {

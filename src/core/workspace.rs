@@ -8,7 +8,7 @@ pub struct IncrementalUpdate {
     pub expected_fingerprint: FileFingerprint,
     pub replaced_block_span: SourceSpan,
     pub replacement_blocks: Vec<Block>,
-    pub new_fingerprint: FileFingerprint,
+    pub new_text: String,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -58,11 +58,11 @@ impl WorkspaceCache {
     pub fn replace_page_blocks(
         &mut self,
         page_id: &PageId,
+        text: impl Into<String>,
         blocks: Vec<Block>,
-        new_fingerprint: FileFingerprint,
     ) -> Result<(), CoreError> {
         let page = self.pages.get_mut(page_id).ok_or(CoreError::MissingPage)?;
-        page.set_blocks(blocks, new_fingerprint);
+        page.set_text_and_blocks(text, blocks);
         self.rebuild_incoming_refs_after_source_change(page_id);
         Ok(())
     }
@@ -87,7 +87,8 @@ impl WorkspaceCache {
             text_len: page.fingerprint.len_bytes(),
         }))?;
 
-        page.fingerprint = update.new_fingerprint;
+        page.text = update.new_text;
+        page.fingerprint = FileFingerprint::from_text(&page.text);
         self.rebuild_incoming_refs_after_source_change(&update.page_id);
         Ok(())
     }
@@ -235,11 +236,7 @@ mod tests {
     use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SpanError};
 
     fn page(id: &[&str], text: &str, blocks: Vec<Block>) -> Page {
-        Page::new(
-            PageId::new(id.iter().copied()).unwrap(),
-            FileFingerprint::from_text(text),
-        )
-        .with_blocks(blocks)
+        Page::new(PageId::new(id.iter().copied()).unwrap(), text).with_blocks(blocks)
     }
 
     fn ref_block(block_span: SourceSpan, target: &[&str], ref_span: SourceSpan) -> Block {
@@ -309,7 +306,8 @@ mod tests {
     #[test]
     fn incremental_update_rewrites_only_refs_from_changed_subtree() {
         let mut cache = WorkspaceCache::new();
-        let original_fingerprint = FileFingerprint::from_text("- [[B]]\n");
+        let original_text = "- [[B]]\n";
+        let original_fingerprint = FileFingerprint::from_text(original_text);
         let source_page_id = PageId::new(["A"]).unwrap();
         let old_block = ref_block(
             SourceSpan::unchecked(0, 8),
@@ -323,7 +321,7 @@ mod tests {
         );
 
         cache.upsert_page(
-            Page::new(source_page_id.clone(), original_fingerprint).with_blocks(vec![old_block]),
+            Page::new(source_page_id.clone(), original_text).with_blocks(vec![old_block]),
         );
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache.upsert_page(page(&["C"], "", Vec::new()));
@@ -351,7 +349,7 @@ mod tests {
                 expected_fingerprint: original_fingerprint,
                 replaced_block_span: SourceSpan::unchecked(0, 8),
                 replacement_blocks: vec![new_block],
-                new_fingerprint: FileFingerprint::from_text("- [[C]]\n"),
+                new_text: "- [[C]]\n".to_owned(),
             })
             .unwrap();
 
@@ -392,7 +390,7 @@ mod tests {
             expected_fingerprint: FileFingerprint::from_text("- stale\n"),
             replaced_block_span: SourceSpan::unchecked(0, 6),
             replacement_blocks: Vec::new(),
-            new_fingerprint: FileFingerprint::from_text(""),
+            new_text: String::new(),
         });
 
         assert_eq!(result.unwrap_err(), CoreError::StalePageRevision);
@@ -408,12 +406,12 @@ mod tests {
         cache
             .replace_page_blocks(
                 &source_page_id,
+                "- [[B]]\n",
                 vec![ref_block(
                     SourceSpan::unchecked(0, 8),
                     &["B"],
                     SourceSpan::unchecked(2, 7),
                 )],
-                FileFingerprint::from_text("- [[B]]\n"),
             )
             .unwrap();
 
@@ -433,7 +431,7 @@ mod tests {
         let source_page_id = PageId::new(["A"]).unwrap();
         let fingerprint = FileFingerprint::from_text("- old\n");
         cache.upsert_page(
-            Page::new(source_page_id.clone(), fingerprint).with_blocks(vec![Block::leaf(
+            Page::new(source_page_id.clone(), "- old\n").with_blocks(vec![Block::leaf(
                 BlockKind::Plaintext(PlaintextKind::Implicit),
                 SourceSpan::unchecked(0, 6),
                 SourceSpan::unchecked(2, 5),
@@ -445,7 +443,7 @@ mod tests {
             expected_fingerprint: fingerprint,
             replaced_block_span: SourceSpan::unchecked(20, 25),
             replacement_blocks: Vec::new(),
-            new_fingerprint: FileFingerprint::from_text(""),
+            new_text: String::new(),
         });
 
         assert_eq!(

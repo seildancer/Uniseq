@@ -443,7 +443,10 @@ mod tests {
             blocks[1].kind,
             BlockKind::Plaintext(PlaintextKind::Implicit)
         );
-        assert_eq!(blocks[1].content_span.slice(text).unwrap(), "  later text\n");
+        assert_eq!(
+            blocks[1].content_span.slice(text).unwrap(),
+            "  later text\n"
+        );
     }
 
     #[test]

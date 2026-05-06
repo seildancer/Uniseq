@@ -30,6 +30,7 @@ pub struct Page {
     pub page_id: PageId,
     pub title: String,
     pub workspace_path: PathBuf,
+    pub text: String,
     pub child_page_ids: Vec<PageId>,
     pub blocks: Vec<Block>,
     pub incoming_refs: Vec<IncomingRef>,
@@ -37,14 +38,17 @@ pub struct Page {
 }
 
 impl Page {
-    pub fn new(page_id: PageId, fingerprint: FileFingerprint) -> Self {
+    pub fn new(page_id: PageId, text: impl Into<String>) -> Self {
         let title = page_id.leaf_name().as_str().to_owned();
         let workspace_path = page_id.to_workspace_path();
+        let text = text.into();
+        let fingerprint = FileFingerprint::from_text(&text);
 
         Self {
             page_id,
             title,
             workspace_path,
+            text,
             child_page_ids: Vec::new(),
             blocks: Vec::new(),
             incoming_refs: Vec::new(),
@@ -57,9 +61,10 @@ impl Page {
         self
     }
 
-    pub fn set_blocks(&mut self, blocks: Vec<Block>, fingerprint: FileFingerprint) {
+    pub fn set_text_and_blocks(&mut self, text: impl Into<String>, blocks: Vec<Block>) {
+        self.text = text.into();
         self.blocks = blocks;
-        self.fingerprint = fingerprint;
+        self.fingerprint = FileFingerprint::from_text(&self.text);
     }
 
     pub fn find_block_by_span(&self, block_span: super::SourceSpan) -> Option<&Block> {
@@ -101,9 +106,18 @@ mod tests {
     #[test]
     fn page_uses_page_id_for_title_and_path() {
         let page_id = PageId::new(["A", "B"]).unwrap();
-        let page = Page::new(page_id, FileFingerprint::from_text(""));
+        let page = Page::new(page_id, "");
 
         assert_eq!(page.title, "B");
         assert_eq!(page.workspace_path, PathBuf::from("A___B.md"));
+    }
+
+    #[test]
+    fn page_stores_exact_text_and_fingerprint_together() {
+        let page_id = PageId::new(["A"]).unwrap();
+        let page = Page::new(page_id, "- A\r\n");
+
+        assert_eq!(page.text, "- A\r\n");
+        assert_eq!(page.fingerprint, FileFingerprint::from_text("- A\r\n"));
     }
 }
