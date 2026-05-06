@@ -54,6 +54,13 @@ impl WorkspaceCache {
         self.rebuild_all_incoming_refs();
     }
 
+    pub fn remove_page(&mut self, page_id: &PageId) -> Option<Page> {
+        let removed = self.pages.remove(page_id)?;
+        self.rebuild_hierarchy();
+        self.rebuild_all_incoming_refs();
+        Some(removed)
+    }
+
     pub fn reparse_and_upsert_page_markdown(
         &mut self,
         page_id: &PageId,

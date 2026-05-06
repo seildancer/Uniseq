@@ -7,6 +7,7 @@ mod page_id;
 mod parser;
 mod read;
 mod rename;
+mod session;
 mod span;
 mod workspace;
 
@@ -24,5 +25,6 @@ pub use read::{
 pub use rename::{
     PageMove, PageRename, apply_page_move, apply_page_rename, recover_workspace_transactions,
 };
+pub use session::{WorkspaceEvent, WorkspaceSession};
 pub use span::SourceSpan;
 pub use workspace::{BlockSubtreeEdit, WorkspaceCache};

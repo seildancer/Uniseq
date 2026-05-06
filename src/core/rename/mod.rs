@@ -117,10 +117,10 @@ pub fn apply_page_move(
 pub fn recover_workspace_transactions(
     root: impl AsRef<Path>,
     cache: &mut WorkspaceCache,
-) -> Result<(), CoreError> {
+) -> Result<bool, CoreError> {
     let root = root.as_ref();
     if !TransactionRecord::exists(root) {
-        return Ok(());
+        return Ok(false);
     }
 
     let mut record = TransactionRecord::load(root)?;
@@ -128,6 +128,30 @@ pub fn recover_workspace_transactions(
     record.apply_final_state(root, None, false)?;
     record.remove(root)?;
     refresh_workspace_cache(root, cache)?;
+    Ok(true)
+}
+
+pub(crate) fn transaction_record_exists(root: impl AsRef<Path>) -> bool {
+    TransactionRecord::exists(root.as_ref())
+}
+
+#[cfg(test)]
+pub(crate) fn stage_page_rename_transaction_for_testing(
+    root: impl AsRef<Path>,
+    source_page_id: &PageId,
+    new_leaf_name: &PageName,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    let target_page_id = renamed_page_id(source_page_id, new_leaf_name)?;
+    let disk_cache = load_workspace_cache(root)?;
+    let plan = plan_transaction(
+        &disk_cache,
+        OperationKind::Rename,
+        source_page_id,
+        &target_page_id,
+        None,
+    )?;
+    TransactionRecord::stage(root, &plan)?;
     Ok(())
 }
 
@@ -378,7 +402,7 @@ mod tests {
             .unwrap();
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
-        recover_workspace_transactions(&workspace.root, &mut cache).unwrap();
+        assert!(recover_workspace_transactions(&workspace.root, &mut cache).unwrap());
 
         assert_eq!(workspace.read_file("A___Renamed.md"), "- [[A/Renamed/C]]\n");
         assert_eq!(workspace.read_file("A___Renamed___C.md"), "- child\n");
