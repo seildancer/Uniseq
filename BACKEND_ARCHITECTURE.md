@@ -15,7 +15,7 @@
 - Stream (journal) files and normal page files are the same backend object for discovery, parsing, refs, reads, and cache state.
 - Page body is modelled into blocks.
 - All references are `block -> page`.
-- Supported page reference syntax is `[[Page]]` and `#Page`, and both resolve to page-backed pages only.
+- Supported page reference syntax is `[[Page]]` and `#Page`, and both resolve to page-backed pages only. The hashtag is not intended to support pages with blanks in the title.
 - Stream pages are file-backed pages for discovery, parsing, reads, and structural operations, but they are not targetable through markdown ref syntax.
 - References inside fenced code blocks are ignored. (we don't care about indentation code blocks)
 - `linked references` are derived views over source blocks and never live in the target page file.

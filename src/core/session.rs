@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
@@ -82,8 +82,7 @@ struct WorkspaceFsSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileStamp {
-    len_bytes: u64,
-    modified_at_nanos: u128,
+    fingerprint: super::FileFingerprint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -922,16 +921,10 @@ impl WorkspaceFsSnapshot {
 
 impl FileStamp {
     fn from_absolute_path(absolute_path: &Path) -> Result<Self, CoreError> {
-        let metadata = fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
-        let modified_at_nanos = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
+        let text =
+            fs::read_to_string(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
         Ok(Self {
-            len_bytes: metadata.len(),
-            modified_at_nanos,
+            fingerprint: super::FileFingerprint::from_text(&text),
         })
     }
 }
@@ -1128,7 +1121,6 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
     match markdown_paths.len() {
         0 if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
         0 => NativeEventAction::Noop,
-        _ if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
         _ => NativeEventAction::IncrementalPaths(markdown_paths),
     }
 }
@@ -1641,14 +1633,13 @@ mod tests {
     }
 
     #[test]
-    fn classify_snapshot_fs_changes_uses_discovery_stamps() {
+    fn classify_snapshot_fs_changes_uses_content_fingerprints() {
         let path = workspace_test_relative_path("A.md");
         let old_snapshot = WorkspaceFsSnapshot {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    len_bytes: 8,
-                    modified_at_nanos: 1,
+                    fingerprint: super::super::FileFingerprint::from_text("- [[B]]\n"),
                 },
             )]),
             transaction_exists: false,
@@ -1657,8 +1648,7 @@ mod tests {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    len_bytes: 8,
-                    modified_at_nanos: 2,
+                    fingerprint: super::super::FileFingerprint::from_text("- [[C]]\n"),
                 },
             )]),
             transaction_exists: false,
@@ -1668,6 +1658,36 @@ mod tests {
 
         assert_eq!(update.written_paths, BTreeSet::from([path]));
         assert!(update.deleted_paths.is_empty());
+    }
+
+    #[test]
+    fn classify_native_event_burst_ignores_non_markdown_noise_when_markdown_paths_are_present() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "- [[B]]\n");
+        workspace.write_raw_file("notes.tmp", "editor noise");
+
+        let action = classify_native_event_burst(
+            &workspace.root,
+            &[
+                Event {
+                    kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                    paths: vec![workspace.root.join(workspace_test_relative_path("A.md"))],
+                    attrs: Default::default(),
+                },
+                Event {
+                    kind: EventKind::Create(notify::event::CreateKind::Any),
+                    paths: vec![workspace.root.join("notes.tmp")],
+                    attrs: Default::default(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            action,
+            NativeEventAction::IncrementalPaths(BTreeSet::from([workspace_test_relative_path(
+                "A.md"
+            )]))
+        );
     }
 
     #[test]
