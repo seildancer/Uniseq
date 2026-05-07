@@ -592,52 +592,15 @@ fn reject_stream_page_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CoreError, Page, WorkspaceReadApi, discover_workspace};
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TestWorkspace {
-        root: PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!("uniseq-structure-{unique}"));
-            fs::create_dir_all(&root).unwrap();
-            Self { root }
-        }
-
-        fn write_file(&self, relative_path: &str, contents: &str) {
-            let path = self.root.join(test_relative_path(relative_path));
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(path, contents).unwrap();
-        }
-
-        fn read_file(&self, relative_path: &str) -> String {
-            fs::read_to_string(self.root.join(test_relative_path(relative_path))).unwrap()
-        }
-
-        fn file_exists(&self, relative_path: &str) -> bool {
-            self.root.join(test_relative_path(relative_path)).exists()
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
+    use crate::{
+        CoreError, Page, WorkspaceReadApi,
+        core::files::{TestWorkspace, workspace_test_relative_path},
+        discover_workspace,
+    };
 
     #[test]
     fn rename_moves_subtree_and_rewrites_inbound_refs() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- [[A/B/C]]\n");
         workspace.write_file("A___B___C.md", "- child\n");
@@ -694,7 +657,7 @@ mod tests {
 
     #[test]
     fn move_relocates_subtree_under_existing_parent_and_rewrites_refs() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- [[A/B/C]]\n");
         workspace.write_file("A___B___C.md", "- child\n");
@@ -723,7 +686,7 @@ mod tests {
 
     #[test]
     fn move_rejects_missing_destination_parent() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "");
 
@@ -744,7 +707,7 @@ mod tests {
 
     #[test]
     fn move_rejects_destination_collisions() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "");
         workspace.write_file("Z.md", "");
@@ -768,7 +731,7 @@ mod tests {
 
     #[test]
     fn move_rejects_descendant_destinations() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "");
 
@@ -788,7 +751,7 @@ mod tests {
 
     #[test]
     fn create_materializes_parent_pages_and_refreshes_cache() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
         apply_page_create(
@@ -810,7 +773,7 @@ mod tests {
 
     #[test]
     fn create_rejects_existing_pages() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
@@ -829,7 +792,7 @@ mod tests {
 
     #[test]
     fn stream_create_and_delete_manage_single_stream_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
 
         apply_stream_page_create(
@@ -877,7 +840,7 @@ mod tests {
 
     #[test]
     fn rename_and_move_reject_stream_pages() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("streams/journal/2026-05-07.md", "- body\n");
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
@@ -923,7 +886,7 @@ mod tests {
 
     #[test]
     fn delete_removes_page_subtree_and_refreshes_refs() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- child\n");
         workspace.write_file("A___B___C.md", "- grandchild\n");
@@ -955,7 +918,7 @@ mod tests {
 
     #[test]
     fn delete_rejects_missing_pages() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
         let error = apply_page_delete_subtree(
@@ -972,7 +935,7 @@ mod tests {
 
     #[test]
     fn rename_updates_normalized_incoming_refs_after_commit() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("X.md", "- [[A/B]]\n");
@@ -998,7 +961,7 @@ mod tests {
 
     #[test]
     fn recovery_finishes_interrupted_transaction_and_refreshes_cache() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- [[A/B/C]]\n");
         workspace.write_file("A___B___C.md", "- child\n");
@@ -1047,7 +1010,7 @@ mod tests {
 
     #[test]
     fn external_collision_after_read_rejects_without_mutating_workspace() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "");
         workspace.write_file("Z.md", "");
@@ -1073,7 +1036,7 @@ mod tests {
 
     #[test]
     fn rename_rejects_stale_source_page_content_before_staging() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- cached\n");
 
@@ -1093,7 +1056,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: test_relative_path("A___B.md"),
+                path: workspace_test_relative_path("A___B.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
@@ -1103,7 +1066,7 @@ mod tests {
 
     #[test]
     fn rename_rejects_stale_inbound_ref_source_before_staging() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("X.md", "- [[A/B]]\n");
@@ -1124,7 +1087,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: test_relative_path("X.md"),
+                path: workspace_test_relative_path("X.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- body\n");
@@ -1135,7 +1098,7 @@ mod tests {
 
     #[test]
     fn move_rejects_stale_source_page_content_before_staging() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- cached\n");
         workspace.write_file("Z.md", "");
@@ -1156,7 +1119,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: test_relative_path("A___B.md"),
+                path: workspace_test_relative_path("A___B.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
@@ -1166,7 +1129,7 @@ mod tests {
 
     #[test]
     fn move_rejects_stale_inbound_ref_source_before_staging() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("Z.md", "");
@@ -1188,7 +1151,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: test_relative_path("X.md"),
+                path: workspace_test_relative_path("X.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- body\n");
@@ -1199,7 +1162,7 @@ mod tests {
 
     #[test]
     fn recovery_rejects_late_destination_collisions_before_commit() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
 
@@ -1220,17 +1183,4 @@ mod tests {
         assert!(workspace.root.join(".uniseq-page-transaction").exists());
     }
 
-    fn test_relative_path(relative_path: &str) -> PathBuf {
-        let path = PathBuf::from(relative_path);
-        let is_top_level_markdown = path.components().count() == 1
-            && path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-        if is_top_level_markdown {
-            PathBuf::from("pages").join(path)
-        } else {
-            path
-        }
-    }
 }

@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use super::files::load_page_from_relative_path;
-use super::{CoreError, Page, PageId, PageLocation, WorkspaceCache, supported_workspace_markdown_path};
+use super::files::{collect_supported_workspace_markdown_paths, load_page_from_relative_path};
+use super::{CoreError, Page, PageId, PageLocation, WorkspaceCache};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceDiscovery {
@@ -14,11 +14,10 @@ pub struct WorkspaceDiscovery {
 pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, CoreError> {
     let root = root.as_ref();
     println!(
-        "[uniseq-backend] whole-tree scan: discovering workspace at {}",
+        "[uniseq-backend] supported-root scan: discovering workspace at {}",
         root.display()
     );
-    let mut markdown_paths = Vec::new();
-    collect_markdown_paths(root, root, &mut markdown_paths)?;
+    let mut markdown_paths = collect_supported_workspace_markdown_paths(root)?;
     markdown_paths.sort();
 
     let mut page_paths = BTreeMap::new();
@@ -43,7 +42,7 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
     }
     let remaining_missing_parent_page_ids = cache.missing_parent_page_ids();
     println!(
-        "[uniseq-backend] whole-tree scan complete: {} supported markdown pages discovered",
+        "[uniseq-backend] supported-root scan complete: {} supported markdown pages discovered",
         cache.pages().len()
     );
 
@@ -91,99 +90,17 @@ where
     Ok(created_or_loaded)
 }
 
-fn collect_markdown_paths(
-    root: &Path,
-    current_dir: &Path,
-    markdown_paths: &mut Vec<PathBuf>,
-) -> Result<(), CoreError> {
-    let mut entries =
-        fs::read_dir(current_dir).map_err(|error| CoreError::io(current_dir, &error))?;
-    while let Some(entry) = entries
-        .next()
-        .transpose()
-        .map_err(|error| CoreError::io(current_dir, &error))?
-    {
-        let entry_path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| CoreError::io(entry_path.clone(), &error))?;
-
-        if file_type.is_dir() {
-            collect_markdown_paths(root, &entry_path, markdown_paths)?;
-            continue;
-        }
-
-        if !file_type.is_file() {
-            continue;
-        }
-
-        let is_markdown = entry_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-
-        if !is_markdown {
-            continue;
-        }
-
-        let relative_path = entry_path
-            .strip_prefix(root)
-            .map_err(|_| {
-                CoreError::io(
-                    root,
-                    &std::io::Error::from(std::io::ErrorKind::InvalidInput),
-                )
-            })?
-            .to_path_buf();
-
-        match supported_workspace_markdown_path(&relative_path)? {
-            Some(_) => markdown_paths.push(relative_path),
-            None => {}
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FileFingerprint;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TestWorkspace {
-        root: PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!("uniseq-discovery-{unique}"));
-            fs::create_dir_all(&root).unwrap();
-            Self { root }
-        }
-
-        fn write_file(&self, relative_path: &str, contents: &str) {
-            let path = self.root.join(test_relative_path(relative_path));
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(path, contents).unwrap();
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
+    use crate::{
+        FileFingerprint,
+        core::files::{TestWorkspace, workspace_test_relative_path},
+    };
 
     #[test]
     fn discovers_flat_markdown_pages_into_a_page_tree() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "");
         workspace.write_file("A___B___C.md", "");
@@ -220,20 +137,26 @@ mod tests {
 
     #[test]
     fn materializes_missing_parent_pages_during_discovery() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A___B___C.md", "");
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
         assert!(discovery.missing_parent_page_ids.is_empty());
         assert_eq!(discovery.cache.pages().len(), 3);
-        assert!(workspace.root.join(test_relative_path("A.md")).exists());
-        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A.md"))
+            .exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A___B.md"))
+            .exists());
     }
 
     #[test]
     fn preserves_exact_file_fingerprint_during_discovery() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A.md", "- A\r\n");
         workspace.write_file("B.md", "- A\n");
 
@@ -246,7 +169,7 @@ mod tests {
 
     #[test]
     fn discovery_populates_incoming_refs_from_parsed_markdown() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A.md", "- see [[B]] and #C\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
@@ -270,7 +193,7 @@ mod tests {
 
     #[test]
     fn discovery_keeps_page_and_stream_with_same_segments_distinct() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("journal___2026-05-07.md", "");
         workspace.write_file("streams/journal/2026-05-07.md", "");
 
@@ -299,7 +222,7 @@ mod tests {
 
     #[test]
     fn rejects_nested_markdown_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("notes/A.md", "");
 
         let discovery = discover_workspace(&workspace.root).unwrap();
@@ -307,8 +230,32 @@ mod tests {
     }
 
     #[test]
+    fn discovery_only_scans_supported_roots() {
+        let workspace = TestWorkspace::new("uniseq-discovery");
+        workspace.write_file("A.md", "");
+        workspace.write_file("streams/journal/2026-05-07.md", "");
+        workspace.write_raw_file("Loose.md", "");
+        workspace.write_raw_file("archive/Old.md", "");
+
+        let discovery = discover_workspace(&workspace.root).unwrap();
+
+        assert!(discovery.cache.page(&PageId::new(["A"]).unwrap()).is_some());
+        assert!(discovery
+            .cache
+            .page(
+                &PageId::stream(
+                    crate::PageName::new("journal").unwrap(),
+                    crate::PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
+            )
+            .is_some());
+        assert_eq!(discovery.cache.pages().len(), 2);
+    }
+
+    #[test]
     fn ignores_non_markdown_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A.txt", "");
         workspace.write_file("B.json", "");
 
@@ -318,7 +265,7 @@ mod tests {
 
     #[test]
     fn orders_discovered_pages_deterministically() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("B.md", "");
         workspace.write_file("A___B.md", "");
         workspace.write_file("A.md", "");
@@ -338,7 +285,7 @@ mod tests {
 
     #[test]
     fn materializes_missing_parent_pages_as_empty_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A___B___C.md", "");
 
         let mut cache =
@@ -360,8 +307,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["A", "A/B"]
         );
-        assert!(workspace.root.join(test_relative_path("A.md")).exists());
-        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A.md"))
+            .exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A___B.md"))
+            .exists());
         assert!(
             discover_workspace(&workspace.root)
                 .unwrap()
@@ -372,7 +325,7 @@ mod tests {
 
     #[test]
     fn materialize_parent_pages_does_not_overwrite_existing_files() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A___B___C.md", "");
         workspace.write_file("A.md", "existing");
 
@@ -396,7 +349,7 @@ mod tests {
             vec!["A", "A/B"]
         );
         assert_eq!(
-            fs::read_to_string(workspace.root.join(test_relative_path("A.md"))).unwrap(),
+            fs::read_to_string(workspace.root.join(workspace_test_relative_path("A.md"))).unwrap(),
             "existing"
         );
         assert_eq!(
@@ -406,19 +359,5 @@ mod tests {
                 .fingerprint,
             FileFingerprint::from_text("existing")
         );
-    }
-
-    fn test_relative_path(relative_path: &str) -> PathBuf {
-        let path = PathBuf::from(relative_path);
-        let is_top_level_markdown = path.components().count() == 1
-            && path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-        if is_top_level_markdown {
-            PathBuf::from("pages").join(path)
-        } else {
-            path
-        }
     }
 }

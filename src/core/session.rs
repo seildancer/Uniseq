@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
@@ -12,7 +12,10 @@ use super::{
     BlockSnapshot, CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageDetail, PageId,
     PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
-use crate::core::files::{load_page_from_relative_path, load_workspace_cache};
+use crate::core::files::{
+    collect_supported_workspace_markdown_paths, load_page_with_fingerprint_from_relative_path,
+    load_workspace_cache,
+};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete,
@@ -79,8 +82,7 @@ struct WorkspaceFsSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileStamp {
-    len_bytes: u64,
-    modified_at: SystemTime,
+    fingerprint: super::FileFingerprint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,8 +121,16 @@ struct PreparedFullRefresh {
 
 #[derive(Debug)]
 struct PreparedIncrementalFsUpdate {
+    deleted_paths: Vec<PathBuf>,
     deleted_page_ids: Vec<PageId>,
-    written_pages: Vec<crate::core::Page>,
+    written_files: Vec<PreparedWrittenFile>,
+}
+
+#[derive(Debug)]
+struct PreparedWrittenFile {
+    relative_path: PathBuf,
+    page: crate::core::Page,
+    file_stamp: FileStamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -489,7 +499,7 @@ impl WorkspaceSessionState {
 
     fn poll_once(&mut self) -> Result<(), CoreError> {
         println!(
-            "[uniseq-backend] whole-tree scan: capturing polling snapshot at {}",
+            "[uniseq-backend] supported-root scan: capturing polling snapshot at {}",
             self.root.display()
         );
         let snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
@@ -538,9 +548,15 @@ impl WorkspaceSessionState {
         let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
             return self.full_refresh(false);
         };
+        let deleted_paths = prepared.deleted_paths.clone();
+        let written_snapshot_entries = prepared
+            .written_files
+            .iter()
+            .map(|written_file| (written_file.relative_path.clone(), written_file.file_stamp))
+            .collect::<Vec<_>>();
         match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
             Ok(()) => {
-                self.apply_incremental_fs_snapshot_update(&update)?;
+                self.apply_snapshot_delta(&deleted_paths, written_snapshot_entries);
                 self.last_watch_error = None;
                 self.enqueue_events(cache_diff.into_events());
                 Ok(())
@@ -663,6 +679,22 @@ impl WorkspaceSessionState {
         }
     }
 
+    fn apply_snapshot_delta(
+        &mut self,
+        deleted_paths: &[PathBuf],
+        written_files: impl IntoIterator<Item = (PathBuf, FileStamp)>,
+    ) {
+        for deleted_path in deleted_paths {
+            self.fs_snapshot.markdown_files.remove(deleted_path);
+        }
+
+        for (written_path, file_stamp) in written_files {
+            self.fs_snapshot.markdown_files.insert(written_path, file_stamp);
+        }
+
+        self.fs_snapshot.transaction_exists = false;
+    }
+
     fn apply_prepared_incremental_fs_update(
         &mut self,
         snapshot: WorkspaceFsSnapshot,
@@ -693,8 +725,8 @@ impl WorkspaceSessionState {
             self.cache.remove_page(&page_id);
         }
 
-        for page in prepared.written_pages {
-            self.apply_incremental_page_update(page);
+        for written_file in prepared.written_files {
+            self.apply_incremental_page_update(written_file.page);
         }
 
         Ok(())
@@ -704,9 +736,14 @@ impl WorkspaceSessionState {
         &self,
         prepared: &PreparedIncrementalFsUpdate,
     ) -> Option<CacheDiff> {
+        let written_pages = prepared
+            .written_files
+            .iter()
+            .map(|written_file| written_file.page.clone())
+            .collect::<Vec<_>>();
         if !self.incremental_update_preserves_parent_pages(
             &prepared.deleted_page_ids,
-            &prepared.written_pages,
+            &written_pages,
         ) {
             return None;
         }
@@ -719,9 +756,9 @@ impl WorkspaceSessionState {
             .collect::<Vec<_>>();
         let removed_page_ids_set = removed_page_ids.iter().cloned().collect::<BTreeSet<_>>();
         let written_page_ids = prepared
-            .written_pages
+            .written_files
             .iter()
-            .map(|page| page.page_id.clone())
+            .map(|written_file| written_file.page.page_id.clone())
             .collect::<BTreeSet<_>>();
         let created_page_ids = written_page_ids
             .iter()
@@ -759,7 +796,8 @@ impl WorkspaceSessionState {
             );
         }
 
-        for page in &prepared.written_pages {
+        for written_file in &prepared.written_files {
+            let page = &written_file.page;
             changed_page_ids.insert(page.page_id.clone());
 
             if self.cache.page(&page.page_id).is_none() {
@@ -792,43 +830,20 @@ impl WorkspaceSessionState {
         })
     }
 
-    fn apply_incremental_fs_snapshot_update(
-        &mut self,
-        update: &IncrementalFsUpdate,
-    ) -> Result<(), CoreError> {
-        for deleted_path in &update.deleted_paths {
-            self.fs_snapshot.markdown_files.remove(deleted_path);
-        }
-
-        for written_path in &update.written_paths {
-            let absolute_path = self.root.join(written_path);
-            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-            self.fs_snapshot
-                .markdown_files
-                .insert(written_path.clone(), file_stamp);
-        }
-
-        self.fs_snapshot.transaction_exists = false;
-        Ok(())
-    }
-
     fn apply_incremental_snapshot_update(
         &mut self,
         update: &IncrementalWorkspaceUpdate,
     ) -> Result<(), CoreError> {
-        for deleted_path in &update.deleted_paths {
-            self.fs_snapshot.markdown_files.remove(deleted_path);
-        }
-
-        for written_path in &update.written_paths {
-            let absolute_path = self.root.join(written_path);
-            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-            self.fs_snapshot
-                .markdown_files
-                .insert(written_path.clone(), file_stamp);
-        }
-
-        self.fs_snapshot.transaction_exists = false;
+        let written_files = update
+            .written_paths
+            .iter()
+            .map(|written_path| {
+                let absolute_path = self.root.join(written_path);
+                FileStamp::from_absolute_path(&absolute_path)
+                    .map(|file_stamp| (written_path.clone(), file_stamp))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.apply_snapshot_delta(&update.deleted_paths, written_files);
         Ok(())
     }
 
@@ -870,13 +885,16 @@ impl WorkspaceSessionState {
 impl WorkspaceFsSnapshot {
     fn capture(root: &Path) -> Result<Self, CoreError> {
         println!(
-            "[uniseq-backend] whole-tree scan: capturing workspace snapshot at {}",
+            "[uniseq-backend] supported-root scan: capturing workspace snapshot at {}",
             root.display()
         );
         let mut markdown_files = BTreeMap::new();
-        collect_workspace_snapshot(root, root, &mut markdown_files)?;
+        for relative_path in collect_supported_workspace_markdown_paths(root)? {
+            let absolute_path = root.join(&relative_path);
+            markdown_files.insert(relative_path, FileStamp::from_absolute_path(&absolute_path)?);
+        }
         println!(
-            "[uniseq-backend] whole-tree scan complete: {} supported markdown files in snapshot",
+            "[uniseq-backend] supported-root scan complete: {} supported markdown files in snapshot",
             markdown_files.len()
         );
         Ok(Self {
@@ -888,13 +906,10 @@ impl WorkspaceFsSnapshot {
 
 impl FileStamp {
     fn from_absolute_path(absolute_path: &Path) -> Result<Self, CoreError> {
-        let metadata =
-            fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        let text =
+            fs::read_to_string(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
         Ok(Self {
-            len_bytes: metadata.len(),
-            modified_at: metadata
-                .modified()
-                .map_err(|error| CoreError::io(absolute_path, &error))?,
+            fingerprint: super::FileFingerprint::from_text(&text),
         })
     }
 }
@@ -1012,20 +1027,30 @@ fn prepare_incremental_fs_update(
     root: &Path,
     update: &IncrementalFsUpdate,
 ) -> Result<PreparedIncrementalFsUpdate, CoreError> {
+    let deleted_paths = update.deleted_paths.iter().cloned().collect::<Vec<_>>();
     let deleted_page_ids = update
         .deleted_paths
         .iter()
         .map(|relative_path| PageId::from_workspace_path(relative_path))
         .collect::<Result<Vec<_>, _>>()?;
-    let written_pages = update
+    let written_files = update
         .written_paths
         .iter()
-        .map(|relative_path| load_page_from_relative_path(root, relative_path))
+        .map(|relative_path| {
+            let (page, fingerprint) =
+                load_page_with_fingerprint_from_relative_path(root, relative_path)?;
+            Ok::<PreparedWrittenFile, CoreError>(PreparedWrittenFile {
+                relative_path: relative_path.clone(),
+                page,
+                file_stamp: FileStamp { fingerprint },
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(PreparedIncrementalFsUpdate {
+        deleted_paths,
         deleted_page_ids,
-        written_pages,
+        written_files,
     })
 }
 
@@ -1103,69 +1128,6 @@ fn collect_native_event_burst(
     }
 
     Ok(events)
-}
-
-fn collect_workspace_snapshot(
-    root: &Path,
-    current_dir: &Path,
-    markdown_files: &mut BTreeMap<PathBuf, FileStamp>,
-) -> Result<(), CoreError> {
-    let mut entries =
-        fs::read_dir(current_dir).map_err(|error| CoreError::io(current_dir, &error))?;
-    while let Some(entry) = entries
-        .next()
-        .transpose()
-        .map_err(|error| CoreError::io(current_dir, &error))?
-    {
-        let entry_path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| CoreError::io(entry_path.clone(), &error))?;
-
-        if file_type.is_dir() {
-            collect_workspace_snapshot(root, &entry_path, markdown_files)?;
-            continue;
-        }
-
-        if !file_type.is_file() {
-            continue;
-        }
-
-        let is_markdown = entry_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-        if !is_markdown {
-            continue;
-        }
-
-        let relative_path = entry_path
-            .strip_prefix(root)
-            .map_err(|_| {
-                CoreError::io(
-                    root,
-                    &std::io::Error::from(std::io::ErrorKind::InvalidInput),
-                )
-            })?
-            .to_path_buf();
-        if supported_workspace_markdown_path(&relative_path)?.is_none() {
-            continue;
-        }
-        let metadata = entry
-            .metadata()
-            .map_err(|error| CoreError::io(entry_path.clone(), &error))?;
-        markdown_files.insert(
-            relative_path,
-            FileStamp {
-                len_bytes: metadata.len(),
-                modified_at: metadata
-                    .modified()
-                    .map_err(|error| CoreError::io(entry_path, &error))?,
-            },
-        );
-    }
-
-    Ok(())
 }
 
 fn run_native_or_polling_watch_loop(
@@ -1274,47 +1236,14 @@ fn apply_native_event_burst_once(state: &Arc<RwLock<WorkspaceSessionState>>, eve
 mod tests {
     use super::*;
     use crate::{
-        FileFingerprint, PageName, core::structure::stage_page_rename_transaction_for_testing,
+        FileFingerprint, PageName,
+        core::files::{TestWorkspace, workspace_test_relative_path},
+        core::structure::stage_page_rename_transaction_for_testing,
     };
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    struct TestWorkspace {
-        root: PathBuf,
-    }
-
-    impl TestWorkspace {
-        fn new() -> Self {
-            let unique = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let root = std::env::temp_dir().join(format!("uniseq-session-{unique}"));
-            fs::create_dir_all(&root).unwrap();
-            Self { root }
-        }
-
-        fn write_file(&self, relative_path: &str, contents: &str) {
-            let path = self.root.join(test_relative_path(relative_path));
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).unwrap();
-            }
-            fs::write(path, contents).unwrap();
-        }
-
-        fn remove_file(&self, relative_path: &str) {
-            fs::remove_file(self.root.join(test_relative_path(relative_path))).unwrap();
-        }
-    }
-
-    impl Drop for TestWorkspace {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.root);
-        }
-    }
 
     #[test]
     fn startup_recovers_interrupted_transactions_before_reads() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("X.md", "- [[A/B]]\n");
@@ -1341,7 +1270,7 @@ mod tests {
 
     #[test]
     fn poll_once_refreshes_single_changed_page_and_targets() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
@@ -1373,7 +1302,7 @@ mod tests {
 
     #[test]
     fn native_event_hint_refreshes_single_changed_page_without_snapshot_rescan() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
@@ -1383,7 +1312,7 @@ mod tests {
         workspace.write_file("A.md", "- [[C]]\n");
         let event = Event {
             kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![workspace.root.join(test_relative_path("A.md"))],
+            paths: vec![workspace.root.join(workspace_test_relative_path("A.md"))],
             attrs: Default::default(),
         };
         session
@@ -1407,7 +1336,7 @@ mod tests {
 
     #[test]
     fn native_event_burst_keeps_single_page_saves_incremental() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
@@ -1419,14 +1348,14 @@ mod tests {
         let events = vec![
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join(test_relative_path("A.md"))],
+                paths: vec![workspace.root.join(workspace_test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Metadata(
                     notify::event::MetadataKind::Any,
                 )),
-                paths: vec![workspace.root.join(test_relative_path("A.md"))],
+                paths: vec![workspace.root.join(workspace_test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
@@ -1456,7 +1385,7 @@ mod tests {
 
     #[test]
     fn poll_once_adds_created_pages_incrementally() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
@@ -1475,7 +1404,7 @@ mod tests {
 
     #[test]
     fn poll_once_removes_deleted_pages_and_rebuilds_refs() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
@@ -1507,7 +1436,7 @@ mod tests {
 
     #[test]
     fn native_multi_file_markdown_bursts_stay_incremental() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("B.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
@@ -1518,12 +1447,12 @@ mod tests {
         let events = vec![
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join(test_relative_path("A.md"))],
+                paths: vec![workspace.root.join(workspace_test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join(test_relative_path("B.md"))],
+                paths: vec![workspace.root.join(workspace_test_relative_path("B.md"))],
                 attrs: Default::default(),
             },
         ];
@@ -1544,7 +1473,7 @@ mod tests {
 
     #[test]
     fn poll_once_reconciles_multi_file_markdown_bursts_incrementally() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("B.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
@@ -1564,15 +1493,21 @@ mod tests {
 
     #[test]
     fn full_refresh_materializes_missing_parent_pages() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
 
         workspace.write_file("A___B___C.md", "");
         session.state.write().unwrap().full_refresh(false).unwrap();
 
-        assert!(workspace.root.join(test_relative_path("A.md")).exists());
-        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A.md"))
+            .exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A___B.md"))
+            .exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1586,15 +1521,21 @@ mod tests {
 
     #[test]
     fn poll_once_falls_back_when_incremental_create_needs_parent_materialization() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
 
         workspace.write_file("A___B___C.md", "- body\n");
         session.poll_once().unwrap();
 
-        assert!(workspace.root.join(test_relative_path("A.md")).exists());
-        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A.md"))
+            .exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A___B.md"))
+            .exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1608,14 +1549,14 @@ mod tests {
 
     #[test]
     fn native_event_hint_falls_back_when_incremental_create_needs_parent_materialization() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
 
         workspace.write_file("A___B___C.md", "- body\n");
         let event = Event {
             kind: EventKind::Create(notify::event::CreateKind::Any),
-            paths: vec![workspace.root.join(test_relative_path("A___B___C.md"))],
+            paths: vec![workspace.root.join(workspace_test_relative_path("A___B___C.md"))],
             attrs: Default::default(),
         };
         session
@@ -1625,8 +1566,14 @@ mod tests {
             .apply_native_event_burst(&[event])
             .unwrap();
 
-        assert!(workspace.root.join(test_relative_path("A.md")).exists());
-        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A.md"))
+            .exists());
+        assert!(workspace
+            .root
+            .join(workspace_test_relative_path("A___B.md"))
+            .exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1640,7 +1587,7 @@ mod tests {
 
     #[test]
     fn direct_content_writes_emit_invalidation_events_and_refresh_cache() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
@@ -1671,8 +1618,58 @@ mod tests {
     }
 
     #[test]
+    fn classify_snapshot_fs_changes_uses_content_fingerprints() {
+        let path = workspace_test_relative_path("A.md");
+        let old_snapshot = WorkspaceFsSnapshot {
+            markdown_files: BTreeMap::from([(
+                path.clone(),
+                FileStamp {
+                    fingerprint: FileFingerprint::from_text("- [[B]]\n"),
+                },
+            )]),
+            transaction_exists: false,
+        };
+        let new_snapshot = WorkspaceFsSnapshot {
+            markdown_files: BTreeMap::from([(
+                path.clone(),
+                FileStamp {
+                    fingerprint: FileFingerprint::from_text("- [[C]]\n"),
+                },
+            )]),
+            transaction_exists: false,
+        };
+
+        let update = classify_snapshot_fs_changes(&old_snapshot, &new_snapshot);
+
+        assert_eq!(update.written_paths, BTreeSet::from([path]));
+        assert!(update.deleted_paths.is_empty());
+    }
+
+    #[test]
+    fn workspace_snapshot_only_tracks_supported_roots() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "");
+        workspace.write_file("streams/journal/2026-05-07.md", "");
+        workspace.write_raw_file("Loose.md", "");
+        workspace.write_raw_file("archive/Old.md", "");
+
+        let snapshot = WorkspaceFsSnapshot::capture(&workspace.root).unwrap();
+
+        assert!(snapshot
+            .markdown_files
+            .contains_key(&workspace_test_relative_path("A.md")));
+        assert!(snapshot
+            .markdown_files
+            .contains_key(&PathBuf::from("streams").join("journal").join("2026-05-07.md")));
+        assert!(!snapshot.markdown_files.contains_key(&PathBuf::from("Loose.md")));
+        assert!(!snapshot
+            .markdown_files
+            .contains_key(&PathBuf::from("archive").join("Old.md")));
+    }
+
+    #[test]
     fn structural_create_and_delete_emit_cache_invalidation_events() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("X.md", "- [[A/B]]\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
@@ -1718,7 +1715,7 @@ mod tests {
 
     #[test]
     fn stream_create_and_delete_emit_cache_invalidation_events() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
 
@@ -1761,7 +1758,7 @@ mod tests {
 
     #[test]
     fn structural_rename_updates_snapshot_without_followup_refresh() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("X.md", "- [[A/B]]\n");
@@ -1781,11 +1778,11 @@ mod tests {
             assert!(!state
                 .fs_snapshot
                 .markdown_files
-                .contains_key(&test_relative_path("A___B.md")));
+                .contains_key(&workspace_test_relative_path("A___B.md")));
             assert!(state
                 .fs_snapshot
                 .markdown_files
-                .contains_key(&test_relative_path("A___C.md")));
+                .contains_key(&workspace_test_relative_path("A___C.md")));
             assert!(!state.fs_snapshot.transaction_exists);
         }
 
@@ -1795,7 +1792,7 @@ mod tests {
 
     #[test]
     fn structural_rename_emits_precise_events_without_workspace_reload() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- [[A/B/C]]\n");
         workspace.write_file("A___B___C.md", "- child\n");
@@ -1832,7 +1829,7 @@ mod tests {
 
     #[test]
     fn structural_move_emits_precise_events_without_workspace_reload() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- [[A/B/C]]\n");
         workspace.write_file("A___B___C.md", "- child\n");
@@ -1870,7 +1867,7 @@ mod tests {
 
     #[test]
     fn event_queue_coalesces_pages_changed_and_watcher_mode_updates() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         let mut state = session.state.write().unwrap();
@@ -1903,7 +1900,7 @@ mod tests {
 
     #[test]
     fn transaction_dir_event_triggers_recovery_and_workspace_reload() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("X.md", "- [[A/B]]\n");
@@ -1947,7 +1944,7 @@ mod tests {
 
     #[test]
     fn poll_once_is_quiet_after_direct_write_is_reconciled_once() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- old\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
@@ -1962,7 +1959,7 @@ mod tests {
 
     #[test]
     fn background_watcher_reports_errors_without_panicking() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         let mut session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
@@ -1997,7 +1994,7 @@ mod tests {
 
     #[test]
     fn session_queries_use_current_cache_state() {
-        let workspace = TestWorkspace::new();
+        let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- body\r\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
 
@@ -2020,17 +2017,4 @@ mod tests {
         );
     }
 
-    fn test_relative_path(relative_path: &str) -> PathBuf {
-        let path = PathBuf::from(relative_path);
-        let is_top_level_markdown = path.components().count() == 1
-            && path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-        if is_top_level_markdown {
-            PathBuf::from("pages").join(path)
-        } else {
-            path
-        }
-    }
 }

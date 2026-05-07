@@ -2,12 +2,11 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
+use super::storage::{PAGES_ROOT, STREAMS_ROOT};
 use super::{NameError, PagePathError};
 
 const HIERARCHY_DELIMITER: &str = "___";
 const MARKDOWN_EXTENSION: &str = ".md";
-const PAGES_ROOT: &str = "pages";
-const STREAMS_ROOT: &str = "streams";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PageName(String);
