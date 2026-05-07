@@ -46,6 +46,21 @@ impl WorkspaceCache {
         self.insert_incoming_refs_from_source(&page_id);
     }
 
+    pub fn refresh_page_content(&mut self, mut page: Page) {
+        let page_id = page.page_id.clone();
+        let Some(existing_page) = self.pages.get(&page_id).cloned() else {
+            self.upsert_page(page);
+            return;
+        };
+
+        let old_target_page_ids = target_page_ids_from_page(&existing_page);
+        page.child_page_ids = existing_page.child_page_ids;
+        page.incoming_refs = existing_page.incoming_refs;
+        self.pages.insert(page_id.clone(), page);
+        self.remove_incoming_refs_from_source_from_targets(&page_id, &old_target_page_ids);
+        self.insert_incoming_refs_from_source(&page_id);
+    }
+
     pub fn remove_page(&mut self, page_id: &PageId) -> Option<Page> {
         self.remove_child_from_parent(page_id);
         self.remove_incoming_refs_from_source(page_id);
@@ -60,7 +75,12 @@ impl WorkspaceCache {
     ) -> Result<(), CoreError> {
         let text = text.into();
         let blocks = parse_blocks(&text)?;
-        self.upsert_page(Page::new(page_id.clone(), text).with_blocks(blocks));
+        let page = Page::new(page_id.clone(), text).with_blocks(blocks);
+        if self.page(page_id).is_some() {
+            self.refresh_page_content(page);
+        } else {
+            self.upsert_page(page);
+        }
         Ok(())
     }
 
@@ -168,6 +188,19 @@ impl WorkspaceCache {
         }
     }
 
+    fn remove_incoming_refs_from_source_from_targets(
+        &mut self,
+        source_page_id: &PageId,
+        target_page_ids: &BTreeSet<PageId>,
+    ) {
+        for target_page_id in target_page_ids {
+            if let Some(page) = self.pages.get_mut(target_page_id) {
+                page.incoming_refs
+                    .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
+            }
+        }
+    }
+
     fn incoming_refs_to_target_except_source(
         &self,
         target_page_id: &PageId,
@@ -223,6 +256,12 @@ fn incoming_refs_from_block(
     );
 
     refs
+}
+
+fn target_page_ids_from_page(page: &Page) -> BTreeSet<PageId> {
+    page.outgoing_refs()
+        .map(|outgoing_ref| outgoing_ref.target_page_id.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -494,5 +533,81 @@ mod tests {
         let page = cache.page(&source_page_id).unwrap();
         assert_eq!(page.text, "");
         assert!(page.blocks.is_empty());
+    }
+
+    #[test]
+    fn refresh_page_content_preserves_incoming_refs_from_other_pages() {
+        let mut cache = WorkspaceCache::new();
+        let target_page_id = PageId::new(["A"]).unwrap();
+        cache.upsert_page(page(&["A"], "- old\n", Vec::new()));
+        cache.upsert_page(
+            Page::new(PageId::new(["X"]).unwrap(), "- [[A]]\n")
+                .with_blocks(parse_blocks("- [[A]]\n").unwrap()),
+        );
+
+        cache.refresh_page_content(
+            Page::new(target_page_id.clone(), "- new\n").with_blocks(parse_blocks("- new\n").unwrap()),
+        );
+
+        let page = cache.page(&target_page_id).unwrap();
+        assert_eq!(page.text, "- new\n");
+        assert_eq!(page.incoming_refs.len(), 1);
+        assert_eq!(page.incoming_refs[0].source_page_id, PageId::new(["X"]).unwrap());
+    }
+
+    #[test]
+    fn refresh_page_content_preserves_child_page_ids() {
+        let mut cache = WorkspaceCache::new();
+        let parent_page_id = PageId::new(["A"]).unwrap();
+        let child_page_id = PageId::new(["A", "B"]).unwrap();
+        cache.upsert_page(page(&["A"], "- old\n", Vec::new()));
+        cache.upsert_page(page(&["A", "B"], "", Vec::new()));
+
+        cache.refresh_page_content(
+            Page::new(parent_page_id.clone(), "- new\n").with_blocks(parse_blocks("- new\n").unwrap()),
+        );
+
+        let page = cache.page(&parent_page_id).unwrap();
+        assert_eq!(page.text, "- new\n");
+        assert_eq!(page.child_page_ids, vec![child_page_id]);
+    }
+
+    #[test]
+    fn refresh_page_content_updates_only_touched_ref_targets() {
+        let mut cache = WorkspaceCache::new();
+        let source_page_id = PageId::new(["A"]).unwrap();
+        cache.upsert_page(
+            Page::new(source_page_id.clone(), "- [[B]]\n")
+                .with_blocks(parse_blocks("- [[B]]\n").unwrap()),
+        );
+        cache.upsert_page(page(&["B"], "", Vec::new()));
+        cache.upsert_page(page(&["C"], "", Vec::new()));
+        cache.upsert_page(
+            Page::new(PageId::new(["X"]).unwrap(), "- [[C]]\n")
+                .with_blocks(parse_blocks("- [[C]]\n").unwrap()),
+        );
+
+        cache.refresh_page_content(
+            Page::new(source_page_id, "- [[C]]\n").with_blocks(parse_blocks("- [[C]]\n").unwrap()),
+        );
+
+        assert_eq!(
+            cache
+                .page(&PageId::new(["B"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            0
+        );
+        let c = cache.page(&PageId::new(["C"]).unwrap()).unwrap();
+        assert_eq!(c.incoming_refs.len(), 2);
+        assert!(c
+            .incoming_refs
+            .iter()
+            .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["A"]).unwrap()));
+        assert!(c
+            .incoming_refs
+            .iter()
+            .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["X"]).unwrap()));
     }
 }

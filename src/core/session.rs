@@ -443,7 +443,7 @@ impl WorkspaceSessionState {
                 if !self.incremental_upsert_preserves_parent_pages(&page) {
                     return self.full_refresh(false);
                 }
-                self.cache.upsert_page(page);
+                self.apply_incremental_page_update(page);
                 Ok(())
             }
             IsolatedFsChange::Deleted(relative_path) => {
@@ -484,7 +484,7 @@ impl WorkspaceSessionState {
                     return self.full_refresh(false);
                 }
                 let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-                self.cache.upsert_page(page);
+                self.apply_incremental_page_update(page);
                 self.fs_snapshot
                     .markdown_files
                     .insert(relative_path.clone(), file_stamp);
@@ -513,7 +513,7 @@ impl WorkspaceSessionState {
                 return self.full_refresh(false);
             }
             let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-            self.cache.upsert_page(page);
+            self.apply_incremental_page_update(page);
             self.fs_snapshot
                 .markdown_files
                 .insert(relative_path, file_stamp);
@@ -575,6 +575,14 @@ impl WorkspaceSessionState {
         let mut next_cache = self.cache.clone();
         next_cache.upsert_page(page.clone());
         next_cache.missing_parent_page_ids().is_empty()
+    }
+
+    fn apply_incremental_page_update(&mut self, page: crate::core::Page) {
+        if self.cache.page(&page.page_id).is_some() {
+            self.cache.refresh_page_content(page);
+        } else {
+            self.cache.upsert_page(page);
+        }
     }
 
     fn incremental_remove_preserves_parent_pages(&self, page_id: &PageId) -> bool {
