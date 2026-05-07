@@ -15,7 +15,7 @@ pub use block::{Block, BlockKind, IncomingRef, PageRefOccurrence, PlaintextKind}
 pub use discovery::{WorkspaceDiscovery, discover_workspace, materialize_parent_pages};
 pub use error::{CoreError, NameError, PagePathError, ParserError, SpanError};
 pub use page::{FileFingerprint, Page};
-pub use page_id::{PageId, PageName};
+pub use page_id::{PageId, PageLocation, PageName, ResolvedWorkspacePath, resolve_workspace_path, supported_workspace_markdown_path};
 pub use parser::parse_blocks;
 pub use read::{
     BlockSnapshot, BlockSnapshotKind, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageDetail,

@@ -4,9 +4,9 @@ mod transaction;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{CoreError, PageId, PageName, WorkspaceCache};
+use super::{CoreError, PageId, PageLocation, PageName, WorkspaceCache, resolve_workspace_path};
 use crate::core::discovery::materialize_parent_pages;
-use crate::core::files::{load_workspace_cache, page_from_markdown, refresh_workspace_cache};
+use crate::core::files::{load_workspace_cache, page_from_markdown_in_location, refresh_workspace_cache};
 
 use planning::{RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
 use transaction::TransactionRecord;
@@ -106,13 +106,16 @@ pub fn apply_page_create(
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
 
-    let relative_path = request.page_id.to_workspace_path();
+    let relative_path = PageLocation::Pages.workspace_path_for_page_id(&request.page_id)?;
     let absolute_path = root.join(&relative_path);
     if cache.page(&request.page_id).is_some() || absolute_path.exists() {
         return Err(CoreError::DestinationPageExists);
     }
 
     materialize_parent_pages(root, cache, request.page_id.ancestors())?;
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+    }
     fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
     refresh_workspace_cache(root, cache)?;
     Ok(())
@@ -132,12 +135,12 @@ pub fn apply_page_delete_subtree(
     }
 
     let mut deleted_any = false;
-    for page_id in disk_cache
+    for page in disk_cache
         .pages()
-        .keys()
-        .filter(|page_id| page_id_has_prefix(page_id, &request.page_id))
+        .values()
+        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id))
     {
-        let absolute_path = root.join(page_id.to_workspace_path());
+        let absolute_path = root.join(&page.workspace_path);
         match fs::remove_file(&absolute_path) {
             Ok(()) => deleted_any = true,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -346,8 +349,8 @@ fn apply_transaction_writes_to_cache(
     let final_pages = final_writes
         .iter()
         .map(|(path, text)| {
-            let page_id = PageId::from_workspace_path(path)?;
-            page_from_markdown(page_id, text.clone())
+            let resolved = resolve_workspace_path(path)?;
+            page_from_markdown_in_location(resolved.page_id, resolved.location, text.clone())
         })
         .collect::<Result<Vec<_>, CoreError>>()?;
 
@@ -391,15 +394,19 @@ mod tests {
         }
 
         fn write_file(&self, relative_path: &str, contents: &str) {
-            fs::write(self.root.join(relative_path), contents).unwrap();
+            let path = self.root.join(test_relative_path(relative_path));
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
         }
 
         fn read_file(&self, relative_path: &str) -> String {
-            fs::read_to_string(self.root.join(relative_path)).unwrap()
+            fs::read_to_string(self.root.join(test_relative_path(relative_path))).unwrap()
         }
 
         fn file_exists(&self, relative_path: &str) -> bool {
-            self.root.join(relative_path).exists()
+            self.root.join(test_relative_path(relative_path)).exists()
         }
     }
 
@@ -773,7 +780,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: PathBuf::from("A___B.md"),
+                path: test_relative_path("A___B.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
@@ -804,7 +811,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: PathBuf::from("X.md"),
+                path: test_relative_path("X.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- body\n");
@@ -836,7 +843,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: PathBuf::from("A___B.md"),
+                path: test_relative_path("A___B.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
@@ -868,7 +875,7 @@ mod tests {
         assert_eq!(
             error,
             CoreError::StructuralConflict {
-                path: PathBuf::from("X.md"),
+                path: test_relative_path("X.md"),
             }
         );
         assert_eq!(workspace.read_file("A___B.md"), "- body\n");
@@ -898,5 +905,19 @@ mod tests {
         assert_eq!(workspace.read_file("A___B.md"), "- body\n");
         assert_eq!(workspace.read_file("A___C.md"), "- external\n");
         assert!(workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    fn test_relative_path(relative_path: &str) -> PathBuf {
+        let path = PathBuf::from(relative_path);
+        let is_top_level_markdown = path.components().count() == 1
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        if is_top_level_markdown {
+            PathBuf::from("pages").join(path)
+        } else {
+            path
+        }
     }
 }

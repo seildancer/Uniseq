@@ -10,7 +10,7 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
     BlockSnapshot, CoreError, IncomingPageRefSnapshot, PageDetail, PageId, PageSummary,
-    WorkspaceCache, WorkspaceReadApi,
+    WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
 use crate::core::files::{
     load_page_from_relative_path, load_workspace_cache, refresh_workspace_cache,
@@ -775,9 +775,17 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
                 .extension()
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-            if is_markdown {
-                event_markdown_path_count += 1;
-                markdown_paths.insert(relative_path);
+            if !is_markdown {
+                continue;
+            }
+
+            match supported_workspace_markdown_path(&relative_path) {
+                Ok(Some(_)) => {
+                    event_markdown_path_count += 1;
+                    markdown_paths.insert(relative_path);
+                }
+                Ok(None) => {}
+                Err(_) => return NativeEventAction::FallbackToSnapshot,
             }
         }
 
@@ -861,6 +869,9 @@ fn collect_workspace_snapshot(
                 )
             })?
             .to_path_buf();
+        if supported_workspace_markdown_path(&relative_path)?.is_none() {
+            continue;
+        }
         let metadata = entry
             .metadata()
             .map_err(|error| CoreError::io(entry_path.clone(), &error))?;
@@ -1004,11 +1015,15 @@ mod tests {
         }
 
         fn write_file(&self, relative_path: &str, contents: &str) {
-            fs::write(self.root.join(relative_path), contents).unwrap();
+            let path = self.root.join(test_relative_path(relative_path));
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, contents).unwrap();
         }
 
         fn remove_file(&self, relative_path: &str) {
-            fs::remove_file(self.root.join(relative_path)).unwrap();
+            fs::remove_file(self.root.join(test_relative_path(relative_path))).unwrap();
         }
     }
 
@@ -1089,7 +1104,7 @@ mod tests {
         workspace.write_file("A.md", "- [[C]]\n");
         let event = Event {
             kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![workspace.root.join("A.md")],
+            paths: vec![workspace.root.join(test_relative_path("A.md"))],
             attrs: Default::default(),
         };
         session
@@ -1125,14 +1140,14 @@ mod tests {
         let events = vec![
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join("A.md")],
+                paths: vec![workspace.root.join(test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Metadata(
                     notify::event::MetadataKind::Any,
                 )),
-                paths: vec![workspace.root.join("A.md")],
+                paths: vec![workspace.root.join(test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
@@ -1212,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_file_bursts_fall_back_to_workspace_reload() {
+    fn multi_file_bursts_still_fall_back_even_with_non_markdown_noise() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");
         workspace.write_file("B.md", "");
@@ -1224,12 +1239,12 @@ mod tests {
         let events = vec![
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join("A.md")],
+                paths: vec![workspace.root.join(test_relative_path("A.md"))],
                 attrs: Default::default(),
             },
             Event {
                 kind: EventKind::Modify(notify::event::ModifyKind::Any),
-                paths: vec![workspace.root.join("B.md")],
+                paths: vec![workspace.root.join(test_relative_path("B.md"))],
                 attrs: Default::default(),
             },
         ];
@@ -1256,8 +1271,8 @@ mod tests {
         workspace.write_file("A___B___C.md", "");
         session.state.write().unwrap().full_refresh(false).unwrap();
 
-        assert!(workspace.root.join("A.md").exists());
-        assert!(workspace.root.join("A___B.md").exists());
+        assert!(workspace.root.join(test_relative_path("A.md")).exists());
+        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1278,8 +1293,8 @@ mod tests {
         workspace.write_file("A___B___C.md", "- body\n");
         session.poll_once().unwrap();
 
-        assert!(workspace.root.join("A.md").exists());
-        assert!(workspace.root.join("A___B.md").exists());
+        assert!(workspace.root.join(test_relative_path("A.md")).exists());
+        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1300,7 +1315,7 @@ mod tests {
         workspace.write_file("A___B___C.md", "- body\n");
         let event = Event {
             kind: EventKind::Create(notify::event::CreateKind::Any),
-            paths: vec![workspace.root.join("A___B___C.md")],
+            paths: vec![workspace.root.join(test_relative_path("A___B___C.md"))],
             attrs: Default::default(),
         };
         session
@@ -1310,8 +1325,8 @@ mod tests {
             .apply_native_event_burst(&[event])
             .unwrap();
 
-        assert!(workspace.root.join("A.md").exists());
-        assert!(workspace.root.join("A___B.md").exists());
+        assert!(workspace.root.join(test_relative_path("A.md")).exists());
+        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1420,8 +1435,14 @@ mod tests {
 
         {
             let state = session.state.read().unwrap();
-            assert!(!state.fs_snapshot.markdown_files.contains_key(&PathBuf::from("A___B.md")));
-            assert!(state.fs_snapshot.markdown_files.contains_key(&PathBuf::from("A___C.md")));
+            assert!(!state
+                .fs_snapshot
+                .markdown_files
+                .contains_key(&test_relative_path("A___B.md")));
+            assert!(state
+                .fs_snapshot
+                .markdown_files
+                .contains_key(&test_relative_path("A___C.md")));
             assert!(!state.fs_snapshot.transaction_exists);
         }
 
@@ -1627,16 +1648,8 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
         session.stop_watching();
 
-        match session.take_last_watch_error() {
-            Some(CoreError::InvalidPagePath(_)) => {}
-            Some(other) => panic!("unexpected watcher error: {other:?}"),
-            None => {
-                assert!(matches!(
-                    session.poll_once(),
-                    Err(CoreError::InvalidPagePath(_))
-                ));
-            }
-        }
+        assert!(session.take_last_watch_error().is_none());
+        session.poll_once().unwrap();
     }
 
     #[test]
@@ -1662,5 +1675,19 @@ mod tests {
                 .fingerprint,
             FileFingerprint::from_text("- body\r\n")
         );
+    }
+
+    fn test_relative_path(relative_path: &str) -> PathBuf {
+        let path = PathBuf::from(relative_path);
+        let is_top_level_markdown = path.components().count() == 1
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        if is_top_level_markdown {
+            PathBuf::from("pages").join(path)
+        } else {
+            path
+        }
     }
 }

@@ -16,7 +16,7 @@
 - Page body is modelled into blocks.
 - All references are `block -> page`.
 - Supported page reference syntax is `[[Page]]` and `#Page`.
-- References inside fenced code blocks are ignored.
+- References inside fenced code blocks are ignored. (we don't care about indentation code blocks)
 - `linked references` are derived views over source blocks and never live in the target page file.
 - Pages have a backend-resolved identity derived from filesystem layout and page hierarchy.
 - Structural page mutations are first-class backend operations. Create/delete-subtree/rename/move are handled by Rust; rename/move must be crash-safe, with reference rewrites and recovery from interrupted writes.
@@ -67,3 +67,66 @@
 7. Derived-state reconciliation for content edits: React writes normal markdown edits directly, while Rust reparses affected files and refreshes block trees, refs, and source-span anchors from disk.
 8. Structural page operations: create pages and delete page subtrees in Rust, and rename or relocate pages transactionally with reference rewrites.
 9. Recovery and incremental file watching: recover interrupted structural operations on startup, then watch file changes so derived backend state stays close to disk truth without becoming the source of truth.
+
+
+
+
+
+## Storage-Aware Workspace Paths for Pages and Streams
+
+### Summary
+
+Replace the current flat A___B.md workspace model with an explicit storage-layout model:
+
+- Normal pages live under pages/
+- Stream pages live under streams/<stream-name>/
+- Stream folders are storage buckets only, not part of the page hierarchy
+
+Both kinds still load into the same page/ref/cache model. The only special handling is in
+workspace-path parsing, hierarchy construction, and path round-tripping.
+
+### Key Changes
+
+- Introduce a storage-path model for valid markdown files:
+    - pages/<page-file>.md where normal page hierarchy still uses A___B.md
+    - streams/<stream-name>/<date>.md
+    - Any other .md path is unsupported workspace content and should be ignored during
+      discovery/watch instead of failing the workspace
+- Split hierarchy behavior from page identity:
+    - Normal pages keep the current hierarchical PageId behavior, e.g. pages/A___B.md => A/B
+    - Stream pages get distinct page identities that include the stream name so journal/2026-
+      05-07 and diary/2026-05-07 do not collide
+    - Stream name must not participate in parent/child hierarchy logic
+- Add minimal location metadata to preserve canonical paths:
+    - Page-backed location for pages/...
+    - Stream-backed location carrying the stream name for streams/<name>/...
+    - Use this metadata for discovery, workspace_path, create/load, rename/move validation, and
+      watcher reconciliation
+- Replace the current flat path conversion assumptions:
+    - PageId::from_workspace_path / to_workspace_path should become storage-aware helpers that
+      parse and format both legal roots
+    - Existing name validation stays unless stream/date path rules require small adjustments
+- Rework discovery/materialization:
+    - Discovery scans markdown files, keeps only legal storage paths, and maps them through the
+      new parser
+    - Parent-page materialization applies only to normal pages under pages/
+    - Stream files never create parent pages
+- Update watcher/session handling:
+    - Valid changes under pages/ and streams/<name>/ reconcile normally
+    - Unsupported nested markdown elsewhere is ignored rather than surfacing InvalidPagePath
+    - Reload/recovery paths use the same storage-aware mapping logic as initial discovery
+
+### API / Type Changes
+
+      stream-backed pages
+- Add storage-aware parse/format helpers that convert between workspace-relative paths and
+  (PageId, location)
+- Keep read/query APIs page-centric; no separate stream domain object is introduced
+
+### Assumptions
+
+- Normal page hierarchy remains encoded as A___B.md under pages/
+- Stream files remain streams/<stream-name>/<date>.md
+- Stream page identity includes the stream name only for uniqueness/path mapping, not as page-
+  tree hierarchy
+- Streams are first-class pages everywhere except page-hierarchy construction

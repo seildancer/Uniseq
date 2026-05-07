@@ -59,15 +59,16 @@ pub(super) fn plan_transaction(
 
     let page_mappings = cache
         .pages()
-        .keys()
-        .filter(|page_id| page_id_has_prefix(page_id, source_page_id))
-        .map(|old_page_id| {
-            let new_page_id = replace_page_id_prefix(old_page_id, source_page_id, target_page_id)?;
+        .values()
+        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, source_page_id))
+        .map(|page| {
+            let old_page_id = page.page_id.clone();
+            let new_page_id = replace_page_id_prefix(&old_page_id, source_page_id, target_page_id)?;
             Ok(PageMapping {
                 old_page_id: old_page_id.clone(),
                 new_page_id: new_page_id.clone(),
-                old_path: old_page_id.to_workspace_path(),
-                new_path: new_page_id.to_workspace_path(),
+                old_path: page.workspace_path.clone(),
+                new_path: page.location.workspace_path_for_page_id(&new_page_id)?,
             })
         })
         .collect::<Result<Vec<_>, CoreError>>()?;
@@ -177,7 +178,10 @@ fn plan_file_change(
         .get(&page.page_id)
         .cloned()
         .unwrap_or_else(|| page.page_id.clone());
-    let final_path = final_page_id.to_workspace_path();
+    let final_path = match page.location.workspace_path_for_page_id(&final_page_id) {
+        Ok(path) => path,
+        Err(error) => return Some(Err(error.into())),
+    };
     let final_text = match rewrite_page_refs(&page.text, page.outgoing_refs(), moved_page_ids) {
         Ok(text) => text,
         Err(error) => return Some(Err(error)),

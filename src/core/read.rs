@@ -133,7 +133,7 @@ fn page_summary(page: &Page) -> PageSummary {
     PageSummary {
         page_id: page.page_id.clone(),
         title: page.title.clone(),
-        parent_page_id: page.page_id.parent(),
+        parent_page_id: page.parent_page_id(),
         child_page_count: page.child_page_ids.len(),
     }
 }

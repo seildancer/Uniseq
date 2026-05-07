@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::{Block, IncomingRef, PageId};
+use super::{Block, IncomingRef, PageId, PageLocation, PagePathError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileFingerprint {
@@ -28,6 +28,7 @@ impl FileFingerprint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
     pub page_id: PageId,
+    pub location: PageLocation,
     pub title: String,
     pub workspace_path: PathBuf,
     pub text: String,
@@ -39,13 +40,23 @@ pub struct Page {
 
 impl Page {
     pub fn new(page_id: PageId, text: impl Into<String>) -> Self {
+        Self::new_in_location(page_id, PageLocation::Pages, text)
+            .expect("page-backed paths are always valid")
+    }
+
+    pub fn new_in_location(
+        page_id: PageId,
+        location: PageLocation,
+        text: impl Into<String>,
+    ) -> Result<Self, PagePathError> {
         let title = page_id.leaf_name().as_str().to_owned();
-        let workspace_path = page_id.to_workspace_path();
+        let workspace_path = location.workspace_path_for_page_id(&page_id)?;
         let text = text.into();
         let fingerprint = FileFingerprint::from_text(&text);
 
-        Self {
+        Ok(Self {
             page_id,
+            location,
             title,
             workspace_path,
             text,
@@ -53,7 +64,7 @@ impl Page {
             blocks: Vec::new(),
             incoming_refs: Vec::new(),
             fingerprint,
-        }
+        })
     }
 
     pub fn with_blocks(mut self, blocks: Vec<Block>) -> Self {
@@ -77,6 +88,14 @@ impl Page {
         self.blocks
             .iter()
             .flat_map(|block| block.outgoing_refs_recursive())
+    }
+
+    pub fn parent_page_id(&self) -> Option<PageId> {
+        self.location.parent_page_id(&self.page_id)
+    }
+
+    pub fn ancestor_page_ids(&self) -> Vec<PageId> {
+        self.location.ancestor_page_ids(&self.page_id)
     }
 }
 
@@ -109,7 +128,7 @@ mod tests {
         let page = Page::new(page_id, "");
 
         assert_eq!(page.title, "B");
-        assert_eq!(page.workspace_path, PathBuf::from("A___B.md"));
+        assert_eq!(page.workspace_path, PathBuf::from("pages").join("A___B.md"));
     }
 
     #[test]
@@ -119,5 +138,23 @@ mod tests {
 
         assert_eq!(page.text, "- A\r\n");
         assert_eq!(page.fingerprint, FileFingerprint::from_text("- A\r\n"));
+    }
+
+    #[test]
+    fn stream_pages_keep_stream_path_but_have_no_parent_page() {
+        let page = Page::new_in_location(
+            PageId::new(["journal", "2026-05-07"]).unwrap(),
+            PageLocation::Stream {
+                stream_name: super::super::PageName::new("journal").unwrap(),
+            },
+            "",
+        )
+        .unwrap();
+
+        assert_eq!(
+            page.workspace_path,
+            PathBuf::from("streams").join("journal").join("2026-05-07.md")
+        );
+        assert!(page.parent_page_id().is_none());
     }
 }

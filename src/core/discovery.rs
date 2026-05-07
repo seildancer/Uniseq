@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::files::load_page_from_relative_path;
-use super::{CoreError, Page, PageId, WorkspaceCache};
+use super::{CoreError, Page, PageId, PageLocation, WorkspaceCache, supported_workspace_markdown_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceDiscovery {
@@ -50,7 +50,7 @@ where
             continue;
         }
 
-        let relative_path = page_id.to_workspace_path();
+        let relative_path = PageLocation::Pages.workspace_path_for_page_id(&page_id)?;
         let absolute_path = root.join(&relative_path);
 
         if absolute_path.exists() {
@@ -60,6 +60,9 @@ where
             continue;
         }
 
+        if let Some(parent) = absolute_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+        }
         fs::write(&absolute_path, "")
             .map_err(|error| CoreError::io(absolute_path.clone(), &error))?;
         cache.upsert_page(Page::new(page_id.clone(), ""));
@@ -114,7 +117,10 @@ fn collect_markdown_paths(
             })?
             .to_path_buf();
 
-        markdown_paths.push(relative_path);
+        match supported_workspace_markdown_path(&relative_path)? {
+            Some(_) => markdown_paths.push(relative_path),
+            None => {}
+        }
     }
 
     Ok(())
@@ -123,7 +129,7 @@ fn collect_markdown_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CoreError, FileFingerprint};
+    use crate::FileFingerprint;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestWorkspace {
@@ -142,7 +148,7 @@ mod tests {
         }
 
         fn write_file(&self, relative_path: &str, contents: &str) {
-            let path = self.root.join(relative_path);
+            let path = self.root.join(test_relative_path(relative_path));
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent).unwrap();
             }
@@ -202,8 +208,8 @@ mod tests {
 
         assert!(discovery.missing_parent_page_ids.is_empty());
         assert_eq!(discovery.cache.pages().len(), 3);
-        assert!(workspace.root.join("A.md").exists());
-        assert!(workspace.root.join("A___B.md").exists());
+        assert!(workspace.root.join(test_relative_path("A.md")).exists());
+        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
     }
 
     #[test]
@@ -248,11 +254,8 @@ mod tests {
         let workspace = TestWorkspace::new();
         workspace.write_file("notes/A.md", "");
 
-        let error = discover_workspace(&workspace.root).unwrap_err();
-        assert_eq!(
-            error,
-            CoreError::InvalidPagePath(super::super::PagePathError::NestedPath)
-        );
+        let discovery = discover_workspace(&workspace.root).unwrap();
+        assert!(discovery.cache.pages().is_empty());
     }
 
     #[test]
@@ -309,8 +312,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["A", "A/B"]
         );
-        assert!(workspace.root.join("A.md").exists());
-        assert!(workspace.root.join("A___B.md").exists());
+        assert!(workspace.root.join(test_relative_path("A.md")).exists());
+        assert!(workspace.root.join(test_relative_path("A___B.md")).exists());
         assert!(
             discover_workspace(&workspace.root)
                 .unwrap()
@@ -345,7 +348,7 @@ mod tests {
             vec!["A", "A/B"]
         );
         assert_eq!(
-            fs::read_to_string(workspace.root.join("A.md")).unwrap(),
+            fs::read_to_string(workspace.root.join(test_relative_path("A.md"))).unwrap(),
             "existing"
         );
         assert_eq!(
@@ -355,5 +358,19 @@ mod tests {
                 .fingerprint,
             FileFingerprint::from_text("existing")
         );
+    }
+
+    fn test_relative_path(relative_path: &str) -> PathBuf {
+        let path = PathBuf::from(relative_path);
+        let is_top_level_markdown = path.components().count() == 1
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        if is_top_level_markdown {
+            PathBuf::from("pages").join(path)
+        } else {
+            path
+        }
     }
 }

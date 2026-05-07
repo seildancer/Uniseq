@@ -75,7 +75,11 @@ impl WorkspaceCache {
     ) -> Result<(), CoreError> {
         let text = text.into();
         let blocks = parse_blocks(&text)?;
-        let page = Page::new(page_id.clone(), text).with_blocks(blocks);
+        let location = self
+            .page(page_id)
+            .map(|page| page.location.clone())
+            .unwrap_or(super::PageLocation::Pages);
+        let page = Page::new_in_location(page_id.clone(), location, text)?.with_blocks(blocks);
         if self.page(page_id).is_some() {
             self.refresh_page_content(page);
         } else {
@@ -88,8 +92,8 @@ impl WorkspaceCache {
         let existing = self.pages.keys().collect::<BTreeSet<_>>();
         let mut missing = BTreeSet::new();
 
-        for page_id in self.pages.keys() {
-            for ancestor in page_id.ancestors() {
+        for page in self.pages.values() {
+            for ancestor in page.ancestor_page_ids() {
                 if !existing.contains(&ancestor) {
                     missing.insert(ancestor);
                 }
@@ -104,9 +108,13 @@ impl WorkspaceCache {
             page.child_page_ids.clear();
         }
 
-        let page_ids = self.pages.keys().cloned().collect::<Vec<_>>();
-        for page_id in page_ids {
-            if let Some(parent_id) = page_id.parent() {
+        let page_ids = self
+            .pages
+            .values()
+            .map(|page| (page.page_id.clone(), page.parent_page_id()))
+            .collect::<Vec<_>>();
+        for (page_id, parent_page_id) in page_ids {
+            if let Some(parent_id) = parent_page_id {
                 if let Some(parent) = self.pages.get_mut(&parent_id) {
                     parent.child_page_ids.push(page_id);
                 }
@@ -150,14 +158,14 @@ impl WorkspaceCache {
 
     fn child_page_ids_for(&self, parent_page_id: &PageId) -> Vec<PageId> {
         self.pages
-            .keys()
-            .filter(|page_id| page_id.parent().as_ref() == Some(parent_page_id))
-            .cloned()
+            .values()
+            .filter(|page| page.parent_page_id().as_ref() == Some(parent_page_id))
+            .map(|page| page.page_id.clone())
             .collect()
     }
 
     fn add_child_to_parent(&mut self, page_id: PageId) {
-        let Some(parent_id) = page_id.parent() else {
+        let Some(parent_id) = self.page(&page_id).and_then(Page::parent_page_id) else {
             return;
         };
 
@@ -172,7 +180,7 @@ impl WorkspaceCache {
     }
 
     fn remove_child_from_parent(&mut self, page_id: &PageId) {
-        let Some(parent_id) = page_id.parent() else {
+        let Some(parent_id) = self.page(page_id).and_then(Page::parent_page_id) else {
             return;
         };
 
