@@ -231,12 +231,7 @@ impl TransactionRecord {
             .collect::<Vec<_>>();
 
         for (_, write) in writes {
-            let blob_path = txn_dir.join(FINAL_DIR_NAME).join(&write.blob_name);
-            let final_text = fs::read_to_string(&blob_path)
-                .map_err(|error| CoreError::io(&blob_path, &error))?;
-            let absolute_path = root.join(&write.workspace_path);
-            fs::write(&absolute_path, final_text)
-                .map_err(|error| CoreError::io(&absolute_path, &error))?;
+            self.promote_final_write(root, &txn_dir, write)?;
         }
 
         if skip_deletes {
@@ -252,6 +247,7 @@ impl TransactionRecord {
             }
         }
 
+        self.cleanup_temp_files(root)?;
         Ok(())
     }
 
@@ -274,8 +270,52 @@ impl TransactionRecord {
     }
 
     pub(super) fn remove(self, root: &Path) -> Result<(), CoreError> {
+        self.cleanup_temp_files(root)?;
         let txn_dir = transaction_dir(root);
         fs::remove_dir_all(&txn_dir).map_err(|error| CoreError::io(&txn_dir, &error))
+    }
+
+    fn promote_final_write(
+        &self,
+        root: &Path,
+        txn_dir: &Path,
+        write: &TransactionBlobEntry,
+    ) -> Result<(), CoreError> {
+        let blob_path = txn_dir.join(FINAL_DIR_NAME).join(&write.blob_name);
+        let final_text =
+            fs::read_to_string(&blob_path).map_err(|error| CoreError::io(&blob_path, &error))?;
+        let absolute_path = root.join(&write.workspace_path);
+        let temp_path = temp_path_for_destination(&absolute_path, &write.blob_name)?;
+
+        if let Ok(existing_text) = fs::read_to_string(&absolute_path) {
+            if existing_text == final_text {
+                remove_if_exists(&temp_path)?;
+                return Ok(());
+            }
+        }
+
+        if let Some(parent) = absolute_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+        }
+        remove_if_exists(&temp_path)?;
+        fs::write(&temp_path, &final_text).map_err(|error| CoreError::io(&temp_path, &error))?;
+
+        if absolute_path.exists() {
+            fs::remove_file(&absolute_path)
+                .map_err(|error| CoreError::io(&absolute_path, &error))?;
+        }
+
+        fs::rename(&temp_path, &absolute_path).map_err(|error| CoreError::io(&absolute_path, &error))
+    }
+
+    fn cleanup_temp_files(&self, root: &Path) -> Result<(), CoreError> {
+        for write in &self.manifest.writes {
+            let absolute_path = root.join(&write.workspace_path);
+            let temp_path = temp_path_for_destination(&absolute_path, &write.blob_name)?;
+            remove_if_exists(&temp_path)?;
+        }
+
+        Ok(())
     }
 
     fn write_manifest(&self, root: &Path) -> Result<(), CoreError> {
@@ -360,4 +400,25 @@ fn path_to_manifest_field(path: &Path) -> Result<String, CoreError> {
 
 fn transaction_dir(root: &Path) -> PathBuf {
     root.join(TRANSACTION_DIR_NAME)
+}
+
+fn temp_path_for_destination(
+    destination_path: &Path,
+    blob_name: &str,
+) -> Result<PathBuf, CoreError> {
+    let file_name = destination_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(CoreError::CorruptTransaction)?;
+    Ok(destination_path.with_file_name(format!(
+        "{file_name}.uniseq-txn-{blob_name}.tmp"
+    )))
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), CoreError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CoreError::io(path, &error)),
+    }
 }

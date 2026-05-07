@@ -12,15 +12,15 @@ use super::{
     BlockSnapshot, CoreError, IncomingPageRefSnapshot, PageDetail, PageId, PageSummary,
     WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
-use crate::core::files::{
-    load_page_from_relative_path, load_workspace_cache, refresh_workspace_cache,
-};
+use crate::core::files::{load_page_from_relative_path, load_workspace_cache};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
+    StreamPageCreate, StreamPageDelete,
     apply_page_create as write_page_create,
     apply_page_delete_subtree as write_page_delete_subtree, apply_page_move_with_update,
-    apply_page_rename_with_update, is_transaction_relative_path, recover_workspace_transactions,
-    transaction_record_exists,
+    apply_page_rename_with_update, apply_stream_page_create as write_stream_page_create,
+    apply_stream_page_delete as write_stream_page_delete, is_transaction_relative_path,
+    recover_workspace_transactions, transaction_record_exists,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -109,6 +109,19 @@ struct OutgoingRefEventState {
 struct IncrementalFsUpdate {
     written_paths: BTreeSet<PathBuf>,
     deleted_paths: BTreeSet<PathBuf>,
+}
+
+#[derive(Debug)]
+struct PreparedFullRefresh {
+    cache: WorkspaceCache,
+    fs_snapshot: WorkspaceFsSnapshot,
+    recovery_applied: bool,
+}
+
+#[derive(Debug)]
+struct PreparedIncrementalFsUpdate {
+    deleted_page_ids: Vec<PageId>,
+    written_pages: Vec<crate::core::Page>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,6 +228,26 @@ impl WorkspaceSession {
             })
     }
 
+    pub fn apply_stream_page_create(&self, request: StreamPageCreate) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .apply_refreshing_write(|root, cache| {
+                write_stream_page_create(root, cache, request)?;
+                Ok(())
+            })
+    }
+
+    pub fn apply_stream_page_delete(&self, request: StreamPageDelete) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .apply_refreshing_write(|root, cache| {
+                write_stream_page_delete(root, cache, request)?;
+                Ok(())
+            })
+    }
+
     pub fn apply_page_rename(&self, request: PageRename) -> Result<(), CoreError> {
         self.state
             .write()
@@ -230,7 +263,33 @@ impl WorkspaceSession {
     }
 
     pub fn poll_once(&self) -> Result<(), CoreError> {
-        self.state.write().unwrap().poll_once()
+        let (root, old_snapshot) = {
+            let state = self.state.read().unwrap();
+            (state.root.clone(), state.fs_snapshot.clone())
+        };
+        let snapshot = WorkspaceFsSnapshot::capture(&root)?;
+
+        if snapshot == old_snapshot {
+            self.state.write().unwrap().last_watch_error = None;
+            return Ok(());
+        }
+
+        if snapshot.transaction_exists || old_snapshot.transaction_exists {
+            let prepared = prepare_full_refresh(&root, true)?;
+            let mut state = self.state.write().unwrap();
+            if state.fs_snapshot != old_snapshot {
+                return state.poll_once();
+            }
+            return state.apply_prepared_full_refresh(prepared);
+        }
+
+        let update = classify_snapshot_fs_changes(&old_snapshot, &snapshot);
+        let prepared = prepare_incremental_fs_update(&root, &update)?;
+        let mut state = self.state.write().unwrap();
+        if state.fs_snapshot != old_snapshot {
+            return state.poll_once();
+        }
+        state.apply_prepared_incremental_fs_update(snapshot, prepared)
     }
 
     pub fn drain_events(&self) -> Vec<WorkspaceEvent> {
@@ -464,21 +523,8 @@ impl WorkspaceSessionState {
         snapshot: WorkspaceFsSnapshot,
         update: IncrementalFsUpdate,
     ) -> Result<(), CoreError> {
-        let old_states = self.page_event_states();
-        let refresh_result = self.apply_incremental_fs_update_to_cache(&update);
-
-        match refresh_result {
-            Ok(()) => {
-                self.fs_snapshot = snapshot;
-                self.last_watch_error = None;
-                self.emit_cache_diff(old_states);
-                Ok(())
-            }
-            Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
-                self.full_refresh(false)
-            }
-            Err(error) => Err(error),
-        }
+        let prepared = prepare_incremental_fs_update(&self.root, &update)?;
+        self.apply_prepared_incremental_fs_update(snapshot, prepared)
     }
 
     fn apply_incremental_native_paths(
@@ -487,7 +533,8 @@ impl WorkspaceSessionState {
     ) -> Result<(), CoreError> {
         let update = self.incremental_update_from_native_paths(relative_paths);
         let old_states = self.page_event_states();
-        match self.apply_incremental_fs_update_to_cache(&update) {
+        let prepared = prepare_incremental_fs_update(&self.root, &update)?;
+        match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
             Ok(()) => {
                 self.apply_incremental_fs_snapshot_update(&update)?;
                 self.last_watch_error = None;
@@ -514,20 +561,19 @@ impl WorkspaceSessionState {
     }
 
     fn full_refresh(&mut self, may_need_recovery: bool) -> Result<(), CoreError> {
+        let prepared = prepare_full_refresh(&self.root, may_need_recovery)?;
+        self.apply_prepared_full_refresh(prepared)
+    }
+
+    fn apply_prepared_full_refresh(
+        &mut self,
+        prepared: PreparedFullRefresh,
+    ) -> Result<(), CoreError> {
         let old_states = self.page_event_states();
-        let recovery_applied = if may_need_recovery || transaction_record_exists(&self.root) {
-            recover_workspace_transactions(&self.root, &mut self.cache)?
-        } else {
-            false
-        };
-
-        if !recovery_applied {
-            refresh_workspace_cache(&self.root, &mut self.cache)?;
-        }
-
-        self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
+        self.cache = prepared.cache;
+        self.fs_snapshot = prepared.fs_snapshot;
         self.last_watch_error = None;
-        if recovery_applied {
+        if prepared.recovery_applied {
             self.enqueue_event(WorkspaceEvent::RecoveryApplied);
         }
         // WorkspaceReloaded is intentionally additive rather than authoritative:
@@ -569,30 +615,42 @@ impl WorkspaceSessionState {
         }
     }
 
-    fn apply_incremental_fs_update_to_cache(
+    fn apply_prepared_incremental_fs_update(
         &mut self,
-        update: &IncrementalFsUpdate,
+        snapshot: WorkspaceFsSnapshot,
+        prepared: PreparedIncrementalFsUpdate,
     ) -> Result<(), CoreError> {
-        let deleted_page_ids = update
-            .deleted_paths
-            .iter()
-            .map(|relative_path| PageId::from_workspace_path(relative_path))
-            .collect::<Result<Vec<_>, _>>()?;
-        let written_pages = update
-            .written_paths
-            .iter()
-            .map(|relative_path| load_page_from_relative_path(&self.root, relative_path))
-            .collect::<Result<Vec<_>, _>>()?;
+        let old_states = self.page_event_states();
+        match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
+            Ok(()) => {
+                self.fs_snapshot = snapshot;
+                self.last_watch_error = None;
+                self.emit_cache_diff(old_states);
+                Ok(())
+            }
+            Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
+                self.full_refresh(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
 
-        if !self.incremental_update_preserves_parent_pages(&deleted_page_ids, &written_pages) {
+    fn apply_prepared_incremental_fs_update_to_cache(
+        &mut self,
+        prepared: PreparedIncrementalFsUpdate,
+    ) -> Result<(), CoreError> {
+        if !self.incremental_update_preserves_parent_pages(
+            &prepared.deleted_page_ids,
+            &prepared.written_pages,
+        ) {
             return self.full_refresh(false);
         }
 
-        for page_id in deleted_page_ids {
+        for page_id in prepared.deleted_page_ids {
             self.cache.remove_page(&page_id);
         }
 
-        for page in written_pages {
+        for page in prepared.written_pages {
             self.apply_incremental_page_update(page);
         }
 
@@ -756,6 +814,49 @@ fn classify_snapshot_fs_changes(
     }
 
     update
+}
+
+fn prepare_full_refresh(
+    root: &Path,
+    may_need_recovery: bool,
+) -> Result<PreparedFullRefresh, CoreError> {
+    let mut cache = WorkspaceCache::new();
+    let recovery_applied = if may_need_recovery || transaction_record_exists(root) {
+        recover_workspace_transactions(root, &mut cache)?
+    } else {
+        false
+    };
+
+    if !recovery_applied {
+        cache = load_workspace_cache(root)?;
+    }
+
+    Ok(PreparedFullRefresh {
+        fs_snapshot: WorkspaceFsSnapshot::capture(root)?,
+        cache,
+        recovery_applied,
+    })
+}
+
+fn prepare_incremental_fs_update(
+    root: &Path,
+    update: &IncrementalFsUpdate,
+) -> Result<PreparedIncrementalFsUpdate, CoreError> {
+    let deleted_page_ids = update
+        .deleted_paths
+        .iter()
+        .map(|relative_path| PageId::from_workspace_path(relative_path))
+        .collect::<Result<Vec<_>, _>>()?;
+    let written_pages = update
+        .written_paths
+        .iter()
+        .map(|relative_path| load_page_from_relative_path(root, relative_path))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PreparedIncrementalFsUpdate {
+        deleted_page_ids,
+        written_pages,
+    })
 }
 
 fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventAction {
@@ -1442,6 +1543,41 @@ mod tests {
                     page_id: PageId::new(["A", "B"]).unwrap(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn stream_create_and_delete_emit_cache_invalidation_events() {
+        let workspace = TestWorkspace::new();
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_stream_page_create(StreamPageCreate {
+                stream_name: PageName::new("journal").unwrap(),
+                date_name: PageName::new("2026-05-07").unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![PageId::new(["journal", "2026-05-07"]).unwrap()],
+            }]
+        );
+
+        session
+            .apply_stream_page_delete(StreamPageDelete {
+                stream_name: PageName::new("journal").unwrap(),
+                date_name: PageName::new("2026-05-07").unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PageRemoved {
+                page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+            }]
         );
     }
 

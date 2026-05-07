@@ -33,6 +33,18 @@ pub struct PageDeleteSubtree {
     pub page_id: PageId,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamPageCreate {
+    pub stream_name: PageName,
+    pub date_name: PageName,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamPageDelete {
+    pub stream_name: PageName,
+    pub date_name: PageName,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OperationKind {
     Rename,
@@ -121,6 +133,29 @@ pub fn apply_page_create(
     Ok(())
 }
 
+pub fn apply_stream_page_create(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: StreamPageCreate,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
+    let relative_path = stream_location(&request.stream_name).workspace_path_for_page_id(&page_id)?;
+    let absolute_path = root.join(&relative_path);
+    if cache.page(&page_id).is_some() || absolute_path.exists() {
+        return Err(CoreError::DestinationPageExists);
+    }
+
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+    }
+    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
+    refresh_workspace_cache(root, cache)?;
+    Ok(())
+}
+
 pub fn apply_page_delete_subtree(
     root: impl AsRef<Path>,
     cache: &mut WorkspaceCache,
@@ -130,8 +165,13 @@ pub fn apply_page_delete_subtree(
     recover_workspace_transactions(root, cache)?;
 
     let disk_cache = load_workspace_cache(root)?;
-    if disk_cache.page(&request.page_id).is_none() {
+    let Some(page) = disk_cache.page(&request.page_id) else {
         return Err(CoreError::MissingPage);
+    };
+    if page.location.is_stream_backed() {
+        return Err(CoreError::UnsupportedStreamOperation {
+            operation: "delete_subtree",
+        });
     }
 
     let mut deleted_any = false;
@@ -156,6 +196,36 @@ pub fn apply_page_delete_subtree(
     Ok(())
 }
 
+pub fn apply_stream_page_delete(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: StreamPageDelete,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
+    let disk_cache = load_workspace_cache(root)?;
+    let Some(page) = disk_cache.page(&page_id) else {
+        return Err(CoreError::MissingPage);
+    };
+    if page.location.is_page_backed() {
+        return Err(CoreError::MissingPage);
+    }
+
+    let absolute_path = root.join(&page.workspace_path);
+    match fs::remove_file(&absolute_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CoreError::MissingPage);
+        }
+        Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+    }
+
+    refresh_workspace_cache(root, cache)?;
+    Ok(())
+}
+
 pub fn apply_page_rename(
     root: impl AsRef<Path>,
     cache: &mut WorkspaceCache,
@@ -171,6 +241,7 @@ pub(crate) fn apply_page_rename_with_update(
 ) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
+    reject_stream_page_operation(cache, &request.source_page_id, "rename")?;
 
     let target_page_id = renamed_page_id(&request.source_page_id, &request.new_leaf_name)?;
     if target_page_id == request.source_page_id {
@@ -202,6 +273,7 @@ pub(crate) fn apply_page_move_with_update(
 ) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
+    reject_stream_page_operation(cache, &request.source_page_id, "move")?;
 
     if request
         .destination_parent_page_id
@@ -365,6 +437,34 @@ fn apply_transaction_writes_to_cache(
         } else {
             cache.upsert_page(page);
         }
+    }
+
+    Ok(())
+}
+
+fn stream_location(stream_name: &PageName) -> PageLocation {
+    PageLocation::Stream {
+        stream_name: stream_name.clone(),
+    }
+}
+
+fn stream_page_id(stream_name: &PageName, date_name: &PageName) -> Result<PageId, CoreError> {
+    Ok(PageId::from_page_names(vec![
+        stream_name.clone(),
+        date_name.clone(),
+    ])?)
+}
+
+fn reject_stream_page_operation(
+    cache: &WorkspaceCache,
+    page_id: &PageId,
+    operation: &'static str,
+) -> Result<(), CoreError> {
+    if cache
+        .page(page_id)
+        .is_some_and(|page| page.location.is_stream_backed())
+    {
+        return Err(CoreError::UnsupportedStreamOperation { operation });
     }
 
     Ok(())
@@ -606,6 +706,80 @@ mod tests {
 
         assert_eq!(error, CoreError::DestinationPageExists);
         assert!(workspace.file_exists("A.md"));
+    }
+
+    #[test]
+    fn stream_create_and_delete_manage_single_stream_files() {
+        let workspace = TestWorkspace::new();
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+
+        apply_stream_page_create(
+            &workspace.root,
+            &mut cache,
+            StreamPageCreate {
+                stream_name: PageName::new("journal").unwrap(),
+                date_name: PageName::new("2026-05-07").unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert!(workspace.file_exists("streams/journal/2026-05-07.md"));
+        assert!(cache
+            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+            .is_some());
+
+        apply_stream_page_delete(
+            &workspace.root,
+            &mut cache,
+            StreamPageDelete {
+                stream_name: PageName::new("journal").unwrap(),
+                date_name: PageName::new("2026-05-07").unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert!(!workspace.file_exists("streams/journal/2026-05-07.md"));
+        assert!(cache
+            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+            .is_none());
+    }
+
+    #[test]
+    fn rename_and_move_reject_stream_pages() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("streams/journal/2026-05-07.md", "- body\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+
+        let rename_error = apply_page_rename(
+            &workspace.root,
+            &mut cache,
+            PageRename {
+                source_page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+                new_leaf_name: PageName::new("2026-05-08").unwrap(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            rename_error,
+            CoreError::UnsupportedStreamOperation {
+                operation: "rename"
+            }
+        );
+
+        let move_error = apply_page_move(
+            &workspace.root,
+            &mut cache,
+            PageMove {
+                source_page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+                destination_parent_page_id: Some(PageId::new(["A"]).unwrap()),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            move_error,
+            CoreError::UnsupportedStreamOperation { operation: "move" }
+        );
     }
 
     #[test]

@@ -139,6 +139,7 @@ pub enum CoreError {
     MissingDestinationParent,
     DestinationPageExists,
     InvalidPageMove,
+    UnsupportedStreamOperation { operation: &'static str },
     CorruptTransaction,
 }
 
@@ -165,6 +166,9 @@ impl fmt::Display for CoreError {
             }
             Self::DestinationPageExists => write!(f, "destination page already exists"),
             Self::InvalidPageMove => write!(f, "page move would create an invalid hierarchy"),
+            Self::UnsupportedStreamOperation { operation } => {
+                write!(f, "stream pages do not support the '{operation}' operation")
+            }
             Self::CorruptTransaction => write!(f, "transaction record is missing or invalid"),
         }
     }

@@ -818,3 +818,155 @@ relevant files changed since planning.
 - It is acceptable for rename/move to occasionally fail after initiation and require frontend
    refresh/retry handling.
 - Whole-file fingerprint validation is the v1 policy; no semantic diff/merge behavior is added.
+
+
+
+
+# Backend Hardening Plan with Controlled Stream Lifecycle
+
+## Summary
+
+Harden the backend around the actual product contract:
+
+- normal pages support full structural operations: create, delete-subtree, rename, move
+- stream pages support controlled lifecycle operations only: create and delete
+- stream pages cannot be renamed or moved
+- the backend remains markdown-native, file-first, and local-first
+- the next engineering priorities are still: clarify contract, reduce session lock contention, and strengthen multi-file transaction durability
+
+Default decisions in this plan:
+
+- stream create/delete gets a dedicated backend API
+- rename/move remain page-backed only
+- [[...]] remains the general ref syntax, #... remains the compact syntax
+- only triple-backtick fenced blocks are intentionally recognized
+
+## Implementation Changes
+
+### 1. Make the storage and lifecycle contract explicit
+
+Update BACKEND_ARCHITECTURE.md and backend guards so the contract is explicit and enforced:
+
+- Pages under pages/:
+    - support create, delete-subtree, rename, move
+    - parent materialization rules apply
+- Stream pages under streams/<stream-name>/:
+    - support create and delete only
+    - do not participate in page hierarchy
+    - never trigger parent-page materialization
+    - cannot be renamed or moved
+- Both storage kinds:
+    - are discovered, parsed, indexed for refs, exposed through read APIs, and reconciled through watchers
+
+Add explicit backend validation for unsupported operations:
+
+- reject rename/move on stream-backed page ids with a dedicated CoreError
+- keep delete semantics explicit:
+    - page-backed delete means subtree delete
+    - stream delete means single-file delete only
+
+### 2. Add dedicated stream lifecycle operations
+
+Introduce dedicated backend operations for stream lifecycle instead of overloading generic page structural APIs.
+
+Recommended public shape:
+
+- StreamPageCreate { stream_name, date_name }
+- StreamPageDelete { stream_name, date_name }
+
+Required behavior:
+
+- StreamPageCreate
+    - creates streams/<stream-name>/<date>.md
+    - fails if the target file already exists
+    - parses and inserts the new page into cache
+    - does not create any parent page
+- StreamPageDelete
+    - deletes exactly one stream file
+    - fails if the stream page does not exist
+    - refreshes refs and cache state like any other file removal
+- PageCreate, PageDeleteSubtree, PageRename, PageMove
+    - remain for page-backed pages only
+    - must reject stream ids up front where applicable
+
+Do not add stream rename/move APIs in this pass.
+
+### 3. Reduce WorkspaceSession write-lock hold time
+
+Refactor WorkspaceSession so disk IO and parsing happen off-lock, and only cache application / swap plus event emission happen under the write lock.
+
+Decision-complete behavior:
+
+- Incremental reconciliation:
+    - detect changed relative paths
+    - read and parse changed files off-lock into Page values
+    - derive deleted ids off-lock
+    - reacquire lock
+    - validate snapshot assumptions
+    - if assumptions no longer hold, fall back to full refresh
+    - otherwise apply page/stream updates, update snapshot state, and emit events
+- Full refresh:
+    - build a fresh cache and filesystem snapshot off-lock
+    - reacquire lock
+    - swap in the new state and emit diff events
+- Structural writes:
+    - remain serialized
+    - perform as much non-mutating prep work off-lock as possible
+    - commit cache state and events under lock
+
+Keep WorkspaceEvent semantics unchanged.
+
+### 4. Strengthen rename/move durability for page-backed pages
+
+Keep the manifest-based transaction model, but replace direct destination overwrites with temp-file promotion.
+
+Commit protocol:
+
+1. plan rename/move and rewritten contents
+2. stage manifest and final blobs in the transaction directory
+3. write each final blob to a temp file in the same directory as its destination
+4. atomically rename temp -> final for each destination
+5. after all final files exist, delete old source files
+6. remove the transaction directory last
+
+Recovery rules:
+
+- recovery always completes to final committed state, never rolls back
+- recovery must be idempotent
+- recovery must safely handle interruption:
+    - before temp creation finishes
+    - after some temp files exist
+    - after some final promotions complete
+    - before old source deletions complete
+
+This hardening applies to page rename/move only. Stream create/delete do not need multi-file transactional rewrite machinery.
+
+### 5. Keep incremental reconciliation narrow, but cheaper
+
+Preserve the current conservative policy, but remove avoidable whole-cache work.
+
+Changes:
+
+- replace whole-cache clone simulation for parent-preservation checks with affected-id validation
+- parent materialization remains a discovery/full-refresh behavior only
+- if an incremental update would require structural healing, fall back to full refresh
+- stream file create/delete should remain incrementally reconcilable because they have no hierarchy repair requirements
+
+This keeps correctness simple while improving scale characteristics.
+
+## Public APIs / Types
+
+Add or adjust these interfaces:
+
+- New operations:
+    - StreamPageCreate
+    - StreamPageDelete
+- New errors:
+    - dedicated error for unsupported structural operation on a stream page
+- Keep existing page-backed operations:
+    - PageCreate
+    - PageDeleteSubtree
+    - PageRename
+    - PageMove
+- Keep current read/query APIs unchanged
+- Keep PageId and PageLocation model unchanged in this pass

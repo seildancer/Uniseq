@@ -12,14 +12,14 @@
 
 - Markdown files are the only durable source of truth.
 - Every markdown file is a page.
-- Stream (journal) files and normal page files are the same backend object.
+- Stream (journal) files and normal page files are the same backend object for discovery, parsing, refs, reads, and cache state.
 - Page body is modelled into blocks.
 - All references are `block -> page`.
 - Supported page reference syntax is `[[Page]]` and `#Page`.
 - References inside fenced code blocks are ignored. (we don't care about indentation code blocks)
 - `linked references` are derived views over source blocks and never live in the target page file.
 - Pages have a backend-resolved identity derived from filesystem layout and page hierarchy.
-- Structural page mutations are first-class backend operations. Create/delete-subtree/rename/move are handled by Rust; rename/move must be crash-safe, with reference rewrites and recovery from interrupted writes.
+- Structural page mutations are first-class backend operations. Page-backed pages under `pages/` support create/delete-subtree/rename/move; stream pages under `streams/<name>/` support controlled create/delete only. Rename/move must be crash-safe, with reference rewrites and recovery from interrupted writes.
 - Disposable indexes and caches may exist, but the backend must be rebuildable from files alone.
 - File-level sync is the working storage assumption, but sync logic is out of scope for now.
 
@@ -28,7 +28,7 @@
 - Discover markdown pages from the workspace, and organize them into the hierarchy of pages. We follow the logseq convention of `A___B.md` to mark page `B` under page `A`, and `A___B___C.md` is valid for deeper nesting.
 - Ensure parent pages exist for hierarchical pages. If `A___B.md` exists, `A.md` must exist; missing parents may be materialized as empty files.
 - Observe markdown file changes and reconcile derived cache/index state back to the current file contents.
-- Apply structural workspace mutations such as page create/delete-subtree/rename/move. Rename/move are crash-safe transactional writes with recovery support.
+- Apply structural workspace mutations such as page create/delete-subtree/rename/move and controlled stream create/delete. Rename/move are crash-safe transactional writes with recovery support.
 - Parse page files into block trees.
 - Expose normalized block/page/reference state derived from files, with quick eventual consistency after ordinary content edits.
 
@@ -46,7 +46,7 @@
 - Ordinary content editing is frontend-driven: React computes markdown edits and writes the affected page file directly.
 - Rust treats those file changes as authoritative and updates parse trees, source-span anchors, hierarchy-derived state, references, and other disposable indexes asynchronously.
 - Derived views such as linked references, counts, and hierarchy metadata are allowed to be briefly stale during reconciliation, but should converge quickly.
-- Structural workspace mutations are backend-owned: page create/delete-subtree/rename/move and any multi-file ref rewrite happen through synchronous Rust commands. Rename/move use crash-safe recovery.
+- Structural workspace mutations are backend-owned: page create/delete-subtree/rename/move, controlled stream create/delete, and any multi-file ref rewrite happen through synchronous Rust commands. Rename/move use crash-safe recovery.
 - The file watcher/reconciliation pipeline is primarily for ordinary content edits, external edits, sync-delivered changes, and recovery after interruptions.
 - Linked references are frontend-composed views over Rust-maintained normalized reference state. React should not rescan raw markdown or rebuild page/block semantics independently.
 
@@ -81,6 +81,7 @@ Replace the current flat A___B.md workspace model with an explicit storage-layou
 - Normal pages live under pages/
 - Stream pages live under streams/<stream-name>/
 - Stream folders are storage buckets only, not part of the page hierarchy
+- Stream pages may be created and deleted by controlled product workflows, but are never renamed or moved
 
 Both kinds still load into the same page/ref/cache model. The only special handling is in
 workspace-path parsing, hierarchy construction, and path round-tripping.

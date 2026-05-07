@@ -172,6 +172,10 @@ impl PageLocation {
     pub fn is_page_backed(&self) -> bool {
         matches!(self, Self::Pages)
     }
+
+    pub fn is_stream_backed(&self) -> bool {
+        matches!(self, Self::Stream { .. })
+    }
 }
 
 pub fn resolve_workspace_path(
