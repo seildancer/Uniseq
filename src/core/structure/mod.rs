@@ -911,9 +911,9 @@ mod tests {
 
         let read_api = WorkspaceReadApi::new(&cache);
         let x_blocks = read_api.page_blocks(&PageId::new(["X"]).unwrap()).unwrap();
-        assert_eq!(x_blocks[0].outgoing_refs.len(), 2);
-        assert!(!x_blocks[0].outgoing_refs[0].target_exists);
-        assert!(!x_blocks[0].outgoing_refs[1].target_exists);
+        assert_eq!(x_blocks.blocks[0].outgoing_refs.len(), 2);
+        assert!(!x_blocks.blocks[0].outgoing_refs[0].target_exists);
+        assert!(!x_blocks.blocks[0].outgoing_refs[1].target_exists);
     }
 
     #[test]

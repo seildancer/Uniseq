@@ -29,7 +29,7 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
             .is_some()
         {
             return Err(CoreError::DuplicatePageIdentity {
-                page_id: page.page_id.hierarchy_display(),
+                page_id: page.page_id.canonical_identity_display(),
             });
         }
         pages.push(page);

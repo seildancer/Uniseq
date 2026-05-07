@@ -9,8 +9,8 @@ use std::time::Duration;
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
-    BlockSnapshot, CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageDetail, PageId,
-    PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
+    CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageBlocksSnapshot, PageDetail,
+    PageId, PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_page_with_fingerprint_from_relative_path,
@@ -200,7 +200,7 @@ impl WorkspaceSession {
             .with_read_api(|read_api| read_api.page_detail(page_id))
     }
 
-    pub fn page_blocks(&self, page_id: &PageId) -> Result<Vec<BlockSnapshot>, CoreError> {
+    pub fn page_blocks(&self, page_id: &PageId) -> Result<PageBlocksSnapshot, CoreError> {
         self.state
             .read()
             .unwrap()
@@ -1999,7 +1999,8 @@ mod tests {
         let session = WorkspaceSession::open(&workspace.root).unwrap();
 
         let block = session.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
-        assert_eq!(block[0].content, "body");
+        assert_eq!(block.revision, FileFingerprint::from_text("- body\r\n"));
+        assert_eq!(block.blocks[0].content, "body");
         assert_eq!(
             session
                 .page_summary(&PageId::new(["A"]).unwrap())

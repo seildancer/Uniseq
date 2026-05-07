@@ -1,11 +1,15 @@
+use std::path::PathBuf;
+
 use super::{
-    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PlaintextKind, SourceSpan,
-    WorkspaceCache,
+    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, PlaintextKind,
+    SourceSpan, WorkspaceCache,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageSummary {
     pub page_id: PageId,
+    pub location: PageLocation,
+    pub workspace_path: PathBuf,
     pub title: String,
     pub revision: FileFingerprint,
     pub parent_page_id: Option<PageId>,
@@ -28,6 +32,13 @@ pub struct BlockSnapshot {
     pub content: String,
     pub children: Vec<BlockSnapshot>,
     pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageBlocksSnapshot {
+    pub page_id: PageId,
+    pub revision: FileFingerprint,
+    pub blocks: Vec<BlockSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,12 +106,17 @@ impl<'a> WorkspaceReadApi<'a> {
             .collect()
     }
 
-    pub fn page_blocks(&self, page_id: &PageId) -> Result<Vec<BlockSnapshot>, CoreError> {
+    pub fn page_blocks(&self, page_id: &PageId) -> Result<PageBlocksSnapshot, CoreError> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
-        page.blocks
-            .iter()
-            .map(|block| block_snapshot(self.cache, page, block))
-            .collect()
+        Ok(PageBlocksSnapshot {
+            page_id: page.page_id.clone(),
+            revision: page.fingerprint,
+            blocks: page
+                .blocks
+                .iter()
+                .map(|block| block_snapshot(self.cache, page, block))
+                .collect::<Result<_, _>>()?,
+        })
     }
 
     pub fn page_incoming_refs(
@@ -165,6 +181,8 @@ fn incoming_ref_snapshots(
 fn page_summary(page: &Page) -> PageSummary {
     PageSummary {
         page_id: page.page_id.clone(),
+        location: page.location.clone(),
+        workspace_path: page.workspace_path.clone(),
         title: page.title.clone(),
         revision: page.fingerprint,
         parent_page_id: page.parent_page_id(),
@@ -251,6 +269,8 @@ mod tests {
             vec![
                 PageSummary {
                     page_id: PageId::new(["A"]).unwrap(),
+                    location: crate::PageLocation::Pages,
+                    workspace_path: std::path::PathBuf::from("pages").join("A.md"),
                     title: "A".to_owned(),
                     revision: FileFingerprint::from_text(""),
                     parent_page_id: None,
@@ -258,6 +278,8 @@ mod tests {
                 },
                 PageSummary {
                     page_id: PageId::new(["A", "B"]).unwrap(),
+                    location: crate::PageLocation::Pages,
+                    workspace_path: std::path::PathBuf::from("pages").join("A___B.md"),
                     title: "B".to_owned(),
                     revision: FileFingerprint::from_text(""),
                     parent_page_id: Some(PageId::new(["A"]).unwrap()),
@@ -265,6 +287,8 @@ mod tests {
                 },
                 PageSummary {
                     page_id: PageId::new(["C"]).unwrap(),
+                    location: crate::PageLocation::Pages,
+                    workspace_path: std::path::PathBuf::from("pages").join("C.md"),
                     title: "C".to_owned(),
                     revision: FileFingerprint::from_text(""),
                     parent_page_id: None,
@@ -298,9 +322,9 @@ mod tests {
 
         let blocks = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
 
-        assert_eq!(blocks[0].outgoing_refs.len(), 1);
+        assert_eq!(blocks.blocks[0].outgoing_refs.len(), 1);
         assert_eq!(
-            blocks[0].outgoing_refs[0],
+            blocks.blocks[0].outgoing_refs[0],
             OutgoingPageRefSnapshot {
                 target_page_id: PageId::new(["Missing"]).unwrap(),
                 ref_span: SourceSpan::unchecked(2, 13),
@@ -316,9 +340,11 @@ mod tests {
         let read_api = WorkspaceReadApi::new(&cache);
         let blocks = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
 
-        assert_eq!(blocks[0].block_span, SourceSpan::unchecked(0, text.len()));
-        assert_eq!(blocks[0].content_span, SourceSpan::unchecked(2, 10));
-        assert_eq!(blocks[0].children[0].content, "child");
+        assert_eq!(blocks.page_id, PageId::new(["A"]).unwrap());
+        assert_eq!(blocks.revision, FileFingerprint::from_text(text));
+        assert_eq!(blocks.blocks[0].block_span, SourceSpan::unchecked(0, text.len()));
+        assert_eq!(blocks.blocks[0].content_span, SourceSpan::unchecked(2, 10));
+        assert_eq!(blocks.blocks[0].children[0].content, "child");
     }
 
     #[test]

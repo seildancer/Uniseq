@@ -185,12 +185,28 @@ impl PageId {
             .collect()
     }
 
+    pub fn page_hierarchy_display(&self) -> Option<String> {
+        self.is_page_backed().then(|| {
+            self.segments
+                .iter()
+                .map(PageName::as_str)
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+    }
+
     pub fn hierarchy_display(&self) -> String {
-        self.segments
-            .iter()
-            .map(PageName::as_str)
-            .collect::<Vec<_>>()
-            .join("/")
+        self.page_hierarchy_display()
+            .expect("hierarchy_display is only valid for page-backed page ids")
+    }
+
+    pub fn canonical_identity_display(&self) -> String {
+        match &self.location {
+            PageLocation::Pages => format!("pages:{}", self.hierarchy_display()),
+            PageLocation::Stream { stream_name } => {
+                format!("streams/{}/{}", stream_name.as_str(), self.leaf_name().as_str())
+            }
+        }
     }
 }
 
@@ -265,7 +281,7 @@ pub fn supported_workspace_markdown_path(
 
 impl fmt::Display for PageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.hierarchy_display())
+        f.write_str(&self.canonical_identity_display())
     }
 }
 
@@ -441,8 +457,14 @@ mod tests {
         let journal = resolve_workspace_path("streams/journal/2026-05-07.md").unwrap();
         let diary = resolve_workspace_path("streams/diary/2026-05-07.md").unwrap();
 
-        assert_eq!(journal.page_id.hierarchy_display(), "journal/2026-05-07");
-        assert_eq!(diary.page_id.hierarchy_display(), "diary/2026-05-07");
+        assert_eq!(
+            journal.page_id.canonical_identity_display(),
+            "streams/journal/2026-05-07"
+        );
+        assert_eq!(
+            diary.page_id.canonical_identity_display(),
+            "streams/diary/2026-05-07"
+        );
         assert_ne!(journal.page_id, diary.page_id);
         assert_eq!(
             journal.location.workspace_path_for_page_id(&journal.page_id).unwrap(),
@@ -460,7 +482,8 @@ mod tests {
             .page_id;
 
         assert_ne!(page, stream);
-        assert_eq!(page.hierarchy_display(), stream.hierarchy_display());
+        assert_eq!(page.hierarchy_display(), "journal/2026-05-07");
+        assert_eq!(stream.page_hierarchy_display(), None);
     }
 
     #[test]
@@ -486,6 +509,7 @@ mod tests {
 
         assert!(page_id.parent().is_none());
         assert!(page_id.ancestors().is_empty());
+        assert!(page_id.page_hierarchy_display().is_none());
     }
 
     #[test]
