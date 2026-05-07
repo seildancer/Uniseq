@@ -422,11 +422,17 @@ impl WorkspaceSessionState {
             IsolatedFsChange::Created(relative_path)
             | IsolatedFsChange::Modified(relative_path) => {
                 let page = load_page_from_relative_path(&self.root, &relative_path)?;
+                if !self.incremental_upsert_preserves_parent_pages(&page) {
+                    return self.full_refresh(false);
+                }
                 self.cache.upsert_page(page);
                 Ok(())
             }
             IsolatedFsChange::Deleted(relative_path) => {
                 let page_id = PageId::from_workspace_path(&relative_path)?;
+                if !self.incremental_remove_preserves_parent_pages(&page_id) {
+                    return self.full_refresh(false);
+                }
                 self.cache.remove_page(&page_id);
                 Ok(())
             }
@@ -456,6 +462,9 @@ impl WorkspaceSessionState {
             | IsolatedFsChange::Modified(relative_path) => {
                 let absolute_path = self.root.join(relative_path);
                 let page = load_page_from_relative_path(&self.root, relative_path)?;
+                if !self.incremental_upsert_preserves_parent_pages(&page) {
+                    return self.full_refresh(false);
+                }
                 let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
                 self.cache.upsert_page(page);
                 self.fs_snapshot
@@ -464,6 +473,9 @@ impl WorkspaceSessionState {
             }
             IsolatedFsChange::Deleted(relative_path) => {
                 let page_id = PageId::from_workspace_path(relative_path)?;
+                if !self.incremental_remove_preserves_parent_pages(&page_id) {
+                    return self.full_refresh(false);
+                }
                 self.cache.remove_page(&page_id);
                 self.fs_snapshot.markdown_files.remove(relative_path);
             }
@@ -479,6 +491,9 @@ impl WorkspaceSessionState {
         if absolute_path.exists() {
             let old_states = self.page_event_states();
             let page = load_page_from_relative_path(&self.root, &relative_path)?;
+            if !self.incremental_upsert_preserves_parent_pages(&page) {
+                return self.full_refresh(false);
+            }
             let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
             self.cache.upsert_page(page);
             self.fs_snapshot
@@ -536,6 +551,18 @@ impl WorkspaceSessionState {
 
         self.emit_cache_diff(old_states);
         Ok(())
+    }
+
+    fn incremental_upsert_preserves_parent_pages(&self, page: &crate::core::Page) -> bool {
+        let mut next_cache = self.cache.clone();
+        next_cache.upsert_page(page.clone());
+        next_cache.missing_parent_page_ids().is_empty()
+    }
+
+    fn incremental_remove_preserves_parent_pages(&self, page_id: &PageId) -> bool {
+        let mut next_cache = self.cache.clone();
+        next_cache.remove_page(page_id);
+        next_cache.missing_parent_page_ids().is_empty()
     }
 }
 
@@ -1149,6 +1176,60 @@ mod tests {
 
         workspace.write_file("A___B___C.md", "");
         session.state.lock().unwrap().full_refresh(false).unwrap();
+
+        assert!(workspace.root.join("A.md").exists());
+        assert!(workspace.root.join("A___B.md").exists());
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![
+                PageId::new(["A"]).unwrap(),
+                PageId::new(["A", "B"]).unwrap(),
+                PageId::new(["A", "B", "C"]).unwrap(),
+            ],
+        }));
+    }
+
+    #[test]
+    fn poll_once_falls_back_when_incremental_create_needs_parent_materialization() {
+        let workspace = TestWorkspace::new();
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A___B___C.md", "- body\n");
+        session.poll_once().unwrap();
+
+        assert!(workspace.root.join("A.md").exists());
+        assert!(workspace.root.join("A___B.md").exists());
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![
+                PageId::new(["A"]).unwrap(),
+                PageId::new(["A", "B"]).unwrap(),
+                PageId::new(["A", "B", "C"]).unwrap(),
+            ],
+        }));
+    }
+
+    #[test]
+    fn native_event_hint_falls_back_when_incremental_create_needs_parent_materialization() {
+        let workspace = TestWorkspace::new();
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A___B___C.md", "- body\n");
+        let event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::Any),
+            paths: vec![workspace.root.join("A___B___C.md")],
+            attrs: Default::default(),
+        };
+        session
+            .state
+            .lock()
+            .unwrap()
+            .apply_native_event_burst(&[event])
+            .unwrap();
 
         assert!(workspace.root.join("A.md").exists());
         assert!(workspace.root.join("A___B.md").exists());

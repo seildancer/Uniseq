@@ -155,6 +155,7 @@ fn complete_transaction_record(
     // rather than attempting rollback. Markdown files remain authoritative, and
     // startup/runtime recovery replays the recorded final state until disk and
     // cache converge on one deterministic committed outcome.
+    record.validate_final_paths_available(root)?;
     record.mark_applying(root)?;
     record.apply_final_state(root, None, false)?;
     record.remove(root)?;
@@ -477,5 +478,28 @@ mod tests {
         assert_eq!(error, CoreError::DestinationPageExists);
         assert!(workspace.file_exists("A___B.md"));
         assert_eq!(workspace.read_file("Z___B.md"), "- external\n");
+    }
+
+    #[test]
+    fn recovery_rejects_late_destination_collisions_before_commit() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+
+        stage_page_rename_transaction_for_testing(
+            &workspace.root,
+            &PageId::new(["A", "B"]).unwrap(),
+            &PageName::new("C").unwrap(),
+        )
+        .unwrap();
+        workspace.write_file("A___C.md", "- external\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        let error = recover_workspace_transactions(&workspace.root, &mut cache).unwrap_err();
+
+        assert_eq!(error, CoreError::DestinationPageExists);
+        assert_eq!(workspace.read_file("A___B.md"), "- body\n");
+        assert_eq!(workspace.read_file("A___C.md"), "- external\n");
+        assert!(workspace.root.join(".uniseq-page-transaction").exists());
     }
 }

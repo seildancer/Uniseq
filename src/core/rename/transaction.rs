@@ -177,6 +177,39 @@ impl TransactionRecord {
         self.write_manifest(root)
     }
 
+    pub(super) fn validate_final_paths_available(&self, root: &Path) -> Result<(), CoreError> {
+        let txn_dir = transaction_dir(root);
+        let original_paths = self
+            .manifest
+            .originals
+            .iter()
+            .map(|entry| entry.workspace_path.as_path())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for write in &self.manifest.writes {
+            if original_paths.contains(write.workspace_path.as_path()) {
+                continue;
+            }
+
+            let absolute_path = root.join(&write.workspace_path);
+            if !absolute_path.exists() {
+                continue;
+            }
+
+            let blob_path = txn_dir.join(FINAL_DIR_NAME).join(&write.blob_name);
+            let final_text = fs::read_to_string(&blob_path)
+                .map_err(|error| CoreError::io(&blob_path, &error))?;
+            let existing_text = fs::read_to_string(&absolute_path)
+                .map_err(|error| CoreError::io(&absolute_path, &error))?;
+
+            if existing_text != final_text {
+                return Err(CoreError::DestinationPageExists);
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) fn apply_final_state(
         &self,
         root: &Path,

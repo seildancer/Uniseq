@@ -3,6 +3,9 @@ use std::str::FromStr;
 use super::{Block, BlockKind, CoreError, PageId, PageRefOccurrence, PlaintextKind, SourceSpan};
 
 const TAB_WIDTH: usize = 4;
+// Reference suppression intentionally only treats fenced sections as code
+// blocks. Indentation-only Markdown code blocks remain part of normal block
+// content and still participate in page-ref extraction.
 const FENCE_MARKER: &str = "```";
 const PLAINTEXT_MARKER: char = '\u{25E6}';
 
