@@ -123,10 +123,7 @@ fn collect_markdown_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        BlockHandle, BlockSubtreeEdit, CoreError, FileFingerprint, WorkspaceReadApi,
-        apply_block_subtree_edit,
-    };
+    use crate::{CoreError, FileFingerprint};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestWorkspace {
@@ -150,10 +147,6 @@ mod tests {
                 fs::create_dir_all(parent).unwrap();
             }
             fs::write(path, contents).unwrap();
-        }
-
-        fn read_file(&self, relative_path: &str) -> String {
-            fs::read_to_string(self.root.join(relative_path)).unwrap()
         }
     }
 
@@ -227,219 +220,6 @@ mod tests {
     }
 
     #[test]
-    fn subtree_edit_replaces_exact_source_region_and_refreshes_cache() {
-        let workspace = TestWorkspace::new();
-        workspace.write_file("A.md", "- before\n- parent [[B]]\n\t- child #C\n- after\n");
-        workspace.write_file("B.md", "");
-        workspace.write_file("C.md", "");
-        workspace.write_file("D.md", "");
-
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
-        let read_api = WorkspaceReadApi::new(&discovery.cache);
-        let handle = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap()[1]
-            .handle
-            .clone();
-
-        apply_block_subtree_edit(
-            &workspace.root,
-            &mut discovery.cache,
-            BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- parent [[D]]\n\t- child plain\n".to_owned(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(
-            workspace.read_file("A.md"),
-            "- before\n- parent [[D]]\n\t- child plain\n- after\n"
-        );
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["A"]).unwrap())
-                .unwrap()
-                .text,
-            "- before\n- parent [[D]]\n\t- child plain\n- after\n"
-        );
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
-            0
-        );
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
-            0
-        );
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["D"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn subtree_edit_accepts_handles_from_linked_references() {
-        let workspace = TestWorkspace::new();
-        workspace.write_file("A.md", "- [[B]]\n");
-        workspace.write_file("B.md", "");
-        workspace.write_file("C.md", "");
-
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
-        let read_api = WorkspaceReadApi::new(&discovery.cache);
-        let handle = read_api.linked_refs(&PageId::new(["B"]).unwrap()).unwrap()[0]
-            .source_block
-            .handle
-            .clone();
-
-        apply_block_subtree_edit(
-            &workspace.root,
-            &mut discovery.cache,
-            BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- [[C]]\n".to_owned(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(workspace.read_file("A.md"), "- [[C]]\n");
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
-            0
-        );
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn subtree_edit_rejects_stale_handles_without_mutating_file_or_cache() {
-        let workspace = TestWorkspace::new();
-        workspace.write_file("A.md", "- original\n");
-
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
-        let read_api = WorkspaceReadApi::new(&discovery.cache);
-        let handle = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap()[0]
-            .handle
-            .clone();
-        workspace.write_file("A.md", "- external change\n");
-
-        let error = apply_block_subtree_edit(
-            &workspace.root,
-            &mut discovery.cache,
-            BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- local edit\n".to_owned(),
-            },
-        )
-        .unwrap_err();
-
-        assert_eq!(error, CoreError::StalePageRevision);
-        assert_eq!(workspace.read_file("A.md"), "- external change\n");
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["A"]).unwrap())
-                .unwrap()
-                .text,
-            "- original\n"
-        );
-    }
-
-    #[test]
-    fn subtree_edit_rejects_missing_block_handles() {
-        let workspace = TestWorkspace::new();
-        workspace.write_file("A.md", "- only\n");
-
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
-        let page = discovery.cache.page(&PageId::new(["A"]).unwrap()).unwrap();
-        let invalid_handle = BlockHandle::new(
-            PageId::new(["A"]).unwrap(),
-            page.fingerprint,
-            super::super::SourceSpan::unchecked(0, 3),
-        );
-
-        let error = apply_block_subtree_edit(
-            &workspace.root,
-            &mut discovery.cache,
-            BlockSubtreeEdit {
-                block_handle: invalid_handle,
-                replacement_markdown: "- no\n".to_owned(),
-            },
-        )
-        .unwrap_err();
-
-        assert_eq!(error, CoreError::MissingBlock);
-        assert_eq!(workspace.read_file("A.md"), "- only\n");
-    }
-
-    #[test]
-    fn subtree_edit_preserves_cache_when_file_write_fails() {
-        let workspace = TestWorkspace::new();
-        workspace.write_file("A.md", "- only\n");
-
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
-        let read_api = WorkspaceReadApi::new(&discovery.cache);
-        let handle = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap()[0]
-            .handle
-            .clone();
-
-        let path = workspace.root.join("A.md");
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(true);
-        fs::set_permissions(&path, permissions).unwrap();
-
-        let error = apply_block_subtree_edit(
-            &workspace.root,
-            &mut discovery.cache,
-            BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- changed\n".to_owned(),
-            },
-        )
-        .unwrap_err();
-
-        let mut permissions = fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(false);
-        fs::set_permissions(&path, permissions).unwrap();
-
-        assert!(matches!(error, CoreError::Io { .. }));
-        assert_eq!(workspace.read_file("A.md"), "- only\n");
-        assert_eq!(
-            discovery
-                .cache
-                .page(&PageId::new(["A"]).unwrap())
-                .unwrap()
-                .text,
-            "- only\n"
-        );
-    }
-
-    #[test]
     fn discovery_populates_incoming_refs_from_parsed_markdown() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "- see [[B]] and #C\n");
@@ -510,7 +290,8 @@ mod tests {
         let workspace = TestWorkspace::new();
         workspace.write_file("A___B___C.md", "");
 
-        let mut cache = WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
+        let mut cache =
+            WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
         let created = materialize_parent_pages(
             &workspace.root,
             &mut cache,
@@ -544,7 +325,8 @@ mod tests {
         workspace.write_file("A___B___C.md", "");
         workspace.write_file("A.md", "existing");
 
-        let mut cache = WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
+        let mut cache =
+            WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
         let created = materialize_parent_pages(
             &workspace.root,
             &mut cache,

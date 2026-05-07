@@ -1,5 +1,5 @@
 use super::{
-    Block, BlockHandle, BlockKind, CoreError, Page, PageId, PlaintextKind, SourceSpan,
+    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PlaintextKind, SourceSpan,
     WorkspaceCache,
 };
 
@@ -14,26 +14,26 @@ pub struct PageSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageDetail {
     pub summary: PageSummary,
-    pub child_pages: Vec<PageSummary>,
-    pub root_blocks: Vec<BlockSnapshot>,
-    pub linked_ref_count: usize,
+    pub incoming_refs: Vec<IncomingPageRefSnapshot>,
     pub outgoing_ref_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockSnapshot {
-    pub handle: BlockHandle,
     pub kind: BlockSnapshotKind,
+    pub block_span: SourceSpan,
+    pub content_span: SourceSpan,
     pub content: String,
     pub children: Vec<BlockSnapshot>,
     pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LinkedRefEntry {
+pub struct IncomingPageRefSnapshot {
     pub target_page_id: PageId,
-    pub source_page: PageSummary,
-    pub source_block: BlockSnapshot,
+    pub source_page_id: PageId,
+    pub source_page_fingerprint: FileFingerprint,
+    pub source_block_span: SourceSpan,
     pub ref_span: SourceSpan,
 }
 
@@ -74,22 +74,7 @@ impl<'a> WorkspaceReadApi<'a> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
         Ok(PageDetail {
             summary: page_summary(page),
-            child_pages: page
-                .child_page_ids
-                .iter()
-                .map(|child_page_id| {
-                    self.cache
-                        .page(child_page_id)
-                        .expect("workspace cache hierarchy only points at existing pages")
-                })
-                .map(page_summary)
-                .collect(),
-            root_blocks: page
-                .blocks
-                .iter()
-                .map(|block| block_snapshot(self.cache, page, block))
-                .collect::<Result<_, _>>()?,
-            linked_ref_count: page.incoming_refs.len(),
+            incoming_refs: incoming_ref_snapshots(page_id, page),
             outgoing_ref_count: page.outgoing_refs().count(),
         })
     }
@@ -115,55 +100,33 @@ impl<'a> WorkspaceReadApi<'a> {
             .collect()
     }
 
-    pub fn block_by_handle(&self, handle: &BlockHandle) -> Result<BlockSnapshot, CoreError> {
-        let page = self
-            .cache
-            .page(handle.source_page_id())
-            .ok_or(CoreError::MissingPage)?;
-
-        if page.fingerprint != handle.source_page_fingerprint() {
-            return Err(CoreError::StalePageRevision);
-        }
-
-        let block = page
-            .find_block_by_span(handle.block_span())
-            .ok_or(CoreError::MissingBlock)?;
-
-        block_snapshot(self.cache, page, block)
-    }
-
-    pub fn linked_refs(&self, target_page_id: &PageId) -> Result<Vec<LinkedRefEntry>, CoreError> {
+    pub fn page_incoming_refs(
+        &self,
+        target_page_id: &PageId,
+    ) -> Result<Vec<IncomingPageRefSnapshot>, CoreError> {
         let target_page = self
             .cache
             .page(target_page_id)
             .ok_or(CoreError::MissingPage)?;
-
-        target_page
-            .incoming_refs
-            .iter()
-            .map(|incoming_ref| {
-                let source_page = self
-                    .cache
-                    .page(&incoming_ref.source_page_id)
-                    .ok_or(CoreError::MissingPage)?;
-
-                if source_page.fingerprint != incoming_ref.source_page_fingerprint {
-                    return Err(CoreError::StalePageRevision);
-                }
-
-                let source_block = source_page
-                    .find_block_by_span(incoming_ref.source_block_span)
-                    .ok_or(CoreError::MissingBlock)?;
-
-                Ok(LinkedRefEntry {
-                    target_page_id: target_page_id.clone(),
-                    source_page: page_summary(source_page),
-                    source_block: block_snapshot(self.cache, source_page, source_block)?,
-                    ref_span: incoming_ref.ref_span,
-                })
-            })
-            .collect()
+        Ok(incoming_ref_snapshots(target_page_id, target_page))
     }
+}
+
+fn incoming_ref_snapshots(
+    target_page_id: &PageId,
+    target_page: &Page,
+) -> Vec<IncomingPageRefSnapshot> {
+    target_page
+        .incoming_refs
+        .iter()
+        .map(|incoming_ref| IncomingPageRefSnapshot {
+            target_page_id: target_page_id.clone(),
+            source_page_id: incoming_ref.source_page_id.clone(),
+            source_page_fingerprint: incoming_ref.source_page_fingerprint,
+            source_block_span: incoming_ref.source_block_span,
+            ref_span: incoming_ref.ref_span,
+        })
+        .collect()
 }
 
 fn page_summary(page: &Page) -> PageSummary {
@@ -181,12 +144,9 @@ fn block_snapshot(
     block: &Block,
 ) -> Result<BlockSnapshot, CoreError> {
     Ok(BlockSnapshot {
-        handle: BlockHandle::new(
-            source_page.page_id.clone(),
-            source_page.fingerprint,
-            block.block_span,
-        ),
         kind: block_snapshot_kind(block.kind),
+        block_span: block.block_span,
+        content_span: block.content_span,
         content: resolved_block_content(source_page, block)?,
         children: block
             .children
@@ -267,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn page_detail_returns_resolved_blocks_and_reference_counts() {
+    fn page_detail_returns_minimal_page_counts() {
         let text = "- parent [[B]]\n\t- child #Missing\n";
         let cache =
             WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
@@ -276,11 +236,8 @@ mod tests {
         let detail = read_api.page_detail(&PageId::new(["A"]).unwrap()).unwrap();
 
         assert_eq!(detail.summary.title, "A");
-        assert_eq!(detail.linked_ref_count, 0);
+        assert!(detail.incoming_refs.is_empty());
         assert_eq!(detail.outgoing_ref_count, 2);
-        assert_eq!(detail.root_blocks.len(), 1);
-        assert_eq!(detail.root_blocks[0].content, "parent [[B]]");
-        assert_eq!(detail.root_blocks[0].children[0].content, "child #Missing");
     }
 
     #[test]
@@ -303,57 +260,50 @@ mod tests {
     }
 
     #[test]
-    fn block_handle_round_trips_and_detects_stale_pages() {
-        let text = "- current\n";
+    fn page_blocks_expose_source_spans_without_revision_handles() {
+        let text = "- current\n\t- child\n";
         let cache = WorkspaceCache::from_pages([parsed_page(&["A"], text)]);
         let read_api = WorkspaceReadApi::new(&cache);
-        let handle = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap()[0]
-            .handle
-            .clone();
+        let blocks = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
 
-        let block = read_api.block_by_handle(&handle).unwrap();
-        assert_eq!(block.content, "current");
-
-        let stale_cache = WorkspaceCache::from_pages([parsed_page(&["A"], "- updated\n")]);
-        let stale_read_api = WorkspaceReadApi::new(&stale_cache);
-
-        assert_eq!(
-            stale_read_api.block_by_handle(&handle).unwrap_err(),
-            CoreError::StalePageRevision
-        );
+        assert_eq!(blocks[0].block_span, SourceSpan::unchecked(0, text.len()));
+        assert_eq!(blocks[0].content_span, SourceSpan::unchecked(2, 10));
+        assert_eq!(blocks[0].children[0].content, "child");
     }
 
     #[test]
-    fn linked_refs_return_editable_source_block_snapshots() {
+    fn incoming_refs_return_normalized_source_anchors() {
         let text = "- parent [[B]]\n\t- child\n";
         let cache =
             WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
         let read_api = WorkspaceReadApi::new(&cache);
 
-        let from_page = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
-        let linked_refs = read_api.linked_refs(&PageId::new(["B"]).unwrap()).unwrap();
+        let incoming_refs = read_api
+            .page_incoming_refs(&PageId::new(["B"]).unwrap())
+            .unwrap();
 
-        assert_eq!(linked_refs.len(), 1);
-        assert_eq!(linked_refs[0].target_page_id, PageId::new(["B"]).unwrap());
+        assert_eq!(incoming_refs.len(), 1);
         assert_eq!(
-            linked_refs[0].source_page.page_id,
-            PageId::new(["A"]).unwrap()
+            incoming_refs[0],
+            IncomingPageRefSnapshot {
+                target_page_id: PageId::new(["B"]).unwrap(),
+                source_page_id: PageId::new(["A"]).unwrap(),
+                source_page_fingerprint: FileFingerprint::from_text(text),
+                source_block_span: SourceSpan::unchecked(0, text.len()),
+                ref_span: SourceSpan::unchecked(9, 14),
+            }
         );
-        assert_eq!(linked_refs[0].source_block.content, "parent [[B]]");
-        assert_eq!(linked_refs[0].source_block.children[0].content, "child");
-        assert_eq!(linked_refs[0].source_block.handle, from_page[0].handle);
-        assert_eq!(linked_refs[0].ref_span.slice(text).unwrap(), "[[B]]");
     }
 
     #[test]
-    fn linked_refs_require_existing_target_pages() {
+    fn incoming_refs_require_existing_target_pages() {
         let text = "- [[Missing]]\n";
         let cache = WorkspaceCache::from_pages([parsed_page(&["A"], text)]);
         let read_api = WorkspaceReadApi::new(&cache);
 
         assert_eq!(
             read_api
-                .linked_refs(&PageId::new(["Missing"]).unwrap())
+                .page_incoming_refs(&PageId::new(["Missing"]).unwrap())
                 .unwrap_err(),
             CoreError::MissingPage
         );

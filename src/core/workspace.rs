@@ -1,14 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::{
-    Block, BlockHandle, CoreError, FileFingerprint, IncomingRef, Page, PageId, parse_blocks,
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockSubtreeEdit {
-    pub block_handle: BlockHandle,
-    pub replacement_markdown: String,
-}
+use super::{Block, CoreError, FileFingerprint, IncomingRef, Page, PageId, parse_blocks};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WorkspaceCache {
@@ -43,21 +35,21 @@ impl WorkspaceCache {
         self.pages.get(page_id)
     }
 
-    pub fn page_mut(&mut self, page_id: &PageId) -> Option<&mut Page> {
-        self.pages.get_mut(page_id)
-    }
-
-    pub fn upsert_page(&mut self, page: Page) {
+    pub fn upsert_page(&mut self, mut page: Page) {
         let page_id = page.page_id.clone();
-        self.pages.insert(page_id, page);
-        self.rebuild_hierarchy();
-        self.rebuild_all_incoming_refs();
+        self.remove_child_from_parent(&page_id);
+        self.remove_incoming_refs_from_source(&page_id);
+        page.child_page_ids = self.child_page_ids_for(&page_id);
+        page.incoming_refs = self.incoming_refs_to_target_except_source(&page_id, &page_id);
+        self.pages.insert(page_id.clone(), page);
+        self.add_child_to_parent(page_id.clone());
+        self.insert_incoming_refs_from_source(&page_id);
     }
 
     pub fn remove_page(&mut self, page_id: &PageId) -> Option<Page> {
+        self.remove_child_from_parent(page_id);
+        self.remove_incoming_refs_from_source(page_id);
         let removed = self.pages.remove(page_id)?;
-        self.rebuild_hierarchy();
-        self.rebuild_all_incoming_refs();
         Some(removed)
     }
 
@@ -134,6 +126,67 @@ impl WorkspaceCache {
                 target_page.incoming_refs.push(incoming_ref.incoming_ref);
             }
         }
+    }
+
+    fn child_page_ids_for(&self, parent_page_id: &PageId) -> Vec<PageId> {
+        self.pages
+            .keys()
+            .filter(|page_id| page_id.parent().as_ref() == Some(parent_page_id))
+            .cloned()
+            .collect()
+    }
+
+    fn add_child_to_parent(&mut self, page_id: PageId) {
+        let Some(parent_id) = page_id.parent() else {
+            return;
+        };
+
+        let Some(parent) = self.pages.get_mut(&parent_id) else {
+            return;
+        };
+
+        if !parent.child_page_ids.contains(&page_id) {
+            parent.child_page_ids.push(page_id);
+            parent.child_page_ids.sort();
+        }
+    }
+
+    fn remove_child_from_parent(&mut self, page_id: &PageId) {
+        let Some(parent_id) = page_id.parent() else {
+            return;
+        };
+
+        if let Some(parent) = self.pages.get_mut(&parent_id) {
+            parent.child_page_ids.retain(|child_id| child_id != page_id);
+        }
+    }
+
+    fn remove_incoming_refs_from_source(&mut self, source_page_id: &PageId) {
+        for page in self.pages.values_mut() {
+            page.incoming_refs
+                .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
+        }
+    }
+
+    fn incoming_refs_to_target_except_source(
+        &self,
+        target_page_id: &PageId,
+        excluded_source_page_id: &PageId,
+    ) -> Vec<IncomingRef> {
+        self.pages
+            .iter()
+            .filter(|(source_page_id, _)| *source_page_id != excluded_source_page_id)
+            .flat_map(|(source_page_id, source_page)| {
+                source_page
+                    .blocks
+                    .iter()
+                    .flat_map(move |block| {
+                        incoming_refs_from_block(source_page_id, source_page.fingerprint, block)
+                    })
+                    .filter(|incoming_ref| &incoming_ref.target_page_id == target_page_id)
+                    .map(|incoming_ref| incoming_ref.incoming_ref)
+            })
+            .collect()
     }
 }
 
@@ -345,6 +398,47 @@ mod tests {
                 .incoming_refs
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn upsert_new_target_page_collects_existing_incoming_refs() {
+        let mut cache = WorkspaceCache::new();
+        cache.upsert_page(
+            Page::new(PageId::new(["A"]).unwrap(), "- [[B]]\n")
+                .with_blocks(parse_blocks("- [[B]]\n").unwrap()),
+        );
+
+        cache.upsert_page(page(&["B"], "", Vec::new()));
+
+        let b = cache.page(&PageId::new(["B"]).unwrap()).unwrap();
+        assert_eq!(b.incoming_refs.len(), 1);
+        assert_eq!(
+            b.incoming_refs[0].source_page_id,
+            PageId::new(["A"]).unwrap()
+        );
+    }
+
+    #[test]
+    fn upsert_existing_target_page_preserves_incoming_refs_from_other_pages() {
+        let mut cache = WorkspaceCache::new();
+        cache.upsert_page(page(&["B"], "- old\n", Vec::new()));
+        cache.upsert_page(
+            Page::new(PageId::new(["A"]).unwrap(), "- [[B]]\n")
+                .with_blocks(parse_blocks("- [[B]]\n").unwrap()),
+        );
+
+        cache.upsert_page(
+            Page::new(PageId::new(["B"]).unwrap(), "- new\n")
+                .with_blocks(parse_blocks("- new\n").unwrap()),
+        );
+
+        let b = cache.page(&PageId::new(["B"]).unwrap()).unwrap();
+        assert_eq!(b.text, "- new\n");
+        assert_eq!(b.incoming_refs.len(), 1);
+        assert_eq!(
+            b.incoming_refs[0].source_page_id,
+            PageId::new(["A"]).unwrap()
         );
     }
 

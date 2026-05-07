@@ -2,25 +2,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use notify::{
-    Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher,
-};
+use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
-    BlockHandle, BlockSnapshot, BlockSubtreeEdit, CoreError, LinkedRefEntry, PageDetail, PageId,
-    PageSummary, WorkspaceCache, WorkspaceReadApi, apply_block_subtree_edit as write_block_subtree,
-    apply_page_move as write_page_move, apply_page_rename as write_page_rename,
+    BlockSnapshot, CoreError, IncomingPageRefSnapshot, PageDetail, PageId, PageSummary,
+    WorkspaceCache, WorkspaceReadApi,
 };
 use crate::core::files::{
     load_page_from_relative_path, load_workspace_cache, refresh_workspace_cache,
 };
-use crate::core::rename::{
-    PageMove, PageRename, is_transaction_relative_path, recover_workspace_transactions,
-    transaction_record_exists,
+use crate::core::structure::{
+    PageCreate, PageDeleteSubtree, PageMove, PageRename, apply_page_create as write_page_create,
+    apply_page_delete_subtree as write_page_delete_subtree, apply_page_move as write_page_move,
+    apply_page_rename as write_page_rename, is_transaction_relative_path,
+    recover_workspace_transactions, transaction_record_exists,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -52,7 +51,7 @@ pub enum WatcherFallbackReason {
 }
 
 pub struct WorkspaceSession {
-    state: Arc<Mutex<WorkspaceSessionState>>,
+    state: Arc<RwLock<WorkspaceSessionState>>,
     watcher: Option<WatcherHandle>,
 }
 
@@ -95,6 +94,14 @@ struct PageEventState {
     fingerprint: super::FileFingerprint,
     child_page_ids: Vec<PageId>,
     incoming_refs: Vec<super::IncomingRef>,
+    outgoing_refs: Vec<OutgoingRefEventState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OutgoingRefEventState {
+    target_page_id: PageId,
+    ref_span: super::SourceSpan,
+    target_exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,7 +140,7 @@ impl WorkspaceSession {
         }
 
         Ok(Self {
-            state: Arc::new(Mutex::new(WorkspaceSessionState {
+            state: Arc::new(RwLock::new(WorkspaceSessionState {
                 root,
                 cache,
                 fs_snapshot,
@@ -147,90 +154,93 @@ impl WorkspaceSession {
     }
 
     pub fn workspace_root(&self) -> PathBuf {
-        self.state.lock().unwrap().root.clone()
+        self.state.read().unwrap().root.clone()
     }
 
     pub fn all_pages(&self) -> Vec<PageSummary> {
         self.state
-            .lock()
+            .read()
             .unwrap()
             .with_read_api(|read_api| read_api.all_pages())
     }
 
     pub fn page_summary(&self, page_id: &PageId) -> Result<PageSummary, CoreError> {
         self.state
-            .lock()
+            .read()
             .unwrap()
             .with_read_api(|read_api| read_api.page_summary(page_id))
     }
 
     pub fn page_detail(&self, page_id: &PageId) -> Result<PageDetail, CoreError> {
         self.state
-            .lock()
+            .read()
             .unwrap()
             .with_read_api(|read_api| read_api.page_detail(page_id))
     }
 
     pub fn page_blocks(&self, page_id: &PageId) -> Result<Vec<BlockSnapshot>, CoreError> {
         self.state
-            .lock()
+            .read()
             .unwrap()
             .with_read_api(|read_api| read_api.page_blocks(page_id))
     }
 
-    pub fn block_by_handle(&self, handle: &BlockHandle) -> Result<BlockSnapshot, CoreError> {
+    pub fn page_incoming_refs(
+        &self,
+        target_page_id: &PageId,
+    ) -> Result<Vec<IncomingPageRefSnapshot>, CoreError> {
         self.state
-            .lock()
+            .read()
             .unwrap()
-            .with_read_api(|read_api| read_api.block_by_handle(handle))
+            .with_read_api(|read_api| read_api.page_incoming_refs(target_page_id))
     }
 
-    pub fn linked_refs(&self, target_page_id: &PageId) -> Result<Vec<LinkedRefEntry>, CoreError> {
+    pub fn apply_page_create(&self, request: PageCreate) -> Result<(), CoreError> {
         self.state
-            .lock()
+            .write()
             .unwrap()
-            .with_read_api(|read_api| read_api.linked_refs(target_page_id))
+            .apply_write(|root, cache| write_page_create(root, cache, request))
     }
 
-    pub fn apply_block_subtree_edit(&self, edit: BlockSubtreeEdit) -> Result<(), CoreError> {
+    pub fn apply_page_delete_subtree(&self, request: PageDeleteSubtree) -> Result<(), CoreError> {
         self.state
-            .lock()
+            .write()
             .unwrap()
-            .apply_write(|root, cache| write_block_subtree(root, cache, edit))
+            .apply_write(|root, cache| write_page_delete_subtree(root, cache, request))
     }
 
     pub fn apply_page_rename(&self, request: PageRename) -> Result<(), CoreError> {
         self.state
-            .lock()
+            .write()
             .unwrap()
             .apply_write(|root, cache| write_page_rename(root, cache, request))
     }
 
     pub fn apply_page_move(&self, request: PageMove) -> Result<(), CoreError> {
         self.state
-            .lock()
+            .write()
             .unwrap()
             .apply_write(|root, cache| write_page_move(root, cache, request))
     }
 
     pub fn poll_once(&self) -> Result<(), CoreError> {
-        self.state.lock().unwrap().poll_once()
+        self.state.write().unwrap().poll_once()
     }
 
     pub fn drain_events(&self) -> Vec<WorkspaceEvent> {
-        self.state.lock().unwrap().drain_events()
+        self.state.write().unwrap().drain_events()
     }
 
     pub fn take_last_watch_error(&self) -> Option<CoreError> {
-        self.state.lock().unwrap().last_watch_error.take()
+        self.state.write().unwrap().last_watch_error.take()
     }
 
     pub fn watcher_mode(&self) -> Option<WatcherMode> {
-        self.state.lock().unwrap().watcher_mode
+        self.state.read().unwrap().watcher_mode
     }
 
     pub fn watcher_fallback_reason(&self) -> Option<WatcherFallbackReason> {
-        self.state.lock().unwrap().watcher_fallback_reason.clone()
+        self.state.read().unwrap().watcher_fallback_reason.clone()
     }
 
     pub fn start_watching(&mut self, poll_interval: Duration) {
@@ -371,6 +381,14 @@ impl WorkspaceSessionState {
                         fingerprint: page.fingerprint,
                         child_page_ids: page.child_page_ids.clone(),
                         incoming_refs: page.incoming_refs.clone(),
+                        outgoing_refs: page
+                            .outgoing_refs()
+                            .map(|page_ref| OutgoingRefEventState {
+                                target_page_id: page_ref.target_page_id.clone(),
+                                ref_span: page_ref.ref_span,
+                                target_exists: self.cache.page(&page_ref.target_page_id).is_some(),
+                            })
+                            .collect(),
                     },
                 )
             })
@@ -801,14 +819,14 @@ fn collect_workspace_snapshot(
 }
 
 fn run_native_or_polling_watch_loop(
-    state: Arc<Mutex<WorkspaceSessionState>>,
+    state: Arc<RwLock<WorkspaceSessionState>>,
     rx: Receiver<WatchLoopMessage>,
     tx: Sender<WatchLoopMessage>,
     poll_interval: Duration,
 ) {
     if let Err(reason) = run_native_watch_loop(&state, &rx, tx, poll_interval) {
         {
-            let mut state = state.lock().unwrap();
+            let mut state = state.write().unwrap();
             state.record_watcher_degraded_to_polling(reason);
         }
         run_polling_watch_loop(&state, &rx, poll_interval);
@@ -816,12 +834,12 @@ fn run_native_or_polling_watch_loop(
 }
 
 fn run_native_watch_loop(
-    state: &Arc<Mutex<WorkspaceSessionState>>,
+    state: &Arc<RwLock<WorkspaceSessionState>>,
     rx: &Receiver<WatchLoopMessage>,
     tx: Sender<WatchLoopMessage>,
     poll_interval: Duration,
 ) -> Result<(), WatcherFallbackReason> {
-    let root = state.lock().unwrap().root.clone();
+    let root = state.read().unwrap().root.clone();
     let mut watcher = notify::recommended_watcher(move |result| {
         let _ = tx.send(WatchLoopMessage::Fs(result));
     })
@@ -841,7 +859,7 @@ fn run_native_watch_loop(
         })?;
 
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.write().unwrap();
         state.record_watcher_mode(WatcherMode::Native);
         state.watcher_fallback_reason = None;
     }
@@ -867,12 +885,12 @@ fn run_native_watch_loop(
 }
 
 fn run_polling_watch_loop(
-    state: &Arc<Mutex<WorkspaceSessionState>>,
+    state: &Arc<RwLock<WorkspaceSessionState>>,
     rx: &Receiver<WatchLoopMessage>,
     poll_interval: Duration,
 ) {
     {
-        let mut state = state.lock().unwrap();
+        let mut state = state.write().unwrap();
         state.record_watcher_mode(WatcherMode::Polling);
     }
 
@@ -888,15 +906,15 @@ fn run_polling_watch_loop(
     }
 }
 
-fn poll_state_once(state: &Arc<Mutex<WorkspaceSessionState>>) {
-    let mut state = state.lock().unwrap();
+fn poll_state_once(state: &Arc<RwLock<WorkspaceSessionState>>) {
+    let mut state = state.write().unwrap();
     if let Err(error) = state.poll_once() {
         state.last_watch_error = Some(error);
     }
 }
 
-fn apply_native_event_burst_once(state: &Arc<Mutex<WorkspaceSessionState>>, events: &[Event]) {
-    let mut state = state.lock().unwrap();
+fn apply_native_event_burst_once(state: &Arc<RwLock<WorkspaceSessionState>>, events: &[Event]) {
+    let mut state = state.write().unwrap();
     if let Err(error) = state.apply_native_event_burst(events) {
         state.last_watch_error = Some(error);
     }
@@ -906,8 +924,7 @@ fn apply_native_event_burst_once(state: &Arc<Mutex<WorkspaceSessionState>>, even
 mod tests {
     use super::*;
     use crate::{
-        FileFingerprint, PageName, SourceSpan, WorkspaceReadApi,
-        core::rename::stage_page_rename_transaction_for_testing,
+        FileFingerprint, PageName, core::structure::stage_page_rename_transaction_for_testing,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -994,7 +1011,8 @@ mod tests {
             session
                 .page_detail(&PageId::new(["C"]).unwrap())
                 .unwrap()
-                .linked_ref_count,
+                .incoming_refs
+                .len(),
             1
         );
     }
@@ -1016,7 +1034,7 @@ mod tests {
         };
         session
             .state
-            .lock()
+            .write()
             .unwrap()
             .apply_native_event_burst(&[event])
             .unwrap();
@@ -1065,7 +1083,7 @@ mod tests {
         ];
         session
             .state
-            .lock()
+            .write()
             .unwrap()
             .apply_native_event_burst(&events)
             .unwrap();
@@ -1127,7 +1145,8 @@ mod tests {
             session
                 .page_detail(&PageId::new(["B"]).unwrap())
                 .unwrap()
-                .linked_ref_count,
+                .incoming_refs
+                .len(),
             0
         );
     }
@@ -1156,7 +1175,7 @@ mod tests {
         ];
         session
             .state
-            .lock()
+            .write()
             .unwrap()
             .apply_native_event_burst(&events)
             .unwrap();
@@ -1175,7 +1194,7 @@ mod tests {
         session.drain_events();
 
         workspace.write_file("A___B___C.md", "");
-        session.state.lock().unwrap().full_refresh(false).unwrap();
+        session.state.write().unwrap().full_refresh(false).unwrap();
 
         assert!(workspace.root.join("A.md").exists());
         assert!(workspace.root.join("A___B.md").exists());
@@ -1226,7 +1245,7 @@ mod tests {
         };
         session
             .state
-            .lock()
+            .write()
             .unwrap()
             .apply_native_event_burst(&[event])
             .unwrap();
@@ -1245,25 +1264,16 @@ mod tests {
     }
 
     #[test]
-    fn session_writes_emit_invalidation_events_and_refresh_cache() {
+    fn direct_content_writes_emit_invalidation_events_and_refresh_cache() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
         workspace.write_file("C.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
-        let cache = load_workspace_cache(&workspace.root).unwrap();
-        let read_api = WorkspaceReadApi::new(&cache);
-        let handle = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap()[0]
-            .handle
-            .clone();
         session.drain_events();
 
-        session
-            .apply_block_subtree_edit(BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- [[C]]\n".to_owned(),
-            })
-            .unwrap();
+        workspace.write_file("A.md", "- [[C]]\n");
+        session.poll_once().unwrap();
 
         assert_eq!(
             session.drain_events(),
@@ -1279,8 +1289,55 @@ mod tests {
             session
                 .page_detail(&PageId::new(["C"]).unwrap())
                 .unwrap()
-                .linked_ref_count,
+                .incoming_refs
+                .len(),
             1
+        );
+    }
+
+    #[test]
+    fn structural_create_and_delete_emit_cache_invalidation_events() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("X.md", "- [[A/B]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_create(PageCreate {
+                page_id: PageId::new(["A", "B"]).unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["A"]).unwrap(),
+                    PageId::new(["A", "B"]).unwrap(),
+                    PageId::new(["X"]).unwrap(),
+                ],
+            }]
+        );
+
+        session
+            .apply_page_delete_subtree(PageDeleteSubtree {
+                page_id: PageId::new(["A"]).unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![PageId::new(["X"]).unwrap()],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A"]).unwrap(),
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B"]).unwrap(),
+                },
+            ]
         );
     }
 
@@ -1289,7 +1346,7 @@ mod tests {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
-        let mut state = session.state.lock().unwrap();
+        let mut state = session.state.write().unwrap();
 
         state.enqueue_event(WorkspaceEvent::PagesChanged {
             page_ids: vec![PageId::new(["B"]).unwrap()],
@@ -1345,7 +1402,7 @@ mod tests {
         };
         session
             .state
-            .lock()
+            .write()
             .unwrap()
             .apply_native_event_burst(&[event])
             .unwrap();
@@ -1362,28 +1419,14 @@ mod tests {
     }
 
     #[test]
-    fn poll_once_is_quiet_after_backend_write_refreshes_snapshot() {
+    fn poll_once_is_quiet_after_direct_write_is_reconciled_once() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "- old\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
-        let page = load_workspace_cache(&workspace.root)
-            .unwrap()
-            .page(&PageId::new(["A"]).unwrap())
-            .unwrap()
-            .clone();
-        let handle = BlockHandle::new(
-            PageId::new(["A"]).unwrap(),
-            page.fingerprint,
-            SourceSpan::unchecked(0, page.text.len()),
-        );
         session.drain_events();
 
-        session
-            .apply_block_subtree_edit(BlockSubtreeEdit {
-                block_handle: handle,
-                replacement_markdown: "- new\n".to_owned(),
-            })
-            .unwrap();
+        workspace.write_file("A.md", "- new\n");
+        session.poll_once().unwrap();
         session.drain_events();
         session.poll_once().unwrap();
 

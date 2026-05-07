@@ -1,9 +1,11 @@
 mod planning;
 mod transaction;
 
+use std::fs;
 use std::path::Path;
 
 use super::{CoreError, PageId, PageName, WorkspaceCache};
+use crate::core::discovery::materialize_parent_pages;
 use crate::core::files::load_workspace_cache;
 use crate::core::files::refresh_workspace_cache;
 
@@ -20,6 +22,16 @@ pub struct PageRename {
 pub struct PageMove {
     pub source_page_id: PageId,
     pub destination_parent_page_id: Option<PageId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageCreate {
+    pub page_id: PageId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageDeleteSubtree {
+    pub page_id: PageId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +55,61 @@ impl OperationKind {
             _ => None,
         }
     }
+}
+
+pub fn apply_page_create(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageCreate,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let relative_path = request.page_id.to_workspace_path();
+    let absolute_path = root.join(&relative_path);
+    if cache.page(&request.page_id).is_some() || absolute_path.exists() {
+        return Err(CoreError::DestinationPageExists);
+    }
+
+    materialize_parent_pages(root, cache, request.page_id.ancestors())?;
+    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
+    refresh_workspace_cache(root, cache)?;
+    Ok(())
+}
+
+pub fn apply_page_delete_subtree(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageDeleteSubtree,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let disk_cache = load_workspace_cache(root)?;
+    if disk_cache.page(&request.page_id).is_none() {
+        return Err(CoreError::MissingPage);
+    }
+
+    let mut deleted_any = false;
+    for page_id in disk_cache
+        .pages()
+        .keys()
+        .filter(|page_id| page_id_has_prefix(page_id, &request.page_id))
+    {
+        let absolute_path = root.join(page_id.to_workspace_path());
+        match fs::remove_file(&absolute_path) {
+            Ok(()) => deleted_any = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+        }
+    }
+
+    if !deleted_any {
+        return Err(CoreError::MissingPage);
+    }
+
+    refresh_workspace_cache(root, cache)?;
+    Ok(())
 }
 
 pub fn apply_page_rename(
@@ -201,7 +268,7 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = std::env::temp_dir().join(format!("uniseq-rename-{unique}"));
+            let root = std::env::temp_dir().join(format!("uniseq-structure-{unique}"));
             fs::create_dir_all(&root).unwrap();
             Self { root }
         }
@@ -377,7 +444,97 @@ mod tests {
     }
 
     #[test]
-    fn rename_updates_linked_reference_reads_after_commit() {
+    fn create_materializes_parent_pages_and_refreshes_cache() {
+        let workspace = TestWorkspace::new();
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        apply_page_create(
+            &workspace.root,
+            &mut cache,
+            PageCreate {
+                page_id: PageId::new(["A", "B", "C"]).unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert!(workspace.file_exists("A.md"));
+        assert!(workspace.file_exists("A___B.md"));
+        assert!(workspace.file_exists("A___B___C.md"));
+        assert!(cache.page(&PageId::new(["A"]).unwrap()).is_some());
+        assert!(cache.page(&PageId::new(["A", "B"]).unwrap()).is_some());
+        assert!(cache.page(&PageId::new(["A", "B", "C"]).unwrap()).is_some());
+    }
+
+    #[test]
+    fn create_rejects_existing_pages() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        let error = apply_page_create(
+            &workspace.root,
+            &mut cache,
+            PageCreate {
+                page_id: PageId::new(["A"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::DestinationPageExists);
+        assert!(workspace.file_exists("A.md"));
+    }
+
+    #[test]
+    fn delete_removes_page_subtree_and_refreshes_refs() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- child\n");
+        workspace.write_file("A___B___C.md", "- grandchild\n");
+        workspace.write_file("X.md", "- [[A/B]] and [[A/B/C]]\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        apply_page_delete_subtree(
+            &workspace.root,
+            &mut cache,
+            PageDeleteSubtree {
+                page_id: PageId::new(["A", "B"]).unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert!(workspace.file_exists("A.md"));
+        assert!(!workspace.file_exists("A___B.md"));
+        assert!(!workspace.file_exists("A___B___C.md"));
+        assert!(cache.page(&PageId::new(["A", "B"]).unwrap()).is_none());
+        assert!(cache.page(&PageId::new(["A", "B", "C"]).unwrap()).is_none());
+        assert_eq!(workspace.read_file("X.md"), "- [[A/B]] and [[A/B/C]]\n");
+
+        let read_api = WorkspaceReadApi::new(&cache);
+        let x_blocks = read_api.page_blocks(&PageId::new(["X"]).unwrap()).unwrap();
+        assert_eq!(x_blocks[0].outgoing_refs.len(), 2);
+        assert!(!x_blocks[0].outgoing_refs[0].target_exists);
+        assert!(!x_blocks[0].outgoing_refs[1].target_exists);
+    }
+
+    #[test]
+    fn delete_rejects_missing_pages() {
+        let workspace = TestWorkspace::new();
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        let error = apply_page_delete_subtree(
+            &workspace.root,
+            &mut cache,
+            PageDeleteSubtree {
+                page_id: PageId::new(["Missing"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::MissingPage);
+    }
+
+    #[test]
+    fn rename_updates_normalized_incoming_refs_after_commit() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");
         workspace.write_file("A___B.md", "- body\n");
@@ -395,14 +552,11 @@ mod tests {
         .unwrap();
 
         let read_api = WorkspaceReadApi::new(&cache);
-        let linked_refs = read_api
-            .linked_refs(&PageId::new(["A", "C"]).unwrap())
+        let incoming_refs = read_api
+            .page_incoming_refs(&PageId::new(["A", "C"]).unwrap())
             .unwrap();
-        assert_eq!(linked_refs.len(), 1);
-        assert_eq!(
-            linked_refs[0].source_page.page_id,
-            PageId::new(["X"]).unwrap()
-        );
+        assert_eq!(incoming_refs.len(), 1);
+        assert_eq!(incoming_refs[0].source_page_id, PageId::new(["X"]).unwrap());
     }
 
     #[test]

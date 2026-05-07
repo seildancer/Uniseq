@@ -136,10 +136,8 @@ pub enum CoreError {
     Io { path: PathBuf, kind: io::ErrorKind },
     MissingPage,
     MissingDestinationParent,
-    MissingBlock,
     DestinationPageExists,
     InvalidPageMove,
-    StalePageRevision,
     CorruptTransaction,
 }
 
@@ -157,10 +155,8 @@ impl fmt::Display for CoreError {
             Self::MissingDestinationParent => {
                 write!(f, "destination parent page does not exist")
             }
-            Self::MissingBlock => write!(f, "block does not exist in page"),
             Self::DestinationPageExists => write!(f, "destination page already exists"),
             Self::InvalidPageMove => write!(f, "page move would create an invalid hierarchy"),
-            Self::StalePageRevision => write!(f, "page revision does not match cache"),
             Self::CorruptTransaction => write!(f, "transaction record is missing or invalid"),
         }
     }
