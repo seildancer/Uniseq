@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
@@ -82,7 +82,8 @@ struct WorkspaceFsSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileStamp {
-    fingerprint: super::FileFingerprint,
+    len_bytes: u64,
+    modified_at_nanos: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -462,7 +463,10 @@ impl WorkspaceSessionState {
                     PageEventState {
                         fingerprint: page.fingerprint,
                         child_page_ids: page.child_page_ids.clone(),
-                        incoming_refs: page.incoming_refs.clone(),
+                        incoming_refs: self
+                            .cache
+                            .incoming_refs(page_id)
+                            .to_vec(),
                         outgoing_refs: page
                             .outgoing_refs()
                             .map(|page_ref| OutgoingRefEventState {
@@ -726,7 +730,9 @@ impl WorkspaceSessionState {
         }
 
         for written_file in prepared.written_files {
-            self.apply_incremental_page_update(written_file.page);
+            if self.written_file_changes_page(&written_file) {
+                self.apply_incremental_page_update(written_file.page);
+            }
         }
 
         Ok(())
@@ -739,6 +745,7 @@ impl WorkspaceSessionState {
         let written_pages = prepared
             .written_files
             .iter()
+            .filter(|written_file| self.written_file_changes_page(written_file))
             .map(|written_file| written_file.page.clone())
             .collect::<Vec<_>>();
         if !self.incremental_update_preserves_parent_pages(
@@ -870,15 +877,24 @@ impl WorkspaceSessionState {
             return BTreeSet::new();
         }
 
-        self.cache
-            .pages()
-            .values()
-            .filter(|page| {
-                page.outgoing_refs()
-                    .any(|outgoing_ref| target_page_ids.contains(&outgoing_ref.target_page_id))
+        target_page_ids
+            .iter()
+            .flat_map(|page_id| {
+                self.cache
+                    .incoming_refs(page_id)
+                    .iter()
+                    .map(|incoming_ref| incoming_ref.source_page_id.clone())
             })
-            .map(|page| page.page_id.clone())
             .collect()
+    }
+
+    fn written_file_changes_page(&self, written_file: &PreparedWrittenFile) -> bool {
+        self.cache
+            .page(&written_file.page.page_id)
+            .is_none_or(|existing_page| {
+                existing_page.workspace_path != written_file.relative_path
+                    || existing_page.fingerprint != written_file.page.fingerprint
+            })
     }
 }
 
@@ -906,10 +922,16 @@ impl WorkspaceFsSnapshot {
 
 impl FileStamp {
     fn from_absolute_path(absolute_path: &Path) -> Result<Self, CoreError> {
-        let text =
-            fs::read_to_string(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        let metadata = fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        let modified_at_nanos = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
         Ok(Self {
-            fingerprint: super::FileFingerprint::from_text(&text),
+            len_bytes: metadata.len(),
+            modified_at_nanos,
         })
     }
 }
@@ -1037,12 +1059,13 @@ fn prepare_incremental_fs_update(
         .written_paths
         .iter()
         .map(|relative_path| {
-            let (page, fingerprint) =
-                load_page_with_fingerprint_from_relative_path(root, relative_path)?;
+            let absolute_path = root.join(relative_path);
+            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+            let (page, _) = load_page_with_fingerprint_from_relative_path(root, relative_path)?;
             Ok::<PreparedWrittenFile, CoreError>(PreparedWrittenFile {
                 relative_path: relative_path.clone(),
                 page,
-                file_stamp: FileStamp { fingerprint },
+                file_stamp,
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -1618,13 +1641,14 @@ mod tests {
     }
 
     #[test]
-    fn classify_snapshot_fs_changes_uses_content_fingerprints() {
+    fn classify_snapshot_fs_changes_uses_discovery_stamps() {
         let path = workspace_test_relative_path("A.md");
         let old_snapshot = WorkspaceFsSnapshot {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    fingerprint: FileFingerprint::from_text("- [[B]]\n"),
+                    len_bytes: 8,
+                    modified_at_nanos: 1,
                 },
             )]),
             transaction_exists: false,
@@ -1633,7 +1657,8 @@ mod tests {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    fingerprint: FileFingerprint::from_text("- [[C]]\n"),
+                    len_bytes: 8,
+                    modified_at_nanos: 2,
                 },
             )]),
             transaction_exists: false,

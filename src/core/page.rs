@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::{Block, IncomingRef, PageId, PageLocation, PagePathError};
+use super::{Block, PageId, PageLocation, PagePathError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileFingerprint {
@@ -34,7 +34,6 @@ pub struct Page {
     pub text: String,
     pub child_page_ids: Vec<PageId>,
     pub blocks: Vec<Block>,
-    pub incoming_refs: Vec<IncomingRef>,
     pub fingerprint: FileFingerprint,
 }
 
@@ -65,7 +64,6 @@ impl Page {
             text,
             child_page_ids: Vec::new(),
             blocks: Vec::new(),
-            incoming_refs: Vec::new(),
             fingerprint,
         })
     }

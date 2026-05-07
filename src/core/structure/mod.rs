@@ -558,12 +558,9 @@ fn pages_referring_to_any<'a>(
     let target_page_ids = target_page_ids.into_iter().cloned().collect::<BTreeSet<_>>();
     let mut source_page_ids = BTreeSet::new();
 
-    for page in cache.pages().values() {
-        for outgoing_ref in page.outgoing_refs() {
-            if target_page_ids.contains(&outgoing_ref.target_page_id) {
-                source_page_ids.insert(page.page_id.clone());
-                break;
-            }
+    for target_page_id in target_page_ids {
+        for incoming_ref in cache.incoming_refs(&target_page_id) {
+            source_page_ids.insert(incoming_ref.source_page_id.clone());
         }
     }
 
@@ -639,17 +636,13 @@ mod tests {
         );
         assert_eq!(
             cache
-                .page(&PageId::new(["A", "Renamed"]).unwrap())
-                .unwrap()
-                .incoming_refs
+                .incoming_refs(&PageId::new(["A", "Renamed"]).unwrap())
                 .len(),
             1
         );
         assert_eq!(
             cache
-                .page(&PageId::new(["A", "Renamed", "C"]).unwrap())
-                .unwrap()
-                .incoming_refs
+                .incoming_refs(&PageId::new(["A", "Renamed", "C"]).unwrap())
                 .len(),
             2
         );

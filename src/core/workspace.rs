@@ -5,6 +5,7 @@ use super::{Block, CoreError, FileFingerprint, IncomingRef, Page, PageId, parse_
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WorkspaceCache {
     pages: BTreeMap<PageId, Page>,
+    incoming_refs_by_target: BTreeMap<PageId, Vec<IncomingRef>>,
 }
 
 impl WorkspaceCache {
@@ -21,6 +22,7 @@ impl WorkspaceCache {
                 .into_iter()
                 .map(|page| (page.page_id.clone(), page))
                 .collect(),
+            incoming_refs_by_target: BTreeMap::new(),
         };
         cache.rebuild_hierarchy();
         cache.rebuild_all_incoming_refs();
@@ -35,12 +37,18 @@ impl WorkspaceCache {
         self.pages.get(page_id)
     }
 
+    pub fn incoming_refs(&self, page_id: &PageId) -> &[IncomingRef] {
+        self.incoming_refs_by_target
+            .get(page_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     pub fn upsert_page(&mut self, mut page: Page) {
         let page_id = page.page_id.clone();
         self.remove_child_from_parent(&page_id);
         self.remove_incoming_refs_from_source(&page_id);
         page.child_page_ids = self.child_page_ids_for(&page_id);
-        page.incoming_refs = self.incoming_refs_to_target_except_source(&page_id, &page_id);
         self.pages.insert(page_id.clone(), page);
         self.add_child_to_parent(page_id.clone());
         self.insert_incoming_refs_from_source(&page_id);
@@ -55,7 +63,6 @@ impl WorkspaceCache {
 
         let old_target_page_ids = target_page_ids_from_page(&existing_page);
         page.child_page_ids = existing_page.child_page_ids;
-        page.incoming_refs = existing_page.incoming_refs;
         self.pages.insert(page_id.clone(), page);
         self.remove_incoming_refs_from_source_from_targets(&page_id, &old_target_page_ids);
         self.insert_incoming_refs_from_source(&page_id);
@@ -128,9 +135,7 @@ impl WorkspaceCache {
 
     fn rebuild_all_incoming_refs(&mut self) {
         let source_page_ids = self.pages.keys().cloned().collect::<Vec<_>>();
-        for page in self.pages.values_mut() {
-            page.incoming_refs.clear();
-        }
+        self.incoming_refs_by_target.clear();
 
         for source_page_id in source_page_ids {
             self.insert_incoming_refs_from_source(&source_page_id);
@@ -150,9 +155,10 @@ impl WorkspaceCache {
             .collect::<Vec<_>>();
 
         for incoming_ref in incoming_refs {
-            if let Some(target_page) = self.pages.get_mut(&incoming_ref.target_page_id) {
-                target_page.incoming_refs.push(incoming_ref.incoming_ref);
-            }
+            self.incoming_refs_by_target
+                .entry(incoming_ref.target_page_id)
+                .or_default()
+                .push(incoming_ref.incoming_ref);
         }
     }
 
@@ -190,10 +196,12 @@ impl WorkspaceCache {
     }
 
     fn remove_incoming_refs_from_source(&mut self, source_page_id: &PageId) {
-        for page in self.pages.values_mut() {
-            page.incoming_refs
+        for incoming_refs in self.incoming_refs_by_target.values_mut() {
+            incoming_refs
                 .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
         }
+        self.incoming_refs_by_target
+            .retain(|_, incoming_refs| !incoming_refs.is_empty());
     }
 
     fn remove_incoming_refs_from_source_from_targets(
@@ -202,32 +210,13 @@ impl WorkspaceCache {
         target_page_ids: &BTreeSet<PageId>,
     ) {
         for target_page_id in target_page_ids {
-            if let Some(page) = self.pages.get_mut(target_page_id) {
-                page.incoming_refs
+            if let Some(incoming_refs) = self.incoming_refs_by_target.get_mut(target_page_id) {
+                incoming_refs
                     .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
             }
         }
-    }
-
-    fn incoming_refs_to_target_except_source(
-        &self,
-        target_page_id: &PageId,
-        excluded_source_page_id: &PageId,
-    ) -> Vec<IncomingRef> {
-        self.pages
-            .iter()
-            .filter(|(source_page_id, _)| *source_page_id != excluded_source_page_id)
-            .flat_map(|(source_page_id, source_page)| {
-                source_page
-                    .blocks
-                    .iter()
-                    .flat_map(move |block| {
-                        incoming_refs_from_block(source_page_id, source_page.fingerprint, block)
-                    })
-                    .filter(|incoming_ref| &incoming_ref.target_page_id == target_page_id)
-                    .map(|incoming_ref| incoming_ref.incoming_ref)
-            })
-            .collect()
+        self.incoming_refs_by_target
+            .retain(|_, incoming_refs| !incoming_refs.is_empty());
     }
 }
 
@@ -330,10 +319,10 @@ mod tests {
         cache.upsert_page(page(&["A"], "- [[B]]\n", vec![source_block]));
         cache.upsert_page(page(&["B"], "", Vec::new()));
 
-        let b = cache.page(&PageId::new(["B"]).unwrap()).unwrap();
-        assert_eq!(b.incoming_refs.len(), 1);
+        let incoming_refs = cache.incoming_refs(&PageId::new(["B"]).unwrap());
+        assert_eq!(incoming_refs.len(), 1);
 
-        let incoming = &b.incoming_refs[0];
+        let incoming = &incoming_refs[0];
         assert_eq!(incoming.source_page_id, PageId::new(["A"]).unwrap());
         assert_eq!(incoming.source_block_span, SourceSpan::unchecked(0, 12));
 
@@ -360,19 +349,11 @@ mod tests {
         cache.upsert_page(page(&["C"], "", Vec::new()));
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             1
         );
         assert_eq!(
-            cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
             0
         );
 
@@ -381,19 +362,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             0
         );
         assert_eq!(
-            cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
             1
         );
     }
@@ -410,11 +383,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             1
         );
     }
@@ -431,19 +400,11 @@ mod tests {
         cache.upsert_page(page(&["C"], "", Vec::new()));
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             1
         );
         assert_eq!(
-            cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
             1
         );
     }
@@ -458,10 +419,10 @@ mod tests {
 
         cache.upsert_page(page(&["B"], "", Vec::new()));
 
-        let b = cache.page(&PageId::new(["B"]).unwrap()).unwrap();
-        assert_eq!(b.incoming_refs.len(), 1);
+        let b_incoming_refs = cache.incoming_refs(&PageId::new(["B"]).unwrap());
+        assert_eq!(b_incoming_refs.len(), 1);
         assert_eq!(
-            b.incoming_refs[0].source_page_id,
+            b_incoming_refs[0].source_page_id,
             PageId::new(["A"]).unwrap()
         );
     }
@@ -482,9 +443,10 @@ mod tests {
 
         let b = cache.page(&PageId::new(["B"]).unwrap()).unwrap();
         assert_eq!(b.text, "- new\n");
-        assert_eq!(b.incoming_refs.len(), 1);
+        let b_incoming_refs = cache.incoming_refs(&PageId::new(["B"]).unwrap());
+        assert_eq!(b_incoming_refs.len(), 1);
         assert_eq!(
-            b.incoming_refs[0].source_page_id,
+            b_incoming_refs[0].source_page_id,
             PageId::new(["A"]).unwrap()
         );
     }
@@ -506,19 +468,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             0
         );
         assert_eq!(
-            cache
-                .page(&PageId::new(["C"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
             1
         );
     }
@@ -559,8 +513,9 @@ mod tests {
 
         let page = cache.page(&target_page_id).unwrap();
         assert_eq!(page.text, "- new\n");
-        assert_eq!(page.incoming_refs.len(), 1);
-        assert_eq!(page.incoming_refs[0].source_page_id, PageId::new(["X"]).unwrap());
+        let incoming_refs = cache.incoming_refs(&target_page_id);
+        assert_eq!(incoming_refs.len(), 1);
+        assert_eq!(incoming_refs[0].source_page_id, PageId::new(["X"]).unwrap());
     }
 
     #[test]
@@ -600,21 +555,15 @@ mod tests {
         );
 
         assert_eq!(
-            cache
-                .page(&PageId::new(["B"]).unwrap())
-                .unwrap()
-                .incoming_refs
-                .len(),
+            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
             0
         );
-        let c = cache.page(&PageId::new(["C"]).unwrap()).unwrap();
-        assert_eq!(c.incoming_refs.len(), 2);
-        assert!(c
-            .incoming_refs
+        let c_incoming_refs = cache.incoming_refs(&PageId::new(["C"]).unwrap());
+        assert_eq!(c_incoming_refs.len(), 2);
+        assert!(c_incoming_refs
             .iter()
             .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["A"]).unwrap()));
-        assert!(c
-            .incoming_refs
+        assert!(c_incoming_refs
             .iter()
             .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["X"]).unwrap()));
     }

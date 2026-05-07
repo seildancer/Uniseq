@@ -84,9 +84,10 @@ pub(super) fn plan_transaction(
         .map(|mapping| (mapping.old_page_id.clone(), mapping.new_page_id.clone()))
         .collect::<BTreeMap<_, _>>();
 
-    let file_changes = cache
-        .pages()
-        .values()
+    let relevant_page_ids = relevant_file_change_page_ids(cache, &page_mappings);
+    let file_changes = relevant_page_ids
+        .into_iter()
+        .filter_map(|page_id| cache.page(&page_id))
         .filter_map(|page| plan_file_change(page, &moved_page_ids))
         .collect::<Result<Vec<_>, CoreError>>()?;
 
@@ -168,6 +169,28 @@ fn validate_destination_paths(
     }
 
     Ok(())
+}
+
+fn relevant_file_change_page_ids(
+    cache: &WorkspaceCache,
+    page_mappings: &[PageMapping],
+) -> BTreeSet<PageId> {
+    let moved_page_ids = page_mappings
+        .iter()
+        .map(|mapping| mapping.old_page_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut relevant = moved_page_ids.clone();
+
+    for moved_page_id in moved_page_ids {
+        relevant.extend(
+            cache
+                .incoming_refs(&moved_page_id)
+                .iter()
+                .map(|incoming_ref| incoming_ref.source_page_id.clone()),
+        );
+    }
+
+    relevant
 }
 
 fn plan_file_change(

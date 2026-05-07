@@ -87,7 +87,7 @@ impl<'a> WorkspaceReadApi<'a> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
         Ok(PageDetail {
             summary: page_summary(page),
-            incoming_refs: incoming_ref_snapshots(page_id, page),
+            incoming_refs: incoming_ref_snapshots(self.cache, page_id)?,
             outgoing_refs: outgoing_ref_snapshots(self.cache, page),
             outgoing_ref_count: page.outgoing_refs().count(),
         })
@@ -123,11 +123,7 @@ impl<'a> WorkspaceReadApi<'a> {
         &self,
         target_page_id: &PageId,
     ) -> Result<Vec<IncomingPageRefSnapshot>, CoreError> {
-        let target_page = self
-            .cache
-            .page(target_page_id)
-            .ok_or(CoreError::MissingPage)?;
-        Ok(incoming_ref_snapshots(target_page_id, target_page))
+        incoming_ref_snapshots(self.cache, target_page_id)
     }
 
     pub fn page_outgoing_refs(
@@ -162,11 +158,12 @@ impl<'a> WorkspaceReadApi<'a> {
 }
 
 fn incoming_ref_snapshots(
+    cache: &WorkspaceCache,
     target_page_id: &PageId,
-    target_page: &Page,
-) -> Vec<IncomingPageRefSnapshot> {
-    target_page
-        .incoming_refs
+) -> Result<Vec<IncomingPageRefSnapshot>, CoreError> {
+    cache.page(target_page_id).ok_or(CoreError::MissingPage)?;
+    let incoming_refs = cache.incoming_refs(target_page_id);
+    Ok(incoming_refs
         .iter()
         .map(|incoming_ref| IncomingPageRefSnapshot {
             target_page_id: target_page_id.clone(),
@@ -175,7 +172,7 @@ fn incoming_ref_snapshots(
             source_block_span: incoming_ref.source_block_span,
             ref_span: incoming_ref.ref_span,
         })
-        .collect()
+        .collect())
 }
 
 fn page_summary(page: &Page) -> PageSummary {

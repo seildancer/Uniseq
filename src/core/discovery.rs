@@ -176,17 +176,17 @@ mod tests {
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
-        let b = discovery.cache.page(&PageId::new(["B"]).unwrap()).unwrap();
-        let c = discovery.cache.page(&PageId::new(["C"]).unwrap()).unwrap();
+        let b_incoming_refs = discovery.cache.incoming_refs(&PageId::new(["B"]).unwrap());
+        let c_incoming_refs = discovery.cache.incoming_refs(&PageId::new(["C"]).unwrap());
 
-        assert_eq!(b.incoming_refs.len(), 1);
-        assert_eq!(c.incoming_refs.len(), 1);
+        assert_eq!(b_incoming_refs.len(), 1);
+        assert_eq!(c_incoming_refs.len(), 1);
         assert_eq!(
-            b.incoming_refs[0].source_page_id,
+            b_incoming_refs[0].source_page_id,
             PageId::new(["A"]).unwrap()
         );
         assert_eq!(
-            c.incoming_refs[0].source_page_id,
+            c_incoming_refs[0].source_page_id,
             PageId::new(["A"]).unwrap()
         );
     }
