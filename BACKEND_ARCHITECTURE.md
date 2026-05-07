@@ -130,3 +130,69 @@ workspace-path parsing, hierarchy construction, and path round-tripping.
 - Stream page identity includes the stream name only for uniqueness/path mapping, not as page-
   tree hierarchy
 - Streams are first-class pages everywhere except page-hierarchy construction
+
+
+
+
+# Scalable Single-User Sync Reconciliation
+
+## Summary
+
+Refactor workspace watching/reconciliation so normal multi-file sync bursts are handled
+incrementally instead of forcing a whole-workspace reparse. Keep the design explicitly single-
+user and file-first: no collaboration logic, no conflict-resolution layer, and no attempt to
+make every ambiguous filesystem pattern incremental. The target outcome is that sync updates,
+editor save bursts, and larger vaults remain responsive, while full_refresh stays as the safety
+fallback for recovery and unclear states.
+
+## Key Changes
+
+- Change watcher reconciliation from "exactly one changed markdown path" to "batch of changed
+  markdown paths":
+    - native watcher bursts should collect all changed markdown paths in the burst
+    - polling diffs should classify created/modified/deleted paths as one batch
+    - routine multi-file batches should no longer trigger full_refresh just because there is
+      more than one path
+- Add a batched incremental apply path in WorkspaceSession:
+    - read and parse only created/modified files
+    - remove only deleted pages
+    - apply the whole batch to cache state, then emit one combined page-level diff
+    - reserve WorkspaceReloaded for actual full refreshes only
+- Keep incremental scope intentionally narrow:
+    - do not create missing parent pages during incremental reconciliation
+    - if a batch would require parent materialization or leaves hierarchy invalid, fall back to
+      full_refresh
+    - if watcher input is ambiguous or recovery-related, fall back to full_refresh
+- Reduce avoidable whole-cache work in incremental paths:
+    - replace per-file cache.clone() parent checks with batch-level validation against affected
+      page IDs and ancestors
+    - update incoming refs and parent-child relationships only for changed/deleted pages and
+      their directly affected neighbors
+    - preserve untouched pages and parsed blocks in memory
+- Leave polling mode pragmatic:
+    - keep the filesystem scan used to detect changes
+    - stop turning a multi-file diff into a whole-workspace reparse
+    - accept scan cost for now; optimize reparse/rebuild cost first
+
+## Internal Interfaces
+
+- Replace single-change classification helpers with batch-oriented ones:
+    - snapshot diff returns created, modified, and deleted markdown paths
+    - native event burst classification returns either a markdown-path batch or an explicit
+      fallback reason
+- Add a cache batch mutation helper, or equivalent session-level orchestration, that applies
+  multiple upserts/removals before calculating final page-level diffs.
+- Keep public runtime semantics simple:
+    - PagesChanged and PageRemoved remain the primary frontend invalidation signals
+    - WorkspaceReloaded means a real coarse refresh occurred, not normal sync activity
+
+## Assumptions
+
+- Collaboration is out of scope permanently; no design choices should optimize for concurrent
+  multi-user editing.
+- Sync is file-level and may deliver bursts, reorderings, and rename-like sequences; handling
+  these efficiently is in scope.
+- Parent-page materialization remains a discovery/full-refresh behavior, not an incremental
+  watcher responsibility.
+- A conservative fallback to full_refresh is acceptable whenever incremental handling would
+  need structural healing or nontrivial ambiguity resolution.

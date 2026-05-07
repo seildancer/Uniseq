@@ -105,18 +105,17 @@ struct OutgoingRefEventState {
     target_exists: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum IsolatedFsChange {
-    Created(PathBuf),
-    Modified(PathBuf),
-    Deleted(PathBuf),
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct IncrementalFsUpdate {
+    written_paths: BTreeSet<PathBuf>,
+    deleted_paths: BTreeSet<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NativeEventAction {
     Noop,
     TransactionPathChanged,
-    SingleMarkdownPath(PathBuf),
+    IncrementalPaths(BTreeSet<PathBuf>),
     FallbackToSnapshot,
 }
 
@@ -433,10 +432,8 @@ impl WorkspaceSessionState {
             return self.full_refresh(true);
         }
 
-        match classify_isolated_fs_change(&self.fs_snapshot, &snapshot) {
-            Some(change) => self.apply_isolated_fs_change(snapshot, change),
-            None => self.full_refresh(false),
-        }
+        let update = classify_snapshot_fs_changes(&self.fs_snapshot, &snapshot);
+        self.apply_incremental_fs_update(snapshot, update)
     }
 
     fn apply_refreshing_write(
@@ -462,31 +459,13 @@ impl WorkspaceSessionState {
         Ok(())
     }
 
-    fn apply_isolated_fs_change(
+    fn apply_incremental_fs_update(
         &mut self,
         snapshot: WorkspaceFsSnapshot,
-        change: IsolatedFsChange,
+        update: IncrementalFsUpdate,
     ) -> Result<(), CoreError> {
         let old_states = self.page_event_states();
-        let refresh_result = match change {
-            IsolatedFsChange::Created(relative_path)
-            | IsolatedFsChange::Modified(relative_path) => {
-                let page = load_page_from_relative_path(&self.root, &relative_path)?;
-                if !self.incremental_upsert_preserves_parent_pages(&page) {
-                    return self.full_refresh(false);
-                }
-                self.apply_incremental_page_update(page);
-                Ok(())
-            }
-            IsolatedFsChange::Deleted(relative_path) => {
-                let page_id = PageId::from_workspace_path(&relative_path)?;
-                if !self.incremental_remove_preserves_parent_pages(&page_id) {
-                    return self.full_refresh(false);
-                }
-                self.cache.remove_page(&page_id);
-                Ok(())
-            }
-        };
+        let refresh_result = self.apply_incremental_fs_update_to_cache(&update);
 
         match refresh_result {
             Ok(()) => {
@@ -502,58 +481,21 @@ impl WorkspaceSessionState {
         }
     }
 
-    fn apply_isolated_native_event_hint(
+    fn apply_incremental_native_paths(
         &mut self,
-        change: IsolatedFsChange,
+        relative_paths: BTreeSet<PathBuf>,
     ) -> Result<(), CoreError> {
+        let update = self.incremental_update_from_native_paths(relative_paths);
         let old_states = self.page_event_states();
-        match &change {
-            IsolatedFsChange::Created(relative_path)
-            | IsolatedFsChange::Modified(relative_path) => {
-                let absolute_path = self.root.join(relative_path);
-                let page = load_page_from_relative_path(&self.root, relative_path)?;
-                if !self.incremental_upsert_preserves_parent_pages(&page) {
-                    return self.full_refresh(false);
-                }
-                let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-                self.apply_incremental_page_update(page);
-                self.fs_snapshot
-                    .markdown_files
-                    .insert(relative_path.clone(), file_stamp);
+        match self.apply_incremental_fs_update_to_cache(&update) {
+            Ok(()) => {
+                self.apply_incremental_fs_snapshot_update(&update)?;
+                self.last_watch_error = None;
+                self.emit_cache_diff(old_states);
+                Ok(())
             }
-            IsolatedFsChange::Deleted(relative_path) => {
-                let page_id = PageId::from_workspace_path(relative_path)?;
-                if !self.incremental_remove_preserves_parent_pages(&page_id) {
-                    return self.full_refresh(false);
-                }
-                self.cache.remove_page(&page_id);
-                self.fs_snapshot.markdown_files.remove(relative_path);
-            }
-        }
-
-        self.last_watch_error = None;
-        self.emit_cache_diff(old_states);
-        Ok(())
-    }
-
-    fn apply_single_native_path_hint(&mut self, relative_path: PathBuf) -> Result<(), CoreError> {
-        let absolute_path = self.root.join(&relative_path);
-        if absolute_path.exists() {
-            let old_states = self.page_event_states();
-            let page = load_page_from_relative_path(&self.root, &relative_path)?;
-            if !self.incremental_upsert_preserves_parent_pages(&page) {
-                return self.full_refresh(false);
-            }
-            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-            self.apply_incremental_page_update(page);
-            self.fs_snapshot
-                .markdown_files
-                .insert(relative_path, file_stamp);
-            self.last_watch_error = None;
-            self.emit_cache_diff(old_states);
-            Ok(())
-        } else {
-            self.apply_isolated_native_event_hint(IsolatedFsChange::Deleted(relative_path))
+            Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => self.poll_once(),
+            Err(error) => Err(error),
         }
     }
 
@@ -564,14 +506,8 @@ impl WorkspaceSessionState {
                 Ok(())
             }
             NativeEventAction::TransactionPathChanged => self.full_refresh(true),
-            NativeEventAction::SingleMarkdownPath(relative_path) => {
-                match self.apply_single_native_path_hint(relative_path) {
-                    Ok(()) => Ok(()),
-                    Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
-                        self.poll_once()
-                    }
-                    Err(error) => Err(error),
-                }
+            NativeEventAction::IncrementalPaths(relative_paths) => {
+                self.apply_incremental_native_paths(relative_paths)
             }
             NativeEventAction::FallbackToSnapshot => self.poll_once(),
         }
@@ -603,9 +539,25 @@ impl WorkspaceSessionState {
         Ok(())
     }
 
-    fn incremental_upsert_preserves_parent_pages(&self, page: &crate::core::Page) -> bool {
+    fn incremental_update_preserves_parent_pages(
+        &self,
+        deleted_page_ids: &[PageId],
+        written_pages: &[crate::core::Page],
+    ) -> bool {
         let mut next_cache = self.cache.clone();
-        next_cache.upsert_page(page.clone());
+
+        for page_id in deleted_page_ids {
+            next_cache.remove_page(page_id);
+        }
+
+        for page in written_pages {
+            if next_cache.page(&page.page_id).is_some() {
+                next_cache.refresh_page_content(page.clone());
+            } else {
+                next_cache.upsert_page(page.clone());
+            }
+        }
+
         next_cache.missing_parent_page_ids().is_empty()
     }
 
@@ -617,10 +569,54 @@ impl WorkspaceSessionState {
         }
     }
 
-    fn incremental_remove_preserves_parent_pages(&self, page_id: &PageId) -> bool {
-        let mut next_cache = self.cache.clone();
-        next_cache.remove_page(page_id);
-        next_cache.missing_parent_page_ids().is_empty()
+    fn apply_incremental_fs_update_to_cache(
+        &mut self,
+        update: &IncrementalFsUpdate,
+    ) -> Result<(), CoreError> {
+        let deleted_page_ids = update
+            .deleted_paths
+            .iter()
+            .map(|relative_path| PageId::from_workspace_path(relative_path))
+            .collect::<Result<Vec<_>, _>>()?;
+        let written_pages = update
+            .written_paths
+            .iter()
+            .map(|relative_path| load_page_from_relative_path(&self.root, relative_path))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !self.incremental_update_preserves_parent_pages(&deleted_page_ids, &written_pages) {
+            return self.full_refresh(false);
+        }
+
+        for page_id in deleted_page_ids {
+            self.cache.remove_page(&page_id);
+        }
+
+        for page in written_pages {
+            self.apply_incremental_page_update(page);
+        }
+
+        Ok(())
+    }
+
+    fn apply_incremental_fs_snapshot_update(
+        &mut self,
+        update: &IncrementalFsUpdate,
+    ) -> Result<(), CoreError> {
+        for deleted_path in &update.deleted_paths {
+            self.fs_snapshot.markdown_files.remove(deleted_path);
+        }
+
+        for written_path in &update.written_paths {
+            let absolute_path = self.root.join(written_path);
+            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+            self.fs_snapshot
+                .markdown_files
+                .insert(written_path.clone(), file_stamp);
+        }
+
+        self.fs_snapshot.transaction_exists = false;
+        Ok(())
     }
 
     fn apply_incremental_snapshot_update(
@@ -641,6 +637,24 @@ impl WorkspaceSessionState {
 
         self.fs_snapshot.transaction_exists = false;
         Ok(())
+    }
+
+    fn incremental_update_from_native_paths(
+        &self,
+        relative_paths: BTreeSet<PathBuf>,
+    ) -> IncrementalFsUpdate {
+        let mut update = IncrementalFsUpdate::default();
+
+        for relative_path in relative_paths {
+            let absolute_path = self.root.join(&relative_path);
+            if absolute_path.exists() {
+                update.written_paths.insert(relative_path);
+            } else {
+                update.deleted_paths.insert(relative_path);
+            }
+        }
+
+        update
     }
 }
 
@@ -717,34 +731,31 @@ fn cache_diff_from_states(
     }
 }
 
-fn classify_isolated_fs_change(
+fn classify_snapshot_fs_changes(
     old_snapshot: &WorkspaceFsSnapshot,
     new_snapshot: &WorkspaceFsSnapshot,
-) -> Option<IsolatedFsChange> {
-    let mut created = Vec::new();
-    let mut modified = Vec::new();
-    let mut deleted = Vec::new();
+) -> IncrementalFsUpdate {
+    let mut update = IncrementalFsUpdate::default();
 
     for (path, old_stamp) in &old_snapshot.markdown_files {
         match new_snapshot.markdown_files.get(path) {
             Some(new_stamp) if new_stamp == old_stamp => {}
-            Some(_) => modified.push(path.clone()),
-            None => deleted.push(path.clone()),
+            Some(_) => {
+                update.written_paths.insert(path.clone());
+            }
+            None => {
+                update.deleted_paths.insert(path.clone());
+            }
         }
     }
 
     for path in new_snapshot.markdown_files.keys() {
         if !old_snapshot.markdown_files.contains_key(path) {
-            created.push(path.clone());
+            update.written_paths.insert(path.clone());
         }
     }
 
-    match created.len() + modified.len() + deleted.len() {
-        1 if created.len() == 1 => Some(IsolatedFsChange::Created(created.pop().unwrap())),
-        1 if modified.len() == 1 => Some(IsolatedFsChange::Modified(modified.pop().unwrap())),
-        1 if deleted.len() == 1 => Some(IsolatedFsChange::Deleted(deleted.pop().unwrap())),
-        _ => None,
-    }
+    update
 }
 
 fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventAction {
@@ -793,16 +804,13 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
             saw_non_markdown_noise = true;
         }
 
-        if event_markdown_path_count > 1 {
-            return NativeEventAction::FallbackToSnapshot;
-        }
     }
 
     match markdown_paths.len() {
         0 if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
         0 => NativeEventAction::Noop,
-        1 => NativeEventAction::SingleMarkdownPath(markdown_paths.pop_first().unwrap()),
-        _ => NativeEventAction::FallbackToSnapshot,
+        _ if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
+        _ => NativeEventAction::IncrementalPaths(markdown_paths),
     }
 }
 
@@ -1227,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_file_bursts_still_fall_back_even_with_non_markdown_noise() {
+    fn native_multi_file_markdown_bursts_stay_incremental() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");
         workspace.write_file("B.md", "");
@@ -1255,11 +1263,32 @@ mod tests {
             .apply_native_event_burst(&events)
             .unwrap();
 
-        let events = session.drain_events();
-        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
-        assert!(events.contains(&WorkspaceEvent::PagesChanged {
-            page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
-        }));
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
+            }]
+        );
+    }
+
+    #[test]
+    fn poll_once_reconciles_multi_file_markdown_bursts_incrementally() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("B.md", "");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A.md", "- changed\n");
+        workspace.write_file("B.md", "- changed\n");
+        session.poll_once().unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
+            }]
+        );
     }
 
     #[test]
