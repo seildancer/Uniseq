@@ -1,10 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::CoreError;
+use crate::core::{CoreError, FileFingerprint};
 
 use super::OperationKind;
-use super::planning::{PageMapping, RenameTransactionPlan};
+use super::planning::{ExpectedSourceFile, PageMapping, RenameTransactionPlan};
 
 const TRANSACTION_DIR_NAME: &str = ".uniseq-page-transaction";
 const MANIFEST_FILE_NAME: &str = "manifest.tsv";
@@ -65,6 +65,8 @@ impl TransactionRecord {
             return Err(CoreError::CorruptTransaction);
         }
 
+        let original_texts = load_expected_source_texts(root, &plan.expected_source_files)?;
+
         let stage_result = (|| -> Result<Self, CoreError> {
             fs::create_dir(&txn_dir).map_err(|error| CoreError::io(&txn_dir, &error))?;
             let originals_dir = txn_dir.join(ORIGINAL_DIR_NAME);
@@ -81,8 +83,11 @@ impl TransactionRecord {
                 let final_blob_name = format!("final-{index:04}.blob");
                 let original_blob_path = originals_dir.join(&original_blob_name);
                 let final_blob_path = finals_dir.join(&final_blob_name);
+                let original_text = original_texts
+                    .get(&change.original_path)
+                    .expect("validated source files are available for every file change");
 
-                fs::write(&original_blob_path, &change.original_text)
+                fs::write(&original_blob_path, original_text)
                     .map_err(|error| CoreError::io(&original_blob_path, &error))?;
                 fs::write(&final_blob_path, &change.final_text)
                     .map_err(|error| CoreError::io(&final_blob_path, &error))?;
@@ -315,6 +320,36 @@ impl TransactionRecord {
         fs::write(&manifest_path, manifest_text)
             .map_err(|error| CoreError::io(&manifest_path, &error))
     }
+}
+
+fn load_expected_source_texts(
+    root: &Path,
+    expected_source_files: &[ExpectedSourceFile],
+) -> Result<std::collections::BTreeMap<PathBuf, String>, CoreError> {
+    let mut original_texts = std::collections::BTreeMap::new();
+
+    for expected in expected_source_files {
+        let absolute_path = root.join(&expected.workspace_path);
+        let disk_text = match fs::read_to_string(&absolute_path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CoreError::StructuralConflict {
+                    path: expected.workspace_path.clone(),
+                });
+            }
+            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+        };
+
+        if FileFingerprint::from_text(&disk_text) != expected.fingerprint {
+            return Err(CoreError::StructuralConflict {
+                path: expected.workspace_path.clone(),
+            });
+        }
+
+        original_texts.insert(expected.workspace_path.clone(), disk_text);
+    }
+
+    Ok(original_texts)
 }
 
 fn path_to_manifest_field(path: &Path) -> Result<String, CoreError> {

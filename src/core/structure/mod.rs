@@ -752,6 +752,132 @@ mod tests {
     }
 
     #[test]
+    fn rename_rejects_stale_source_page_content_before_staging() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- cached\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("A___B.md", "- newer\n");
+
+        let error = apply_page_rename(
+            &workspace.root,
+            &mut cache,
+            PageRename {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                new_leaf_name: PageName::new("C").unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: PathBuf::from("A___B.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
+        assert!(!workspace.file_exists("A___C.md"));
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    #[test]
+    fn rename_rejects_stale_inbound_ref_source_before_staging() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("X.md", "- [[A/B]] and updated\n");
+
+        let error = apply_page_rename(
+            &workspace.root,
+            &mut cache,
+            PageRename {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                new_leaf_name: PageName::new("C").unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: PathBuf::from("X.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("A___B.md"), "- body\n");
+        assert_eq!(workspace.read_file("X.md"), "- [[A/B]] and updated\n");
+        assert!(!workspace.file_exists("A___C.md"));
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    #[test]
+    fn move_rejects_stale_source_page_content_before_staging() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- cached\n");
+        workspace.write_file("Z.md", "");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("A___B.md", "- newer\n");
+
+        let error = apply_page_move(
+            &workspace.root,
+            &mut cache,
+            PageMove {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                destination_parent_page_id: Some(PageId::new(["Z"]).unwrap()),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: PathBuf::from("A___B.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("A___B.md"), "- newer\n");
+        assert!(!workspace.file_exists("Z___B.md"));
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    #[test]
+    fn move_rejects_stale_inbound_ref_source_before_staging() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+        workspace.write_file("Z.md", "");
+        workspace.write_file("X.md", "- [[A/B]]\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("X.md", "- [[A/B]] and updated\n");
+
+        let error = apply_page_move(
+            &workspace.root,
+            &mut cache,
+            PageMove {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                destination_parent_page_id: Some(PageId::new(["Z"]).unwrap()),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: PathBuf::from("X.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("A___B.md"), "- body\n");
+        assert_eq!(workspace.read_file("X.md"), "- [[A/B]] and updated\n");
+        assert!(!workspace.file_exists("Z___B.md"));
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    #[test]
     fn recovery_rejects_late_destination_collisions_before_commit() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");

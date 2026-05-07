@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
-use crate::core::{CoreError, PageId, PageName, PageRefOccurrence, WorkspaceCache, parse_blocks};
+use crate::core::{
+    CoreError, FileFingerprint, PageId, PageName, PageRefOccurrence, WorkspaceCache, parse_blocks,
+};
 
 use super::OperationKind;
 
@@ -22,11 +24,18 @@ pub(super) struct FileChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExpectedSourceFile {
+    pub(super) workspace_path: PathBuf,
+    pub(super) fingerprint: FileFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RenameTransactionPlan {
     pub(super) kind: OperationKind,
     pub(super) page_mappings: Vec<PageMapping>,
     pub(super) file_changes: Vec<FileChange>,
     pub(super) deletes: Vec<PathBuf>,
+    pub(super) expected_source_files: Vec<ExpectedSourceFile>,
 }
 
 pub(super) fn plan_transaction(
@@ -86,11 +95,20 @@ pub(super) fn plan_transaction(
         .map(|mapping| mapping.old_path.clone())
         .collect::<Vec<_>>();
 
+    let expected_source_files = file_changes
+        .iter()
+        .map(|change| ExpectedSourceFile {
+            workspace_path: change.original_path.clone(),
+            fingerprint: FileFingerprint::from_text(&change.original_text),
+        })
+        .collect::<Vec<_>>();
+
     Ok(RenameTransactionPlan {
         kind,
         page_mappings,
         file_changes,
         deletes,
+        expected_source_files,
     })
 }
 

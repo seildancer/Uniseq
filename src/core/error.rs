@@ -134,6 +134,7 @@ pub enum CoreError {
     InvalidSpan(SpanError),
     InvalidParse(ParserError),
     Io { path: PathBuf, kind: io::ErrorKind },
+    StructuralConflict { path: PathBuf },
     MissingPage,
     MissingDestinationParent,
     DestinationPageExists,
@@ -150,6 +151,13 @@ impl fmt::Display for CoreError {
             Self::InvalidParse(err) => write!(f, "{err}"),
             Self::Io { path, kind } => {
                 write!(f, "i/o error at '{}': {kind}", path.display())
+            }
+            Self::StructuralConflict { path } => {
+                write!(
+                    f,
+                    "structural operation aborted because '{}' changed on disk",
+                    path.display()
+                )
             }
             Self::MissingPage => write!(f, "page does not exist in cache"),
             Self::MissingDestinationParent => {
