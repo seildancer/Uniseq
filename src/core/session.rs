@@ -8,7 +8,6 @@ use std::time::{Duration, SystemTime};
 
 use notify::{
     Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher,
-    event::{CreateKind, ModifyKind, RemoveKind},
 };
 
 use super::{
@@ -109,7 +108,7 @@ enum IsolatedFsChange {
 enum NativeEventAction {
     Noop,
     TransactionPathChanged,
-    Isolated(IsolatedFsChange),
+    SingleMarkdownPath(PathBuf),
     FallbackToSnapshot,
 }
 
@@ -475,20 +474,40 @@ impl WorkspaceSessionState {
         Ok(())
     }
 
-    fn apply_native_event_hint(&mut self, event: &Event) -> Result<(), CoreError> {
-        match classify_native_event_action(&self.root, event) {
+    fn apply_single_native_path_hint(&mut self, relative_path: PathBuf) -> Result<(), CoreError> {
+        let absolute_path = self.root.join(&relative_path);
+        if absolute_path.exists() {
+            let old_states = self.page_event_states();
+            let page = load_page_from_relative_path(&self.root, &relative_path)?;
+            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+            self.cache.upsert_page(page);
+            self.fs_snapshot
+                .markdown_files
+                .insert(relative_path, file_stamp);
+            self.last_watch_error = None;
+            self.emit_cache_diff(old_states);
+            Ok(())
+        } else {
+            self.apply_isolated_native_event_hint(IsolatedFsChange::Deleted(relative_path))
+        }
+    }
+
+    fn apply_native_event_burst(&mut self, events: &[Event]) -> Result<(), CoreError> {
+        match classify_native_event_burst(&self.root, events) {
             NativeEventAction::Noop => {
                 self.last_watch_error = None;
                 Ok(())
             }
             NativeEventAction::TransactionPathChanged => self.full_refresh(true),
-            NativeEventAction::Isolated(change) => match self
-                .apply_isolated_native_event_hint(change)
-            {
-                Ok(()) => Ok(()),
-                Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => self.poll_once(),
-                Err(error) => Err(error),
-            },
+            NativeEventAction::SingleMarkdownPath(relative_path) => {
+                match self.apply_single_native_path_hint(relative_path) {
+                    Ok(()) => Ok(()),
+                    Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
+                        self.poll_once()
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             NativeEventAction::FallbackToSnapshot => self.poll_once(),
         }
     }
@@ -623,58 +642,75 @@ fn classify_isolated_fs_change(
     }
 }
 
-fn classify_native_event_action(root: &Path, event: &Event) -> NativeEventAction {
-    if event.paths.is_empty() {
-        return NativeEventAction::FallbackToSnapshot;
+fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventAction {
+    if events.is_empty() {
+        return NativeEventAction::Noop;
     }
 
-    let mut markdown_paths = Vec::new();
-    for path in &event.paths {
-        let Ok(relative_path) = path.strip_prefix(root) else {
+    let mut markdown_paths = BTreeSet::new();
+    let mut saw_non_markdown_noise = false;
+
+    for event in events {
+        if event.paths.is_empty() {
             return NativeEventAction::FallbackToSnapshot;
-        };
-
-        if is_transaction_relative_path(relative_path) {
-            return NativeEventAction::TransactionPathChanged;
         }
 
-        let relative_path = relative_path.to_path_buf();
-        let is_markdown = relative_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
-        if is_markdown {
-            markdown_paths.push(relative_path);
+        let mut event_markdown_path_count = 0usize;
+        for path in &event.paths {
+            let Ok(relative_path) = path.strip_prefix(root) else {
+                return NativeEventAction::FallbackToSnapshot;
+            };
+
+            if is_transaction_relative_path(relative_path) {
+                return NativeEventAction::TransactionPathChanged;
+            }
+
+            let relative_path = relative_path.to_path_buf();
+            let is_markdown = relative_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+            if is_markdown {
+                event_markdown_path_count += 1;
+                markdown_paths.insert(relative_path);
+            }
+        }
+
+        if event_markdown_path_count == 0 && !matches!(event.kind, EventKind::Access(_)) {
+            saw_non_markdown_noise = true;
+        }
+
+        if event_markdown_path_count > 1 {
+            return NativeEventAction::FallbackToSnapshot;
         }
     }
 
-    if markdown_paths.is_empty() {
-        return match event.kind {
-            EventKind::Access(_) => NativeEventAction::Noop,
-            _ => NativeEventAction::FallbackToSnapshot,
-        };
-    }
-
-    if markdown_paths.len() != 1 {
-        return NativeEventAction::FallbackToSnapshot;
-    }
-
-    let path = markdown_paths.pop().unwrap();
-    match event.kind {
-        EventKind::Create(CreateKind::Any | CreateKind::File) | EventKind::Create(_) => {
-            NativeEventAction::Isolated(IsolatedFsChange::Created(path))
-        }
-        EventKind::Modify(ModifyKind::Data(_))
-        | EventKind::Modify(ModifyKind::Metadata(_))
-        | EventKind::Modify(ModifyKind::Any) => {
-            NativeEventAction::Isolated(IsolatedFsChange::Modified(path))
-        }
-        EventKind::Remove(RemoveKind::Any | RemoveKind::File) | EventKind::Remove(_) => {
-            NativeEventAction::Isolated(IsolatedFsChange::Deleted(path))
-        }
-        EventKind::Access(_) => NativeEventAction::Noop,
+    match markdown_paths.len() {
+        0 if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
+        0 => NativeEventAction::Noop,
+        1 => NativeEventAction::SingleMarkdownPath(markdown_paths.pop_first().unwrap()),
         _ => NativeEventAction::FallbackToSnapshot,
     }
+}
+
+fn collect_native_event_burst(
+    first_event: Event,
+    rx: &Receiver<WatchLoopMessage>,
+) -> Result<Vec<Event>, WatcherFallbackReason> {
+    let mut events = vec![first_event];
+    while let Ok(message) = rx.try_recv() {
+        match message {
+            WatchLoopMessage::Fs(Ok(event)) => events.push(event),
+            WatchLoopMessage::Fs(Err(error)) => {
+                return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
+                    message: error.to_string(),
+                });
+            }
+            WatchLoopMessage::Stop => return Ok(events),
+        }
+    }
+
+    Ok(events)
 }
 
 fn collect_workspace_snapshot(
@@ -786,18 +822,8 @@ fn run_native_watch_loop(
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(WatchLoopMessage::Fs(Ok(event))) => {
-                while let Ok(message) = rx.try_recv() {
-                    match message {
-                        WatchLoopMessage::Fs(Ok(_)) => {}
-                        WatchLoopMessage::Fs(Err(error)) => {
-                            return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
-                                message: error.to_string(),
-                            });
-                        }
-                        WatchLoopMessage::Stop => return Ok(()),
-                    }
-                }
-                apply_native_event_once(state, &event);
+                let events = collect_native_event_burst(event, rx)?;
+                apply_native_event_burst_once(state, &events);
             }
             Ok(WatchLoopMessage::Fs(Err(error))) => {
                 return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
@@ -842,9 +868,9 @@ fn poll_state_once(state: &Arc<Mutex<WorkspaceSessionState>>) {
     }
 }
 
-fn apply_native_event_once(state: &Arc<Mutex<WorkspaceSessionState>>, event: &Event) {
+fn apply_native_event_burst_once(state: &Arc<Mutex<WorkspaceSessionState>>, events: &[Event]) {
     let mut state = state.lock().unwrap();
-    if let Err(error) = state.apply_native_event_hint(event) {
+    if let Err(error) = state.apply_native_event_burst(events) {
         state.last_watch_error = Some(error);
     }
 }
@@ -957,7 +983,7 @@ mod tests {
 
         workspace.write_file("A.md", "- [[C]]\n");
         let event = Event {
-            kind: EventKind::Modify(ModifyKind::Any),
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
             paths: vec![workspace.root.join("A.md")],
             attrs: Default::default(),
         };
@@ -965,7 +991,56 @@ mod tests {
             .state
             .lock()
             .unwrap()
-            .apply_native_event_hint(&event)
+            .apply_native_event_burst(&[event])
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["A"]).unwrap(),
+                    PageId::new(["B"]).unwrap(),
+                    PageId::new(["C"]).unwrap(),
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn native_event_burst_keeps_single_page_saves_incremental() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "- [[B]]\n");
+        workspace.write_file("B.md", "");
+        workspace.write_file("C.md", "");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A.md", "- [[C]]\n");
+        workspace.write_file("notes.tmp", "editor noise");
+        let events = vec![
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                paths: vec![workspace.root.join("A.md")],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Metadata(
+                    notify::event::MetadataKind::Any,
+                )),
+                paths: vec![workspace.root.join("A.md")],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Create(notify::event::CreateKind::Any),
+                paths: vec![workspace.root.join("notes.tmp")],
+                attrs: Default::default(),
+            },
+        ];
+        session
+            .state
+            .lock()
+            .unwrap()
+            .apply_native_event_burst(&events)
             .unwrap();
 
         assert_eq!(
@@ -1040,12 +1115,51 @@ mod tests {
 
         workspace.write_file("A.md", "- changed\n");
         workspace.write_file("B.md", "- changed\n");
-        session.poll_once().unwrap();
+        let events = vec![
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                paths: vec![workspace.root.join("A.md")],
+                attrs: Default::default(),
+            },
+            Event {
+                kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                paths: vec![workspace.root.join("B.md")],
+                attrs: Default::default(),
+            },
+        ];
+        session
+            .state
+            .lock()
+            .unwrap()
+            .apply_native_event_burst(&events)
+            .unwrap();
 
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
             page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
+        }));
+    }
+
+    #[test]
+    fn full_refresh_materializes_missing_parent_pages() {
+        let workspace = TestWorkspace::new();
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A___B___C.md", "");
+        session.state.lock().unwrap().full_refresh(false).unwrap();
+
+        assert!(workspace.root.join("A.md").exists());
+        assert!(workspace.root.join("A___B.md").exists());
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![
+                PageId::new(["A"]).unwrap(),
+                PageId::new(["A", "B"]).unwrap(),
+                PageId::new(["A", "B", "C"]).unwrap(),
+            ],
         }));
     }
 
@@ -1139,7 +1253,7 @@ mod tests {
         .unwrap();
 
         let event = Event {
-            kind: EventKind::Modify(ModifyKind::Any),
+            kind: EventKind::Modify(notify::event::ModifyKind::Any),
             paths: vec![
                 workspace
                     .root
@@ -1152,7 +1266,7 @@ mod tests {
             .state
             .lock()
             .unwrap()
-            .apply_native_event_hint(&event)
+            .apply_native_event_burst(&[event])
             .unwrap();
 
         let events = session.drain_events();

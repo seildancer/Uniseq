@@ -21,12 +21,16 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
         pages.push(load_page_from_relative_path(root, &relative_path)?);
     }
 
-    let cache = WorkspaceCache::from_pages(pages);
+    let mut cache = WorkspaceCache::from_pages(pages);
     let missing_parent_page_ids = cache.missing_parent_page_ids();
+    if !missing_parent_page_ids.is_empty() {
+        materialize_parent_pages(root, &mut cache, missing_parent_page_ids.clone())?;
+    }
+    let remaining_missing_parent_page_ids = cache.missing_parent_page_ids();
 
     Ok(WorkspaceDiscovery {
         cache,
-        missing_parent_page_ids,
+        missing_parent_page_ids: remaining_missing_parent_page_ids,
     })
 }
 
@@ -197,20 +201,16 @@ mod tests {
     }
 
     #[test]
-    fn reports_missing_parent_pages_without_materializing_them() {
+    fn materializes_missing_parent_pages_during_discovery() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A___B___C.md", "");
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
-        assert_eq!(
-            discovery.missing_parent_page_ids,
-            vec![
-                PageId::new(["A"]).unwrap(),
-                PageId::new(["A", "B"]).unwrap()
-            ]
-        );
-        assert_eq!(discovery.cache.pages().len(), 1);
+        assert!(discovery.missing_parent_page_ids.is_empty());
+        assert_eq!(discovery.cache.pages().len(), 3);
+        assert!(workspace.root.join("A.md").exists());
+        assert!(workspace.root.join("A___B.md").exists());
     }
 
     #[test]
@@ -510,11 +510,14 @@ mod tests {
         let workspace = TestWorkspace::new();
         workspace.write_file("A___B___C.md", "");
 
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
+        let mut cache = WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
         let created = materialize_parent_pages(
             &workspace.root,
-            &mut discovery.cache,
-            discovery.missing_parent_page_ids.clone(),
+            &mut cache,
+            vec![
+                PageId::new(["A"]).unwrap(),
+                PageId::new(["A", "B"]).unwrap(),
+            ],
         )
         .unwrap();
 
@@ -541,11 +544,14 @@ mod tests {
         workspace.write_file("A___B___C.md", "");
         workspace.write_file("A.md", "existing");
 
-        let mut discovery = discover_workspace(&workspace.root).unwrap();
+        let mut cache = WorkspaceCache::from_pages([Page::new(PageId::new(["A", "B", "C"]).unwrap(), "")]);
         let created = materialize_parent_pages(
             &workspace.root,
-            &mut discovery.cache,
-            discovery.missing_parent_page_ids.clone(),
+            &mut cache,
+            vec![
+                PageId::new(["A"]).unwrap(),
+                PageId::new(["A", "B"]).unwrap(),
+            ],
         )
         .unwrap();
 
@@ -554,15 +560,14 @@ mod tests {
                 .iter()
                 .map(PageId::hierarchy_display)
                 .collect::<Vec<_>>(),
-            vec!["A/B"]
+            vec!["A", "A/B"]
         );
         assert_eq!(
             fs::read_to_string(workspace.root.join("A.md")).unwrap(),
             "existing"
         );
         assert_eq!(
-            discovery
-                .cache
+            cache
                 .page(&PageId::new(["A"]).unwrap())
                 .unwrap()
                 .fingerprint,
