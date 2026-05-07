@@ -433,6 +433,10 @@ impl WorkspaceSessionState {
     }
 
     fn record_watcher_degraded_to_polling(&mut self, reason: WatcherFallbackReason) {
+        println!(
+            "[uniseq-backend] watcher fallback: degrading to polling mode: {:?}",
+            reason
+        );
         self.watcher_fallback_reason = Some(reason.clone());
         self.enqueue_event(WorkspaceEvent::WatcherDegradedToPolling { reason });
         self.record_watcher_mode(WatcherMode::Polling);
@@ -484,6 +488,10 @@ impl WorkspaceSessionState {
     }
 
     fn poll_once(&mut self) -> Result<(), CoreError> {
+        println!(
+            "[uniseq-backend] whole-tree scan: capturing polling snapshot at {}",
+            self.root.display()
+        );
         let snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
         if snapshot == self.fs_snapshot {
             self.last_watch_error = None;
@@ -491,6 +499,9 @@ impl WorkspaceSessionState {
         }
 
         if snapshot.transaction_exists || self.fs_snapshot.transaction_exists {
+            println!(
+                "[uniseq-backend] whole-cache refresh: polling detected transaction state, triggering full refresh"
+            );
             return self.full_refresh(true);
         }
 
@@ -523,13 +534,15 @@ impl WorkspaceSessionState {
         relative_paths: BTreeSet<PathBuf>,
     ) -> Result<(), CoreError> {
         let update = self.incremental_update_from_native_paths(relative_paths);
-        let old_states = self.page_event_states();
         let prepared = prepare_incremental_fs_update(&self.root, &update)?;
+        let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
+            return self.full_refresh(false);
+        };
         match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
             Ok(()) => {
                 self.apply_incremental_fs_snapshot_update(&update)?;
                 self.last_watch_error = None;
-                self.emit_cache_diff(old_states);
+                self.enqueue_events(cache_diff.into_events());
                 Ok(())
             }
             Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => self.poll_once(),
@@ -543,15 +556,30 @@ impl WorkspaceSessionState {
                 self.last_watch_error = None;
                 Ok(())
             }
-            NativeEventAction::TransactionPathChanged => self.full_refresh(true),
+            NativeEventAction::TransactionPathChanged => {
+                println!(
+                    "[uniseq-backend] native watcher fallback: transaction path changed, triggering full refresh"
+                );
+                self.full_refresh(true)
+            }
             NativeEventAction::IncrementalPaths(relative_paths) => {
                 self.apply_incremental_native_paths(relative_paths)
             }
-            NativeEventAction::FallbackToSnapshot => self.poll_once(),
+            NativeEventAction::FallbackToSnapshot => {
+                println!(
+                    "[uniseq-backend] native watcher fallback: ambiguous event burst, switching to polling snapshot reconciliation"
+                );
+                self.poll_once()
+            }
         }
     }
 
     fn full_refresh(&mut self, may_need_recovery: bool) -> Result<(), CoreError> {
+        println!(
+            "[uniseq-backend] whole-cache refresh: rebuilding cache from disk at {} (recovery={})",
+            self.root.display(),
+            may_need_recovery
+        );
         let prepared = prepare_full_refresh(&self.root, may_need_recovery)?;
         self.apply_prepared_full_refresh(prepared)
     }
@@ -581,21 +609,50 @@ impl WorkspaceSessionState {
         deleted_page_ids: &[PageId],
         written_pages: &[crate::core::Page],
     ) -> bool {
-        let mut next_cache = self.cache.clone();
-
-        for page_id in deleted_page_ids {
-            next_cache.remove_page(page_id);
-        }
+        let deleted_page_ids = deleted_page_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let written_page_ids = written_pages
+            .iter()
+            .map(|page| page.page_id.clone())
+            .collect::<BTreeSet<_>>();
 
         for page in written_pages {
-            if next_cache.page(&page.page_id).is_some() {
-                next_cache.refresh_page_content(page.clone());
-            } else {
-                next_cache.upsert_page(page.clone());
+            if !page.location.is_page_backed() {
+                continue;
+            }
+
+            for ancestor_page_id in page.ancestor_page_ids() {
+                let ancestor_survives_batch = written_page_ids.contains(&ancestor_page_id)
+                    || (!deleted_page_ids.contains(&ancestor_page_id)
+                        && self.cache.page(&ancestor_page_id).is_some());
+                if !ancestor_survives_batch {
+                    return false;
+                }
             }
         }
 
-        next_cache.missing_parent_page_ids().is_empty()
+        if deleted_page_ids.is_empty() {
+            return true;
+        }
+
+        for page in self.cache.pages().values() {
+            if deleted_page_ids.contains(&page.page_id) || written_page_ids.contains(&page.page_id) {
+                continue;
+            }
+
+            if !page.location.is_page_backed() {
+                continue;
+            }
+
+            if page
+                .ancestor_page_ids()
+                .iter()
+                .any(|ancestor_page_id| deleted_page_ids.contains(ancestor_page_id))
+            {
+                return false;
+            }
+        }
+
+        true
     }
 
     fn apply_incremental_page_update(&mut self, page: crate::core::Page) {
@@ -611,12 +668,14 @@ impl WorkspaceSessionState {
         snapshot: WorkspaceFsSnapshot,
         prepared: PreparedIncrementalFsUpdate,
     ) -> Result<(), CoreError> {
-        let old_states = self.page_event_states();
+        let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
+            return self.full_refresh(false);
+        };
         match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
             Ok(()) => {
                 self.fs_snapshot = snapshot;
                 self.last_watch_error = None;
-                self.emit_cache_diff(old_states);
+                self.enqueue_events(cache_diff.into_events());
                 Ok(())
             }
             Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
@@ -630,13 +689,6 @@ impl WorkspaceSessionState {
         &mut self,
         prepared: PreparedIncrementalFsUpdate,
     ) -> Result<(), CoreError> {
-        if !self.incremental_update_preserves_parent_pages(
-            &prepared.deleted_page_ids,
-            &prepared.written_pages,
-        ) {
-            return self.full_refresh(false);
-        }
-
         for page_id in prepared.deleted_page_ids {
             self.cache.remove_page(&page_id);
         }
@@ -646,6 +698,98 @@ impl WorkspaceSessionState {
         }
 
         Ok(())
+    }
+
+    fn plan_incremental_cache_diff(
+        &self,
+        prepared: &PreparedIncrementalFsUpdate,
+    ) -> Option<CacheDiff> {
+        if !self.incremental_update_preserves_parent_pages(
+            &prepared.deleted_page_ids,
+            &prepared.written_pages,
+        ) {
+            return None;
+        }
+
+        let removed_page_ids = prepared
+            .deleted_page_ids
+            .iter()
+            .filter(|page_id| self.cache.page(page_id).is_some())
+            .cloned()
+            .collect::<Vec<_>>();
+        let removed_page_ids_set = removed_page_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let written_page_ids = prepared
+            .written_pages
+            .iter()
+            .map(|page| page.page_id.clone())
+            .collect::<BTreeSet<_>>();
+        let created_page_ids = written_page_ids
+            .iter()
+            .filter(|page_id| self.cache.page(page_id).is_none())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let mut changed_page_ids = BTreeSet::new();
+        let existence_toggled_page_ids = removed_page_ids_set
+            .union(&created_page_ids)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        changed_page_ids.extend(
+            self.page_ids_referring_to_any(&existence_toggled_page_ids)
+                .into_iter()
+                .filter(|page_id| !removed_page_ids_set.contains(page_id)),
+        );
+
+        for removed_page_id in &removed_page_ids {
+            let Some(page) = self.cache.page(removed_page_id) else {
+                continue;
+            };
+
+            if let Some(parent_page_id) = page.parent_page_id() {
+                if !removed_page_ids_set.contains(&parent_page_id) {
+                    changed_page_ids.insert(parent_page_id);
+                }
+            }
+
+            changed_page_ids.extend(
+                target_page_ids_from_page(page)
+                    .into_iter()
+                    .filter(|page_id| !removed_page_ids_set.contains(page_id)),
+            );
+        }
+
+        for page in &prepared.written_pages {
+            changed_page_ids.insert(page.page_id.clone());
+
+            if self.cache.page(&page.page_id).is_none() {
+                if let Some(parent_page_id) = page.parent_page_id() {
+                    changed_page_ids.insert(parent_page_id);
+                }
+            }
+
+            if let Some(old_page) = self.cache.page(&page.page_id) {
+                changed_page_ids.extend(
+                    target_page_ids_from_page(old_page)
+                        .into_iter()
+                        .filter(|page_id| !removed_page_ids_set.contains(page_id)),
+                );
+            }
+
+            changed_page_ids.extend(
+                target_page_ids_from_page(page)
+                    .into_iter()
+                    .filter(|page_id| !removed_page_ids_set.contains(page_id)),
+            );
+        }
+
+        Some(CacheDiff {
+            changed_page_ids: changed_page_ids
+                .into_iter()
+                .filter(|page_id| !removed_page_ids_set.contains(page_id))
+                .collect(),
+            removed_page_ids,
+        })
     }
 
     fn apply_incremental_fs_snapshot_update(
@@ -705,12 +849,36 @@ impl WorkspaceSessionState {
 
         update
     }
+
+    fn page_ids_referring_to_any(&self, target_page_ids: &BTreeSet<PageId>) -> BTreeSet<PageId> {
+        if target_page_ids.is_empty() {
+            return BTreeSet::new();
+        }
+
+        self.cache
+            .pages()
+            .values()
+            .filter(|page| {
+                page.outgoing_refs()
+                    .any(|outgoing_ref| target_page_ids.contains(&outgoing_ref.target_page_id))
+            })
+            .map(|page| page.page_id.clone())
+            .collect()
+    }
 }
 
 impl WorkspaceFsSnapshot {
     fn capture(root: &Path) -> Result<Self, CoreError> {
+        println!(
+            "[uniseq-backend] whole-tree scan: capturing workspace snapshot at {}",
+            root.display()
+        );
         let mut markdown_files = BTreeMap::new();
         collect_workspace_snapshot(root, root, &mut markdown_files)?;
+        println!(
+            "[uniseq-backend] whole-tree scan complete: {} supported markdown files in snapshot",
+            markdown_files.len()
+        );
         Ok(Self {
             markdown_files,
             transaction_exists: transaction_record_exists(root),
@@ -780,6 +948,12 @@ fn cache_diff_from_states(
     }
 }
 
+fn target_page_ids_from_page(page: &crate::core::Page) -> BTreeSet<PageId> {
+    page.outgoing_refs()
+        .map(|outgoing_ref| outgoing_ref.target_page_id.clone())
+        .collect()
+}
+
 fn classify_snapshot_fs_changes(
     old_snapshot: &WorkspaceFsSnapshot,
     new_snapshot: &WorkspaceFsSnapshot,
@@ -811,6 +985,11 @@ fn prepare_full_refresh(
     root: &Path,
     may_need_recovery: bool,
 ) -> Result<PreparedFullRefresh, CoreError> {
+    println!(
+        "[uniseq-backend] whole-cache refresh: preparing full refresh at {} (recovery={})",
+        root.display(),
+        may_need_recovery
+    );
     let mut cache = WorkspaceCache::new();
     let recovery_applied = if may_need_recovery || transaction_record_exists(root) {
         recover_workspace_transactions(root, &mut cache)?

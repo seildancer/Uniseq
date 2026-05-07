@@ -13,6 +13,10 @@ pub struct WorkspaceDiscovery {
 
 pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, CoreError> {
     let root = root.as_ref();
+    println!(
+        "[uniseq-backend] whole-tree scan: discovering workspace at {}",
+        root.display()
+    );
     let mut markdown_paths = Vec::new();
     collect_markdown_paths(root, root, &mut markdown_paths)?;
     markdown_paths.sort();
@@ -38,6 +42,10 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
         materialize_parent_pages(root, &mut cache, missing_parent_page_ids.clone())?;
     }
     let remaining_missing_parent_page_ids = cache.missing_parent_page_ids();
+    println!(
+        "[uniseq-backend] whole-tree scan complete: {} supported markdown pages discovered",
+        cache.pages().len()
+    );
 
     Ok(WorkspaceDiscovery {
         cache,

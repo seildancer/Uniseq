@@ -15,7 +15,8 @@
 - Stream (journal) files and normal page files are the same backend object for discovery, parsing, refs, reads, and cache state.
 - Page body is modelled into blocks.
 - All references are `block -> page`.
-- Supported page reference syntax is `[[Page]]` and `#Page`.
+- Supported page reference syntax is `[[Page]]` and `#Page`, and both resolve to page-backed pages only.
+- Stream pages are file-backed pages for discovery, parsing, reads, and structural operations, but they are not targetable through markdown ref syntax.
 - References inside fenced code blocks are ignored. (we don't care about indentation code blocks)
 - `linked references` are derived views over source blocks and never live in the target page file.
 - Pages have a backend-resolved identity derived from filesystem layout and page hierarchy.
@@ -95,9 +96,11 @@ workspace-path parsing, hierarchy construction, and path round-tripping.
       discovery/watch instead of failing the workspace
 - Split hierarchy behavior from page identity:
     - Normal pages keep the current hierarchical PageId behavior, e.g. pages/A___B.md => A/B
-    - Stream pages get distinct page identities that include the stream name so journal/2026-
-      05-07 and diary/2026-05-07 do not collide
+- Stream pages get distinct page identities that include the stream name so journal/2026-
+  05-07 and diary/2026-05-07 do not collide
     - Stream name must not participate in parent/child hierarchy logic
+    - Markdown refs remain page-backed only; stream pages are not addressable by `[[...]]`
+      or `#...`
 - Add minimal location metadata to preserve canonical paths:
     - Page-backed location for pages/...
     - Stream-backed location carrying the stream name for streams/<name>/...
