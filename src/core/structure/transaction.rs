@@ -250,6 +250,24 @@ impl TransactionRecord {
         Ok(())
     }
 
+    pub(super) fn final_writes(&self, root: &Path) -> Result<Vec<(PathBuf, String)>, CoreError> {
+        let txn_dir = transaction_dir(root);
+        self.manifest
+            .writes
+            .iter()
+            .map(|write| {
+                let blob_path = txn_dir.join(FINAL_DIR_NAME).join(&write.blob_name);
+                let final_text = fs::read_to_string(&blob_path)
+                    .map_err(|error| CoreError::io(&blob_path, &error))?;
+                Ok((write.workspace_path.clone(), final_text))
+            })
+            .collect()
+    }
+
+    pub(super) fn deletes(&self) -> &[PathBuf] {
+        &self.manifest.deletes
+    }
+
     pub(super) fn remove(self, root: &Path) -> Result<(), CoreError> {
         let txn_dir = transaction_dir(root);
         fs::remove_dir_all(&txn_dir).map_err(|error| CoreError::io(&txn_dir, &error))

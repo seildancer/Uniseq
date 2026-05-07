@@ -2,14 +2,13 @@ mod planning;
 mod transaction;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{CoreError, PageId, PageName, WorkspaceCache};
 use crate::core::discovery::materialize_parent_pages;
-use crate::core::files::load_workspace_cache;
-use crate::core::files::refresh_workspace_cache;
+use crate::core::files::{load_workspace_cache, page_from_markdown, refresh_workspace_cache};
 
-use planning::{moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
+use planning::{RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
 use transaction::TransactionRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +37,32 @@ pub struct PageDeleteSubtree {
 enum OperationKind {
     Rename,
     Move,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IncrementalWorkspaceUpdate {
+    pub(crate) written_paths: Vec<PathBuf>,
+    pub(crate) deleted_paths: Vec<PathBuf>,
+}
+
+impl IncrementalWorkspaceUpdate {
+    fn empty() -> Self {
+        Self {
+            written_paths: Vec::new(),
+            deleted_paths: Vec::new(),
+        }
+    }
+
+    fn from_plan(plan: &RenameTransactionPlan) -> Self {
+        Self {
+            written_paths: plan
+                .file_changes
+                .iter()
+                .map(|change| change.final_path.clone())
+                .collect(),
+            deleted_paths: plan.deletes.clone(),
+        }
+    }
 }
 
 impl OperationKind {
@@ -117,12 +142,20 @@ pub fn apply_page_rename(
     cache: &mut WorkspaceCache,
     request: PageRename,
 ) -> Result<(), CoreError> {
+    apply_page_rename_with_update(root, cache, request).map(|_| ())
+}
+
+pub(crate) fn apply_page_rename_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageRename,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
 
     let target_page_id = renamed_page_id(&request.source_page_id, &request.new_leaf_name)?;
     if target_page_id == request.source_page_id {
-        return Ok(());
+        return Ok(IncrementalWorkspaceUpdate::empty());
     }
 
     plan_and_commit_transaction(
@@ -140,6 +173,14 @@ pub fn apply_page_move(
     cache: &mut WorkspaceCache,
     request: PageMove,
 ) -> Result<(), CoreError> {
+    apply_page_move_with_update(root, cache, request).map(|_| ())
+}
+
+pub(crate) fn apply_page_move_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageMove,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
 
@@ -156,7 +197,7 @@ pub fn apply_page_move(
         request.destination_parent_page_id.as_ref(),
     )?;
     if target_page_id == request.source_page_id {
-        return Ok(());
+        return Ok(IncrementalWorkspaceUpdate::empty());
     }
 
     plan_and_commit_transaction(
@@ -179,7 +220,7 @@ pub fn recover_workspace_transactions(
     }
 
     let record = TransactionRecord::load(root)?;
-    complete_transaction_record(root, cache, record)?;
+    complete_transaction_record(root, cache, record, None)?;
     Ok(true)
 }
 
@@ -200,24 +241,24 @@ fn plan_and_commit_transaction(
     source_page_id: &PageId,
     target_page_id: &PageId,
     destination_parent_page_id: Option<&PageId>,
-) -> Result<(), CoreError> {
-    let disk_cache = load_workspace_cache(root)?;
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     let plan = plan_transaction(
-        &disk_cache,
+        cache,
         operation_kind,
         source_page_id,
         target_page_id,
         destination_parent_page_id,
     )?;
     let record = TransactionRecord::stage(root, &plan)?;
-    complete_transaction_record(root, cache, record)
+    complete_transaction_record(root, cache, record, Some(&plan))
 }
 
 fn complete_transaction_record(
     root: &Path,
     cache: &mut WorkspaceCache,
     mut record: TransactionRecord,
-) -> Result<(), CoreError> {
+    prepared_plan: Option<&RenameTransactionPlan>,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
     // Recovery intentionally finishes the rename/move to its planned final state
     // rather than attempting rollback. Markdown files remain authoritative, and
     // startup/runtime recovery replays the recorded final state until disk and
@@ -225,9 +266,19 @@ fn complete_transaction_record(
     record.validate_final_paths_available(root)?;
     record.mark_applying(root)?;
     record.apply_final_state(root, None, false)?;
+    let update = if let Some(plan) = prepared_plan {
+        apply_transaction_plan_to_cache(cache, plan)?;
+        IncrementalWorkspaceUpdate::from_plan(plan)
+    } else {
+        let final_writes = record.final_writes(root)?;
+        apply_transaction_writes_to_cache(cache, &final_writes, record.deletes())?;
+        IncrementalWorkspaceUpdate {
+            written_paths: final_writes.iter().map(|(path, _)| path.clone()).collect(),
+            deleted_paths: record.deletes().to_vec(),
+        }
+    };
     record.remove(root)?;
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    Ok(update)
 }
 
 #[cfg(test)]
@@ -247,6 +298,47 @@ pub(crate) fn stage_page_rename_transaction_for_testing(
         None,
     )?;
     TransactionRecord::stage(root, &plan)?;
+    Ok(())
+}
+
+fn apply_transaction_plan_to_cache(
+    cache: &mut WorkspaceCache,
+    plan: &RenameTransactionPlan,
+) -> Result<(), CoreError> {
+    let final_writes = plan
+        .file_changes
+        .iter()
+        .map(|change| (change.final_path.clone(), change.final_text.clone()))
+        .collect::<Vec<_>>();
+    apply_transaction_writes_to_cache(cache, &final_writes, &plan.deletes)
+}
+
+fn apply_transaction_writes_to_cache(
+    cache: &mut WorkspaceCache,
+    final_writes: &[(PathBuf, String)],
+    deleted_paths: &[PathBuf],
+) -> Result<(), CoreError> {
+    let final_pages = final_writes
+        .iter()
+        .map(|(path, text)| {
+            let page_id = PageId::from_workspace_path(path)?;
+            page_from_markdown(page_id, text.clone())
+        })
+        .collect::<Result<Vec<_>, CoreError>>()?;
+
+    for deleted_path in deleted_paths {
+        let deleted_page_id = PageId::from_workspace_path(deleted_path)?;
+        cache.remove_page(&deleted_page_id);
+    }
+
+    for page in final_pages {
+        if cache.page(&page.page_id).is_some() {
+            cache.refresh_page_content(page);
+        } else {
+            cache.upsert_page(page);
+        }
+    }
+
     Ok(())
 }
 

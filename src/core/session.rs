@@ -16,10 +16,11 @@ use crate::core::files::{
     load_page_from_relative_path, load_workspace_cache, refresh_workspace_cache,
 };
 use crate::core::structure::{
-    PageCreate, PageDeleteSubtree, PageMove, PageRename, apply_page_create as write_page_create,
-    apply_page_delete_subtree as write_page_delete_subtree, apply_page_move as write_page_move,
-    apply_page_rename as write_page_rename, is_transaction_relative_path,
-    recover_workspace_transactions, transaction_record_exists,
+    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
+    apply_page_create as write_page_create,
+    apply_page_delete_subtree as write_page_delete_subtree, apply_page_move_with_update,
+    apply_page_rename_with_update, is_transaction_relative_path, recover_workspace_transactions,
+    transaction_record_exists,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -199,28 +200,36 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| write_page_create(root, cache, request))
+            .apply_write(|root, cache| {
+                write_page_create(root, cache, request)?;
+                Ok(None)
+            })
     }
 
     pub fn apply_page_delete_subtree(&self, request: PageDeleteSubtree) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| write_page_delete_subtree(root, cache, request))
+            .apply_write(|root, cache| {
+                write_page_delete_subtree(root, cache, request)?;
+                Ok(None)
+            })
     }
 
     pub fn apply_page_rename(&self, request: PageRename) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| write_page_rename(root, cache, request))
+            .apply_write(|root, cache| {
+                apply_page_rename_with_update(root, cache, request).map(Some)
+            })
     }
 
     pub fn apply_page_move(&self, request: PageMove) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| write_page_move(root, cache, request))
+            .apply_write(|root, cache| apply_page_move_with_update(root, cache, request).map(Some))
     }
 
     pub fn poll_once(&self) -> Result<(), CoreError> {
@@ -420,11 +429,18 @@ impl WorkspaceSessionState {
 
     fn apply_write(
         &mut self,
-        write: impl FnOnce(&Path, &mut WorkspaceCache) -> Result<(), CoreError>,
+        write: impl FnOnce(
+            &Path,
+            &mut WorkspaceCache,
+        ) -> Result<Option<IncrementalWorkspaceUpdate>, CoreError>,
     ) -> Result<(), CoreError> {
         let old_states = self.page_event_states();
-        write(&self.root, &mut self.cache)?;
-        self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
+        let update = write(&self.root, &mut self.cache)?;
+        if let Some(update) = update {
+            self.apply_incremental_snapshot_update(&update)?;
+        } else {
+            self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
+        }
         self.last_watch_error = None;
         self.emit_cache_diff(old_states);
         Ok(())
@@ -589,6 +605,26 @@ impl WorkspaceSessionState {
         let mut next_cache = self.cache.clone();
         next_cache.remove_page(page_id);
         next_cache.missing_parent_page_ids().is_empty()
+    }
+
+    fn apply_incremental_snapshot_update(
+        &mut self,
+        update: &IncrementalWorkspaceUpdate,
+    ) -> Result<(), CoreError> {
+        for deleted_path in &update.deleted_paths {
+            self.fs_snapshot.markdown_files.remove(deleted_path);
+        }
+
+        for written_path in &update.written_paths {
+            let absolute_path = self.root.join(written_path);
+            let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+            self.fs_snapshot
+                .markdown_files
+                .insert(written_path.clone(), file_stamp);
+        }
+
+        self.fs_snapshot.transaction_exists = false;
+        Ok(())
     }
 }
 
@@ -1347,6 +1383,34 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn structural_rename_updates_snapshot_without_followup_refresh() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_rename(PageRename {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                new_leaf_name: PageName::new("C").unwrap(),
+            })
+            .unwrap();
+        session.drain_events();
+
+        {
+            let state = session.state.read().unwrap();
+            assert!(!state.fs_snapshot.markdown_files.contains_key(&PathBuf::from("A___B.md")));
+            assert!(state.fs_snapshot.markdown_files.contains_key(&PathBuf::from("A___C.md")));
+            assert!(!state.fs_snapshot.transaction_exists);
+        }
+
+        session.poll_once().unwrap();
+        assert!(session.drain_events().is_empty());
     }
 
     #[test]
