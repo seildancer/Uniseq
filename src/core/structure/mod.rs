@@ -43,6 +43,8 @@ enum OperationKind {
 pub(crate) struct IncrementalWorkspaceUpdate {
     pub(crate) written_paths: Vec<PathBuf>,
     pub(crate) deleted_paths: Vec<PathBuf>,
+    pub(crate) changed_page_ids: Vec<PageId>,
+    pub(crate) removed_page_ids: Vec<PageId>,
 }
 
 impl IncrementalWorkspaceUpdate {
@@ -50,6 +52,8 @@ impl IncrementalWorkspaceUpdate {
         Self {
             written_paths: Vec::new(),
             deleted_paths: Vec::new(),
+            changed_page_ids: Vec::new(),
+            removed_page_ids: Vec::new(),
         }
     }
 
@@ -61,6 +65,18 @@ impl IncrementalWorkspaceUpdate {
                 .map(|change| change.final_path.clone())
                 .collect(),
             deleted_paths: plan.deletes.clone(),
+            changed_page_ids: plan
+                .file_changes
+                .iter()
+                .map(|change| PageId::from_workspace_path(&change.final_path))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("transaction plans only contain valid workspace paths"),
+            removed_page_ids: plan
+                .deletes
+                .iter()
+                .map(PageId::from_workspace_path)
+                .collect::<Result<Vec<_>, _>>()
+                .expect("transaction plans only contain valid workspace paths"),
         }
     }
 }
@@ -275,6 +291,15 @@ fn complete_transaction_record(
         IncrementalWorkspaceUpdate {
             written_paths: final_writes.iter().map(|(path, _)| path.clone()).collect(),
             deleted_paths: record.deletes().to_vec(),
+            changed_page_ids: final_writes
+                .iter()
+                .map(|(path, _)| PageId::from_workspace_path(path))
+                .collect::<Result<Vec<_>, _>>()?,
+            removed_page_ids: record
+                .deletes()
+                .iter()
+                .map(PageId::from_workspace_path)
+                .collect::<Result<Vec<_>, _>>()?,
         }
     };
     record.remove(root)?;

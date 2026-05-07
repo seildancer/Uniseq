@@ -200,9 +200,9 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| {
+            .apply_refreshing_write(|root, cache| {
                 write_page_create(root, cache, request)?;
-                Ok(None)
+                Ok(())
             })
     }
 
@@ -210,9 +210,9 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| {
+            .apply_refreshing_write(|root, cache| {
                 write_page_delete_subtree(root, cache, request)?;
-                Ok(None)
+                Ok(())
             })
     }
 
@@ -220,16 +220,14 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| {
-                apply_page_rename_with_update(root, cache, request).map(Some)
-            })
+            .apply_incremental_write(|root, cache| apply_page_rename_with_update(root, cache, request))
     }
 
     pub fn apply_page_move(&self, request: PageMove) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_write(|root, cache| apply_page_move_with_update(root, cache, request).map(Some))
+            .apply_incremental_write(|root, cache| apply_page_move_with_update(root, cache, request))
     }
 
     pub fn poll_once(&self) -> Result<(), CoreError> {
@@ -410,6 +408,20 @@ impl WorkspaceSessionState {
         );
     }
 
+    fn emit_incremental_update_events(&mut self, update: &IncrementalWorkspaceUpdate) {
+        if !update.changed_page_ids.is_empty() {
+            self.enqueue_event(WorkspaceEvent::PagesChanged {
+                page_ids: update.changed_page_ids.clone(),
+            });
+        }
+
+        for page_id in &update.removed_page_ids {
+            self.enqueue_event(WorkspaceEvent::PageRemoved {
+                page_id: page_id.clone(),
+            });
+        }
+    }
+
     fn poll_once(&mut self) -> Result<(), CoreError> {
         let snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
         if snapshot == self.fs_snapshot {
@@ -427,22 +439,26 @@ impl WorkspaceSessionState {
         }
     }
 
-    fn apply_write(
+    fn apply_refreshing_write(
         &mut self,
-        write: impl FnOnce(
-            &Path,
-            &mut WorkspaceCache,
-        ) -> Result<Option<IncrementalWorkspaceUpdate>, CoreError>,
+        write: impl FnOnce(&Path, &mut WorkspaceCache) -> Result<(), CoreError>,
     ) -> Result<(), CoreError> {
         let old_states = self.page_event_states();
-        let update = write(&self.root, &mut self.cache)?;
-        if let Some(update) = update {
-            self.apply_incremental_snapshot_update(&update)?;
-        } else {
-            self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
-        }
-        self.last_watch_error = None;
+        write(&self.root, &mut self.cache)?;
+        self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
         self.emit_cache_diff(old_states);
+        self.last_watch_error = None;
+        Ok(())
+    }
+
+    fn apply_incremental_write(
+        &mut self,
+        write: impl FnOnce(&Path, &mut WorkspaceCache) -> Result<IncrementalWorkspaceUpdate, CoreError>,
+    ) -> Result<(), CoreError> {
+        let update = write(&self.root, &mut self.cache)?;
+        self.apply_incremental_snapshot_update(&update)?;
+        self.emit_incremental_update_events(&update);
+        self.last_watch_error = None;
         Ok(())
     }
 
@@ -1411,6 +1427,81 @@ mod tests {
 
         session.poll_once().unwrap();
         assert!(session.drain_events().is_empty());
+    }
+
+    #[test]
+    fn structural_rename_emits_precise_events_without_workspace_reload() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_rename(PageRename {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                new_leaf_name: PageName::new("Renamed").unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![
+                        PageId::new(["A", "Renamed"]).unwrap(),
+                        PageId::new(["A", "Renamed", "C"]).unwrap(),
+                        PageId::new(["X"]).unwrap(),
+                    ],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B"]).unwrap(),
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn structural_move_emits_precise_events_without_workspace_reload() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("Z.md", "");
+        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_move(PageMove {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                destination_parent_page_id: Some(PageId::new(["Z"]).unwrap()),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![
+                        PageId::new(["X"]).unwrap(),
+                        PageId::new(["Z", "B"]).unwrap(),
+                        PageId::new(["Z", "B", "C"]).unwrap(),
+                    ],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B"]).unwrap(),
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
+                },
+            ]
+        );
     }
 
     #[test]
