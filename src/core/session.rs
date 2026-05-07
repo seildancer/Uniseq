@@ -9,18 +9,17 @@ use std::time::{Duration, SystemTime};
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
-    BlockSnapshot, CoreError, IncomingPageRefSnapshot, PageDetail, PageId, PageSummary,
-    WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
+    BlockSnapshot, CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageDetail, PageId,
+    PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
 use crate::core::files::{load_page_from_relative_path, load_workspace_cache};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete,
-    apply_page_create as write_page_create,
-    apply_page_delete_subtree as write_page_delete_subtree, apply_page_move_with_update,
-    apply_page_rename_with_update, apply_stream_page_create as write_stream_page_create,
-    apply_stream_page_delete as write_stream_page_delete, is_transaction_relative_path,
-    recover_workspace_transactions, transaction_record_exists,
+    apply_page_create_with_update, apply_page_delete_subtree_with_update, apply_page_move_with_update,
+    apply_page_rename_with_update, apply_stream_page_create_with_update,
+    apply_stream_page_delete_with_update, is_transaction_relative_path, recover_workspace_transactions,
+    transaction_record_exists,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -208,23 +207,29 @@ impl WorkspaceSession {
             .with_read_api(|read_api| read_api.page_incoming_refs(target_page_id))
     }
 
+    pub fn page_outgoing_refs(
+        &self,
+        source_page_id: &PageId,
+    ) -> Result<Vec<OutgoingPageRefSnapshot>, CoreError> {
+        self.state
+            .read()
+            .unwrap()
+            .with_read_api(|read_api| read_api.page_outgoing_refs(source_page_id))
+    }
+
     pub fn apply_page_create(&self, request: PageCreate) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_refreshing_write(|root, cache| {
-                write_page_create(root, cache, request)?;
-                Ok(())
-            })
+            .apply_incremental_write(|root, cache| apply_page_create_with_update(root, cache, request))
     }
 
     pub fn apply_page_delete_subtree(&self, request: PageDeleteSubtree) -> Result<(), CoreError> {
         self.state
             .write()
             .unwrap()
-            .apply_refreshing_write(|root, cache| {
-                write_page_delete_subtree(root, cache, request)?;
-                Ok(())
+            .apply_incremental_write(|root, cache| {
+                apply_page_delete_subtree_with_update(root, cache, request)
             })
     }
 
@@ -232,9 +237,8 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_refreshing_write(|root, cache| {
-                write_stream_page_create(root, cache, request)?;
-                Ok(())
+            .apply_incremental_write(|root, cache| {
+                apply_stream_page_create_with_update(root, cache, request)
             })
     }
 
@@ -242,9 +246,8 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_refreshing_write(|root, cache| {
-                write_stream_page_delete(root, cache, request)?;
-                Ok(())
+            .apply_incremental_write(|root, cache| {
+                apply_stream_page_delete_with_update(root, cache, request)
             })
     }
 
@@ -493,18 +496,6 @@ impl WorkspaceSessionState {
 
         let update = classify_snapshot_fs_changes(&self.fs_snapshot, &snapshot);
         self.apply_incremental_fs_update(snapshot, update)
-    }
-
-    fn apply_refreshing_write(
-        &mut self,
-        write: impl FnOnce(&Path, &mut WorkspaceCache) -> Result<(), CoreError>,
-    ) -> Result<(), CoreError> {
-        let old_states = self.page_event_states();
-        write(&self.root, &mut self.cache)?;
-        self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
-        self.emit_cache_diff(old_states);
-        self.last_watch_error = None;
-        Ok(())
     }
 
     fn apply_incremental_write(
@@ -1562,7 +1553,11 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![WorkspaceEvent::PagesChanged {
-                page_ids: vec![PageId::new(["journal", "2026-05-07"]).unwrap()],
+                page_ids: vec![PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap()],
             }]
         );
 
@@ -1576,7 +1571,11 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![WorkspaceEvent::PageRemoved {
-                page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+                page_id: PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
             }]
         );
     }

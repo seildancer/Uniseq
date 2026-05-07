@@ -1,12 +1,13 @@
 mod planning;
 mod transaction;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{CoreError, PageId, PageLocation, PageName, WorkspaceCache, resolve_workspace_path};
 use crate::core::discovery::materialize_parent_pages;
-use crate::core::files::{load_workspace_cache, page_from_markdown_in_location, refresh_workspace_cache};
+use crate::core::files::{load_workspace_cache, page_from_markdown_in_location};
 
 use planning::{RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
 use transaction::TransactionRecord;
@@ -115,22 +116,7 @@ pub fn apply_page_create(
     cache: &mut WorkspaceCache,
     request: PageCreate,
 ) -> Result<(), CoreError> {
-    let root = root.as_ref();
-    recover_workspace_transactions(root, cache)?;
-
-    let relative_path = PageLocation::Pages.workspace_path_for_page_id(&request.page_id)?;
-    let absolute_path = root.join(&relative_path);
-    if cache.page(&request.page_id).is_some() || absolute_path.exists() {
-        return Err(CoreError::DestinationPageExists);
-    }
-
-    materialize_parent_pages(root, cache, request.page_id.ancestors())?;
-    if let Some(parent) = absolute_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
-    }
-    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    apply_page_create_with_update(root, cache, request).map(|_| ())
 }
 
 pub fn apply_stream_page_create(
@@ -138,22 +124,7 @@ pub fn apply_stream_page_create(
     cache: &mut WorkspaceCache,
     request: StreamPageCreate,
 ) -> Result<(), CoreError> {
-    let root = root.as_ref();
-    recover_workspace_transactions(root, cache)?;
-
-    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
-    let relative_path = stream_location(&request.stream_name).workspace_path_for_page_id(&page_id)?;
-    let absolute_path = root.join(&relative_path);
-    if cache.page(&page_id).is_some() || absolute_path.exists() {
-        return Err(CoreError::DestinationPageExists);
-    }
-
-    if let Some(parent) = absolute_path.parent() {
-        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
-    }
-    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    apply_stream_page_create_with_update(root, cache, request).map(|_| ())
 }
 
 pub fn apply_page_delete_subtree(
@@ -161,39 +132,7 @@ pub fn apply_page_delete_subtree(
     cache: &mut WorkspaceCache,
     request: PageDeleteSubtree,
 ) -> Result<(), CoreError> {
-    let root = root.as_ref();
-    recover_workspace_transactions(root, cache)?;
-
-    let disk_cache = load_workspace_cache(root)?;
-    let Some(page) = disk_cache.page(&request.page_id) else {
-        return Err(CoreError::MissingPage);
-    };
-    if page.location.is_stream_backed() {
-        return Err(CoreError::UnsupportedStreamOperation {
-            operation: "delete_subtree",
-        });
-    }
-
-    let mut deleted_any = false;
-    for page in disk_cache
-        .pages()
-        .values()
-        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id))
-    {
-        let absolute_path = root.join(&page.workspace_path);
-        match fs::remove_file(&absolute_path) {
-            Ok(()) => deleted_any = true,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
-        }
-    }
-
-    if !deleted_any {
-        return Err(CoreError::MissingPage);
-    }
-
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    apply_page_delete_subtree_with_update(root, cache, request).map(|_| ())
 }
 
 pub fn apply_stream_page_delete(
@@ -201,29 +140,7 @@ pub fn apply_stream_page_delete(
     cache: &mut WorkspaceCache,
     request: StreamPageDelete,
 ) -> Result<(), CoreError> {
-    let root = root.as_ref();
-    recover_workspace_transactions(root, cache)?;
-
-    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
-    let disk_cache = load_workspace_cache(root)?;
-    let Some(page) = disk_cache.page(&page_id) else {
-        return Err(CoreError::MissingPage);
-    };
-    if page.location.is_page_backed() {
-        return Err(CoreError::MissingPage);
-    }
-
-    let absolute_path = root.join(&page.workspace_path);
-    match fs::remove_file(&absolute_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(CoreError::MissingPage);
-        }
-        Err(error) => return Err(CoreError::io(&absolute_path, &error)),
-    }
-
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    apply_stream_page_delete_with_update(root, cache, request).map(|_| ())
 }
 
 pub fn apply_page_rename(
@@ -256,6 +173,192 @@ pub(crate) fn apply_page_rename_with_update(
         &target_page_id,
         None,
     )
+}
+
+pub(crate) fn apply_page_create_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageCreate,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let relative_path = PageLocation::Pages.workspace_path_for_page_id(&request.page_id)?;
+    let absolute_path = root.join(&relative_path);
+    if cache.page(&request.page_id).is_some() || absolute_path.exists() {
+        return Err(CoreError::DestinationPageExists);
+    }
+
+    let ancestor_page_ids = request.page_id.ancestors();
+    let referrers = pages_referring_to_any(cache, ancestor_page_ids.iter().chain(std::iter::once(&request.page_id)))?;
+    let created_ancestors = materialize_parent_pages(root, cache, ancestor_page_ids)?;
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+    }
+    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
+    cache.upsert_page(crate::core::Page::new(request.page_id.clone(), ""));
+
+    let mut changed_page_ids = created_ancestors.clone();
+    changed_page_ids.push(request.page_id.clone());
+    changed_page_ids.extend(referrers);
+    changed_page_ids.sort();
+    changed_page_ids.dedup();
+
+    let mut written_paths = created_ancestors
+        .into_iter()
+        .filter_map(|page_id| cache.page(&page_id).map(|page| page.workspace_path.clone()))
+        .collect::<Vec<_>>();
+    written_paths.push(relative_path);
+
+    Ok(IncrementalWorkspaceUpdate {
+        written_paths,
+        deleted_paths: Vec::new(),
+        changed_page_ids,
+        removed_page_ids: Vec::new(),
+    })
+}
+
+pub(crate) fn apply_stream_page_create_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: StreamPageCreate,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
+    let relative_path = stream_location(&request.stream_name).workspace_path_for_page_id(&page_id)?;
+    let absolute_path = root.join(&relative_path);
+    if cache.page(&page_id).is_some() || absolute_path.exists() {
+        return Err(CoreError::DestinationPageExists);
+    }
+
+    let referrers = pages_referring_to_any(cache, std::iter::once(&page_id))?;
+    if let Some(parent) = absolute_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
+    }
+    fs::write(&absolute_path, "").map_err(|error| CoreError::io(&absolute_path, &error))?;
+    cache.upsert_page(crate::core::Page::new_in_location(
+        page_id.clone(),
+        stream_location(&request.stream_name),
+        "",
+    )?);
+
+    let mut changed_page_ids = vec![page_id];
+    changed_page_ids.extend(referrers);
+    changed_page_ids.sort();
+    changed_page_ids.dedup();
+
+    Ok(IncrementalWorkspaceUpdate {
+        written_paths: vec![relative_path],
+        deleted_paths: Vec::new(),
+        changed_page_ids,
+        removed_page_ids: Vec::new(),
+    })
+}
+
+pub(crate) fn apply_page_delete_subtree_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageDeleteSubtree,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let disk_cache = load_workspace_cache(root)?;
+    let Some(page) = disk_cache.page(&request.page_id) else {
+        return Err(CoreError::MissingPage);
+    };
+    if page.location.is_stream_backed() {
+        return Err(CoreError::UnsupportedStreamOperation {
+            operation: "delete_subtree",
+        });
+    }
+
+    let deleted_pages = disk_cache
+        .pages()
+        .values()
+        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deleted_pages.is_empty() {
+        return Err(CoreError::MissingPage);
+    }
+
+    let deleted_page_ids = deleted_pages
+        .iter()
+        .map(|page| page.page_id.clone())
+        .collect::<Vec<_>>();
+    let deleted_set = deleted_page_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut changed_page_ids = pages_referring_to_any(cache, deleted_page_ids.iter())?
+        .into_iter()
+        .filter(|page_id| !deleted_set.contains(page_id))
+        .collect::<Vec<_>>();
+    if let Some(parent_page_id) = request.page_id.parent() {
+        if !deleted_set.contains(&parent_page_id) && cache.page(&parent_page_id).is_some() {
+            changed_page_ids.push(parent_page_id);
+        }
+    }
+
+    let mut deleted_paths = Vec::new();
+    for page in &deleted_pages {
+        let absolute_path = root.join(&page.workspace_path);
+        match fs::remove_file(&absolute_path) {
+            Ok(()) => deleted_paths.push(page.workspace_path.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+        }
+    }
+
+    for page_id in &deleted_page_ids {
+        cache.remove_page(page_id);
+    }
+
+    changed_page_ids.sort();
+    changed_page_ids.dedup();
+
+    Ok(IncrementalWorkspaceUpdate {
+        written_paths: Vec::new(),
+        deleted_paths,
+        changed_page_ids,
+        removed_page_ids: deleted_page_ids,
+    })
+}
+
+pub(crate) fn apply_stream_page_delete_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: StreamPageDelete,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+
+    let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
+    let disk_cache = load_workspace_cache(root)?;
+    let Some(page) = disk_cache.page(&page_id) else {
+        return Err(CoreError::MissingPage);
+    };
+    if page.location.is_page_backed() {
+        return Err(CoreError::MissingPage);
+    }
+
+    let changed_page_ids = pages_referring_to_any(cache, std::iter::once(&page_id))?;
+    let absolute_path = root.join(&page.workspace_path);
+    match fs::remove_file(&absolute_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CoreError::MissingPage);
+        }
+        Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+    }
+    cache.remove_page(&page_id);
+
+    Ok(IncrementalWorkspaceUpdate {
+        written_paths: Vec::new(),
+        deleted_paths: vec![page.workspace_path.clone()],
+        changed_page_ids,
+        removed_page_ids: vec![page_id],
+    })
 }
 
 pub fn apply_page_move(
@@ -448,11 +551,27 @@ fn stream_location(stream_name: &PageName) -> PageLocation {
     }
 }
 
+fn pages_referring_to_any<'a>(
+    cache: &WorkspaceCache,
+    target_page_ids: impl IntoIterator<Item = &'a PageId>,
+) -> Result<Vec<PageId>, CoreError> {
+    let target_page_ids = target_page_ids.into_iter().cloned().collect::<BTreeSet<_>>();
+    let mut source_page_ids = BTreeSet::new();
+
+    for page in cache.pages().values() {
+        for outgoing_ref in page.outgoing_refs() {
+            if target_page_ids.contains(&outgoing_ref.target_page_id) {
+                source_page_ids.insert(page.page_id.clone());
+                break;
+            }
+        }
+    }
+
+    Ok(source_page_ids.into_iter().collect())
+}
+
 fn stream_page_id(stream_name: &PageName, date_name: &PageName) -> Result<PageId, CoreError> {
-    Ok(PageId::from_page_names(vec![
-        stream_name.clone(),
-        date_name.clone(),
-    ])?)
+    Ok(PageId::stream(stream_name.clone(), date_name.clone())?)
 }
 
 fn reject_stream_page_operation(
@@ -725,7 +844,13 @@ mod tests {
 
         assert!(workspace.file_exists("streams/journal/2026-05-07.md"));
         assert!(cache
-            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+            .page(
+                &PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
+            )
             .is_some());
 
         apply_stream_page_delete(
@@ -740,7 +865,13 @@ mod tests {
 
         assert!(!workspace.file_exists("streams/journal/2026-05-07.md"));
         assert!(cache
-            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+            .page(
+                &PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
+            )
             .is_none());
     }
 
@@ -755,7 +886,11 @@ mod tests {
             &workspace.root,
             &mut cache,
             PageRename {
-                source_page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+                source_page_id: PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
                 new_leaf_name: PageName::new("2026-05-08").unwrap(),
             },
         )
@@ -771,7 +906,11 @@ mod tests {
             &workspace.root,
             &mut cache,
             PageMove {
-                source_page_id: PageId::new(["journal", "2026-05-07"]).unwrap(),
+                source_page_id: PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
                 destination_parent_page_id: Some(PageId::new(["A"]).unwrap()),
             },
         )

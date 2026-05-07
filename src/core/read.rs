@@ -7,6 +7,7 @@ use super::{
 pub struct PageSummary {
     pub page_id: PageId,
     pub title: String,
+    pub revision: FileFingerprint,
     pub parent_page_id: Option<PageId>,
     pub child_page_count: usize,
 }
@@ -15,6 +16,7 @@ pub struct PageSummary {
 pub struct PageDetail {
     pub summary: PageSummary,
     pub incoming_refs: Vec<IncomingPageRefSnapshot>,
+    pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
     pub outgoing_ref_count: usize,
 }
 
@@ -75,6 +77,7 @@ impl<'a> WorkspaceReadApi<'a> {
         Ok(PageDetail {
             summary: page_summary(page),
             incoming_refs: incoming_ref_snapshots(page_id, page),
+            outgoing_refs: outgoing_ref_snapshots(self.cache, page),
             outgoing_ref_count: page.outgoing_refs().count(),
         })
     }
@@ -110,6 +113,36 @@ impl<'a> WorkspaceReadApi<'a> {
             .ok_or(CoreError::MissingPage)?;
         Ok(incoming_ref_snapshots(target_page_id, target_page))
     }
+
+    pub fn page_outgoing_refs(
+        &self,
+        source_page_id: &PageId,
+    ) -> Result<Vec<OutgoingPageRefSnapshot>, CoreError> {
+        let source_page = self
+            .cache
+            .page(source_page_id)
+            .ok_or(CoreError::MissingPage)?;
+        Ok(outgoing_ref_snapshots(self.cache, source_page))
+    }
+
+    pub fn pages_with_missing_targets(&self) -> Vec<PageSummary> {
+        self.cache
+            .pages()
+            .values()
+            .filter(|page| page.outgoing_refs().any(|outgoing_ref| self.cache.page(&outgoing_ref.target_page_id).is_none()))
+            .map(page_summary)
+            .collect()
+    }
+
+    pub fn all_pages_paginated(&self, offset: usize, limit: usize) -> Vec<PageSummary> {
+        self.cache
+            .pages()
+            .values()
+            .skip(offset)
+            .take(limit)
+            .map(page_summary)
+            .collect()
+    }
 }
 
 fn incoming_ref_snapshots(
@@ -133,9 +166,21 @@ fn page_summary(page: &Page) -> PageSummary {
     PageSummary {
         page_id: page.page_id.clone(),
         title: page.title.clone(),
+        revision: page.fingerprint,
         parent_page_id: page.parent_page_id(),
         child_page_count: page.child_page_ids.len(),
     }
+}
+
+fn outgoing_ref_snapshots(cache: &WorkspaceCache, source_page: &Page) -> Vec<OutgoingPageRefSnapshot> {
+    source_page
+        .outgoing_refs()
+        .map(|outgoing_ref| OutgoingPageRefSnapshot {
+            target_page_id: outgoing_ref.target_page_id.clone(),
+            ref_span: outgoing_ref.ref_span,
+            target_exists: cache.page(&outgoing_ref.target_page_id).is_some(),
+        })
+        .collect()
 }
 
 fn block_snapshot(
@@ -207,18 +252,21 @@ mod tests {
                 PageSummary {
                     page_id: PageId::new(["A"]).unwrap(),
                     title: "A".to_owned(),
+                    revision: FileFingerprint::from_text(""),
                     parent_page_id: None,
                     child_page_count: 1,
                 },
                 PageSummary {
                     page_id: PageId::new(["A", "B"]).unwrap(),
                     title: "B".to_owned(),
+                    revision: FileFingerprint::from_text(""),
                     parent_page_id: Some(PageId::new(["A"]).unwrap()),
                     child_page_count: 0,
                 },
                 PageSummary {
                     page_id: PageId::new(["C"]).unwrap(),
                     title: "C".to_owned(),
+                    revision: FileFingerprint::from_text(""),
                     parent_page_id: None,
                     child_page_count: 0,
                 },
@@ -236,8 +284,10 @@ mod tests {
         let detail = read_api.page_detail(&PageId::new(["A"]).unwrap()).unwrap();
 
         assert_eq!(detail.summary.title, "A");
+        assert_eq!(detail.summary.revision, FileFingerprint::from_text(text));
         assert!(detail.incoming_refs.is_empty());
         assert_eq!(detail.outgoing_ref_count, 2);
+        assert_eq!(detail.outgoing_refs.len(), 2);
     }
 
     #[test]
@@ -307,5 +357,32 @@ mod tests {
                 .unwrap_err(),
             CoreError::MissingPage
         );
+    }
+
+    #[test]
+    fn page_outgoing_refs_and_missing_target_queries_are_available() {
+        let text = "- [[B]] and [[Missing]]\n";
+        let cache =
+            WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
+        let read_api = WorkspaceReadApi::new(&cache);
+
+        let outgoing_refs = read_api
+            .page_outgoing_refs(&PageId::new(["A"]).unwrap())
+            .unwrap();
+        assert_eq!(outgoing_refs.len(), 2);
+        assert!(outgoing_refs.iter().any(|outgoing_ref| outgoing_ref.target_exists));
+        assert!(outgoing_refs
+            .iter()
+            .any(|outgoing_ref| !outgoing_ref.target_exists));
+
+        assert_eq!(
+            read_api
+                .pages_with_missing_targets()
+                .into_iter()
+                .map(|summary| summary.page_id)
+                .collect::<Vec<_>>(),
+            vec![PageId::new(["A"]).unwrap()]
+        );
+        assert_eq!(read_api.all_pages_paginated(1, 1).len(), 1);
     }
 }

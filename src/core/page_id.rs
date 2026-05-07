@@ -53,14 +53,15 @@ impl TryFrom<&str> for PageName {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PageId {
-    segments: Vec<PageName>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PageLocation {
     Pages,
     Stream { stream_name: PageName },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PageId {
+    location: PageLocation,
+    segments: Vec<PageName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,20 +76,53 @@ impl PageId {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        Self::new_in_location(PageLocation::Pages, segments)
+    }
+
+    pub fn new_in_location<I, S>(
+        location: PageLocation,
+        segments: I,
+    ) -> Result<Self, PagePathError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let segments = segments
             .into_iter()
             .map(|segment| PageName::new(segment.as_ref()).map_err(PagePathError::from))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Self::from_page_names(segments)
+        Self::from_page_names_in_location(location, segments)
     }
 
     pub fn from_page_names(segments: Vec<PageName>) -> Result<Self, PagePathError> {
+        Self::from_page_names_in_location(PageLocation::Pages, segments)
+    }
+
+    pub fn stream(stream_name: PageName, date_name: PageName) -> Result<Self, PagePathError> {
+        Self::from_page_names_in_location(
+            PageLocation::Stream {
+                stream_name: stream_name.clone(),
+            },
+            vec![stream_name, date_name],
+        )
+    }
+
+    pub fn from_page_names_in_location(
+        location: PageLocation,
+        segments: Vec<PageName>,
+    ) -> Result<Self, PagePathError> {
         if segments.is_empty() {
             return Err(PagePathError::EmptyPageId);
         }
 
-        Ok(Self { segments })
+        if let PageLocation::Stream { stream_name } = &location {
+            if segments.len() != 2 || segments.first() != Some(stream_name) {
+                return Err(PagePathError::NestedPath);
+            }
+        }
+
+        Ok(Self { location, segments })
     }
 
     pub fn from_workspace_path(path: impl AsRef<Path>) -> Result<Self, PagePathError> {
@@ -96,9 +130,21 @@ impl PageId {
     }
 
     pub fn to_workspace_path(&self) -> PathBuf {
-        PageLocation::Pages
+        self.location
             .workspace_path_for_page_id(self)
-            .expect("page-backed workspace paths are always valid")
+            .expect("workspace paths are always valid for resolved page ids")
+    }
+
+    pub fn location(&self) -> &PageLocation {
+        &self.location
+    }
+
+    pub fn is_page_backed(&self) -> bool {
+        self.location.is_page_backed()
+    }
+
+    pub fn is_stream_backed(&self) -> bool {
+        self.location.is_stream_backed()
     }
 
     pub fn segments(&self) -> &[PageName] {
@@ -112,19 +158,29 @@ impl PageId {
     }
 
     pub fn parent(&self) -> Option<Self> {
+        if !self.is_page_backed() {
+            return None;
+        }
+
         let parent_len = self.segments.len().checked_sub(1)?;
         if parent_len == 0 {
             return None;
         }
 
         Some(Self {
+            location: self.location.clone(),
             segments: self.segments[..parent_len].to_vec(),
         })
     }
 
     pub fn ancestors(&self) -> Vec<Self> {
+        if !self.is_page_backed() {
+            return Vec::new();
+        }
+
         (1..self.segments.len())
             .map(|len| Self {
+                location: self.location.clone(),
                 segments: self.segments[..len].to_vec(),
             })
             .collect()
@@ -141,17 +197,15 @@ impl PageId {
 
 impl PageLocation {
     pub fn workspace_path_for_page_id(&self, page_id: &PageId) -> Result<PathBuf, PagePathError> {
+        if page_id.location() != self {
+            return Err(PagePathError::NestedPath);
+        }
+
         match self {
             Self::Pages => Ok(PathBuf::from(PAGES_ROOT).join(flat_page_file_name(page_id))),
-            Self::Stream { stream_name } => {
-                if page_id.segments().len() != 2 || page_id.segments()[0] != *stream_name {
-                    return Err(PagePathError::NestedPath);
-                }
-
-                Ok(PathBuf::from(STREAMS_ROOT)
-                    .join(stream_name.as_str())
-                    .join(markdown_file_name(page_id.leaf_name())))
-            }
+            Self::Stream { stream_name } => Ok(PathBuf::from(STREAMS_ROOT)
+                .join(stream_name.as_str())
+                .join(markdown_file_name(page_id.leaf_name()))),
         }
     }
 
@@ -289,8 +343,8 @@ fn resolve_page_backed_workspace_path(
 
     let page_id = parse_page_file_name(&components[1])?;
     Ok(ResolvedWorkspacePath {
+        location: page_id.location().clone(),
         page_id,
-        location: PageLocation::Pages,
     })
 }
 
@@ -303,11 +357,11 @@ fn resolve_stream_workspace_path(
 
     let stream_name = PageName::new(components[1].clone()).map_err(PagePathError::from)?;
     let date_name = parse_single_page_name_file_name(&components[2])?;
-    let page_id = PageId::from_page_names(vec![stream_name.clone(), date_name])?;
-    Ok(ResolvedWorkspacePath {
-        page_id,
-        location: PageLocation::Stream { stream_name },
-    })
+    let location = PageLocation::Stream {
+        stream_name: stream_name.clone(),
+    };
+    let page_id = PageId::from_page_names_in_location(location.clone(), vec![stream_name, date_name])?;
+    Ok(ResolvedWorkspacePath { page_id, location })
 }
 
 fn parse_page_file_name(file_name: &str) -> Result<PageId, PagePathError> {
@@ -380,6 +434,7 @@ mod tests {
             page_id
         );
         assert_eq!(page_id.hierarchy_display(), "A/B/C");
+        assert!(page_id.is_page_backed());
     }
 
     #[test]
@@ -395,6 +450,18 @@ mod tests {
             PathBuf::from("streams").join("journal").join("2026-05-07.md")
         );
         assert_eq!(journal.location.parent_page_id(&journal.page_id), None);
+        assert!(journal.page_id.is_stream_backed());
+    }
+
+    #[test]
+    fn page_and_stream_with_same_segments_are_distinct() {
+        let page = PageId::new(["journal", "2026-05-07"]).unwrap();
+        let stream = resolve_workspace_path("streams/journal/2026-05-07.md")
+            .unwrap()
+            .page_id;
+
+        assert_ne!(page, stream);
+        assert_eq!(page.hierarchy_display(), stream.hierarchy_display());
     }
 
     #[test]
@@ -413,8 +480,10 @@ mod tests {
     }
 
     #[test]
-    fn root_pages_have_no_parent() {
-        let page_id = PageId::new(["A"]).unwrap();
+    fn stream_pages_have_no_hierarchy_relationships() {
+        let page_id = resolve_workspace_path("streams/journal/2026-05-07.md")
+            .unwrap()
+            .page_id;
 
         assert!(page_id.parent().is_none());
         assert!(page_id.ancestors().is_empty());

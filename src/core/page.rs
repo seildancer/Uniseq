@@ -49,6 +49,9 @@ impl Page {
         location: PageLocation,
         text: impl Into<String>,
     ) -> Result<Self, PagePathError> {
+        if page_id.location() != &location {
+            return Err(PagePathError::NestedPath);
+        }
         let title = page_id.leaf_name().as_str().to_owned();
         let workspace_path = location.workspace_path_for_page_id(&page_id)?;
         let text = text.into();
@@ -143,7 +146,11 @@ mod tests {
     #[test]
     fn stream_pages_keep_stream_path_but_have_no_parent_page() {
         let page = Page::new_in_location(
-            PageId::new(["journal", "2026-05-07"]).unwrap(),
+            PageId::stream(
+                super::super::PageName::new("journal").unwrap(),
+                super::super::PageName::new("2026-05-07").unwrap(),
+            )
+            .unwrap(),
             PageLocation::Stream {
                 stream_name: super::super::PageName::new("journal").unwrap(),
             },

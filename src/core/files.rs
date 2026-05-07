@@ -5,14 +5,6 @@ use super::{
     CoreError, Page, WorkspaceCache, discover_workspace, parse_blocks, resolve_workspace_path,
 };
 
-pub(crate) fn refresh_workspace_cache(
-    root: impl AsRef<Path>,
-    cache: &mut WorkspaceCache,
-) -> Result<(), CoreError> {
-    *cache = load_workspace_cache(root)?;
-    Ok(())
-}
-
 pub(crate) fn load_workspace_cache(root: impl AsRef<Path>) -> Result<WorkspaceCache, CoreError> {
     Ok(discover_workspace(root)?.cache)
 }

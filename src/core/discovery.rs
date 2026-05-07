@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,9 +17,19 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
     collect_markdown_paths(root, root, &mut markdown_paths)?;
     markdown_paths.sort();
 
+    let mut page_paths = BTreeMap::new();
     let mut pages = Vec::with_capacity(markdown_paths.len());
     for relative_path in markdown_paths {
-        pages.push(load_page_from_relative_path(root, &relative_path)?);
+        let page = load_page_from_relative_path(root, &relative_path)?;
+        if page_paths
+            .insert(page.page_id.clone(), relative_path.clone())
+            .is_some()
+        {
+            return Err(CoreError::DuplicatePageIdentity {
+                page_id: page.page_id.hierarchy_display(),
+            });
+        }
+        pages.push(page);
     }
 
     let mut cache = WorkspaceCache::from_pages(pages);
@@ -247,6 +258,35 @@ mod tests {
             c.incoming_refs[0].source_page_id,
             PageId::new(["A"]).unwrap()
         );
+    }
+
+    #[test]
+    fn discovery_keeps_page_and_stream_with_same_segments_distinct() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("journal___2026-05-07.md", "");
+        workspace.write_file("streams/journal/2026-05-07.md", "");
+
+        let discovery = discover_workspace(&workspace.root).unwrap();
+
+        assert!(discovery
+            .cache
+            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+            .is_some());
+        assert!(discovery
+            .cache
+            .page(
+                &PageId::stream(
+                    crate::PageName::new("journal").unwrap(),
+                    crate::PageName::new("2026-05-07").unwrap(),
+                )
+                .unwrap(),
+            )
+            .is_some());
+        assert!(discovery
+            .cache
+            .page(&PageId::new(["journal"]).unwrap())
+            .is_some());
+        assert_eq!(discovery.cache.pages().len(), 3);
     }
 
     #[test]

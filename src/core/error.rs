@@ -133,6 +133,7 @@ pub enum CoreError {
     InvalidPagePath(PagePathError),
     InvalidSpan(SpanError),
     InvalidParse(ParserError),
+    DuplicatePageIdentity { page_id: String },
     Io { path: PathBuf, kind: io::ErrorKind },
     StructuralConflict { path: PathBuf },
     MissingPage,
@@ -150,6 +151,9 @@ impl fmt::Display for CoreError {
             Self::InvalidPagePath(err) => write!(f, "{err}"),
             Self::InvalidSpan(err) => write!(f, "{err}"),
             Self::InvalidParse(err) => write!(f, "{err}"),
+            Self::DuplicatePageIdentity { page_id } => {
+                write!(f, "duplicate page identity detected for '{page_id}'")
+            }
             Self::Io { path, kind } => {
                 write!(f, "i/o error at '{}': {kind}", path.display())
             }
