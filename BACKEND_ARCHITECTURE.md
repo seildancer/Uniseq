@@ -42,3 +42,15 @@
 - Durable global block UUIDs.
 - Manual `block -> block` references.
 - Hidden database state as the real product model.
+
+## Implementation steps:
+
+1. Core types and invariants: define PageId, path/name rules, block/source-span types, and the file-first constraints everything else relies on.
+2. Workspace discovery and page hierarchy: scan .md files, derive page identities, and resolve A___B___C.md into a page tree.
+3. Parent-page materialization: enforce the hierarchy rule by creating missing parents like A.md when A___B.md exists.
+4. Markdown-to-block-tree parser with source spans: parse each page into blocks and record exact text ranges so later edits can be targeted safely.
+5. Page reference extraction and rebuildable indexes: collect [[Page]] and #Page refs, ignore code blocks, and build disposable lookup indexes from files.
+6. Read APIs for pages, blocks, and linked references: expose stable queries the frontend can consume without needing to know file-layout details.
+7. Source-anchored block subtree edits: update markdown by replacing the exact source region for a block subtree rather than mutating a hidden DB model.
+8. Crash-safe page rename/move with reference rewrites: rename or relocate pages transactionally, rewrite inbound refs, and avoid leaving the workspace half-updated.
+9. Recovery and incremental file watching: recover interrupted operations on startup, then add invalidation/watch logic so the backend stays fast without becoming the source of truth.

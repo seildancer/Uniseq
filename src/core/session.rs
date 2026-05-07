@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
+
+use notify::{
+    Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher,
+    event::{CreateKind, ModifyKind, RemoveKind},
+};
 
 use super::{
     BlockHandle, BlockSnapshot, BlockSubtreeEdit, CoreError, LinkedRefEntry, PageDetail, PageId,
@@ -17,7 +20,8 @@ use crate::core::files::{
     load_page_from_relative_path, load_workspace_cache, refresh_workspace_cache,
 };
 use crate::core::rename::{
-    PageMove, PageRename, recover_workspace_transactions, transaction_record_exists,
+    PageMove, PageRename, is_transaction_relative_path, recover_workspace_transactions,
+    transaction_record_exists,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -25,18 +29,36 @@ const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
     RecoveryApplied,
+    // Advisory coarse invalidation for runtime consumers. Frontends should treat
+    // page-level events as the authoritative selective refresh signal and may
+    // use WorkspaceReloaded only for broad caches or diagnostics.
     WorkspaceReloaded,
     PagesChanged { page_ids: Vec<PageId> },
     PageRemoved { page_id: PageId },
+    WatcherModeChanged { mode: WatcherMode },
+    WatcherDegradedToPolling { reason: WatcherFallbackReason },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatcherMode {
+    Native,
+    Polling,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatcherFallbackReason {
+    NativeWatcherSetupFailed { message: String },
+    NativeWatcherRuntimeFailed { message: String },
+    ControlChannelDisconnected,
 }
 
 pub struct WorkspaceSession {
     state: Arc<Mutex<WorkspaceSessionState>>,
-    watcher: Option<PollingWatcher>,
+    watcher: Option<WatcherHandle>,
 }
 
-struct PollingWatcher {
-    stop: Arc<AtomicBool>,
+struct WatcherHandle {
+    stop: Sender<WatchLoopMessage>,
     handle: JoinHandle<()>,
 }
 
@@ -47,6 +69,8 @@ struct WorkspaceSessionState {
     fs_snapshot: WorkspaceFsSnapshot,
     pending_events: Vec<WorkspaceEvent>,
     last_watch_error: Option<CoreError>,
+    watcher_mode: Option<WatcherMode>,
+    watcher_fallback_reason: Option<WatcherFallbackReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,10 +92,30 @@ struct CacheDiff {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PageEventState {
+    fingerprint: super::FileFingerprint,
+    child_page_ids: Vec<PageId>,
+    incoming_refs: Vec<super::IncomingRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum IsolatedFsChange {
     Created(PathBuf),
     Modified(PathBuf),
     Deleted(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeEventAction {
+    Noop,
+    TransactionPathChanged,
+    Isolated(IsolatedFsChange),
+    FallbackToSnapshot,
+}
+
+enum WatchLoopMessage {
+    Fs(notify::Result<notify::Event>),
+    Stop,
 }
 
 impl WorkspaceSession {
@@ -96,6 +140,8 @@ impl WorkspaceSession {
                 fs_snapshot,
                 pending_events,
                 last_watch_error: None,
+                watcher_mode: None,
+                watcher_fallback_reason: None,
             })),
             watcher: None,
         })
@@ -180,29 +226,27 @@ impl WorkspaceSession {
         self.state.lock().unwrap().last_watch_error.take()
     }
 
+    pub fn watcher_mode(&self) -> Option<WatcherMode> {
+        self.state.lock().unwrap().watcher_mode
+    }
+
+    pub fn watcher_fallback_reason(&self) -> Option<WatcherFallbackReason> {
+        self.state.lock().unwrap().watcher_fallback_reason.clone()
+    }
+
     pub fn start_watching(&mut self, poll_interval: Duration) {
         if self.watcher.is_some() {
             return;
         }
 
         let state = Arc::clone(&self.state);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_signal = Arc::clone(&stop);
+        let (tx, rx) = mpsc::channel();
+        let stop = tx.clone();
         let handle = thread::spawn(move || {
-            while !stop_signal.load(Ordering::Relaxed) {
-                thread::sleep(poll_interval);
-                if stop_signal.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let mut state = state.lock().unwrap();
-                if let Err(error) = state.poll_once() {
-                    state.last_watch_error = Some(error);
-                }
-            }
+            run_native_or_polling_watch_loop(state, rx, tx, poll_interval);
         });
 
-        self.watcher = Some(PollingWatcher { stop, handle });
+        self.watcher = Some(WatcherHandle { stop, handle });
     }
 
     pub fn start_watching_default(&mut self) {
@@ -214,7 +258,7 @@ impl WorkspaceSession {
             return;
         };
 
-        watcher.stop.store(true, Ordering::Relaxed);
+        let _ = watcher.stop.send(WatchLoopMessage::Stop);
         let _ = watcher.handle.join();
     }
 }
@@ -232,6 +276,112 @@ impl WorkspaceSessionState {
 
     fn drain_events(&mut self) -> Vec<WorkspaceEvent> {
         std::mem::take(&mut self.pending_events)
+    }
+
+    fn enqueue_event(&mut self, event: WorkspaceEvent) {
+        match event {
+            WorkspaceEvent::PagesChanged { mut page_ids } => {
+                page_ids.sort();
+                page_ids.dedup();
+
+                if let Some(WorkspaceEvent::PagesChanged {
+                    page_ids: existing_page_ids,
+                }) = self
+                    .pending_events
+                    .iter_mut()
+                    .find(|existing| matches!(existing, WorkspaceEvent::PagesChanged { .. }))
+                {
+                    existing_page_ids.extend(page_ids);
+                    existing_page_ids.sort();
+                    existing_page_ids.dedup();
+                } else if !page_ids.is_empty() {
+                    self.pending_events
+                        .push(WorkspaceEvent::PagesChanged { page_ids });
+                }
+            }
+            WorkspaceEvent::WatcherModeChanged { mode } => {
+                self.pending_events
+                    .retain(|event| !matches!(event, WorkspaceEvent::WatcherModeChanged { .. }));
+                self.pending_events
+                    .push(WorkspaceEvent::WatcherModeChanged { mode });
+            }
+            WorkspaceEvent::WatcherDegradedToPolling { reason } => {
+                self.pending_events.retain(
+                    |event| !matches!(event, WorkspaceEvent::WatcherDegradedToPolling { .. }),
+                );
+                self.pending_events
+                    .push(WorkspaceEvent::WatcherDegradedToPolling { reason });
+            }
+            WorkspaceEvent::RecoveryApplied => {
+                if !self
+                    .pending_events
+                    .iter()
+                    .any(|event| matches!(event, WorkspaceEvent::RecoveryApplied))
+                {
+                    self.pending_events.push(WorkspaceEvent::RecoveryApplied);
+                }
+            }
+            WorkspaceEvent::WorkspaceReloaded => {
+                if !self
+                    .pending_events
+                    .iter()
+                    .any(|event| matches!(event, WorkspaceEvent::WorkspaceReloaded))
+                {
+                    self.pending_events.push(WorkspaceEvent::WorkspaceReloaded);
+                }
+            }
+            WorkspaceEvent::PageRemoved { page_id } => {
+                if !self.pending_events.iter().any(|event| {
+                    matches!(event, WorkspaceEvent::PageRemoved { page_id: existing } if existing == &page_id)
+                }) {
+                    self.pending_events.push(WorkspaceEvent::PageRemoved { page_id });
+                }
+            }
+        }
+    }
+
+    fn enqueue_events(&mut self, events: impl IntoIterator<Item = WorkspaceEvent>) {
+        for event in events {
+            self.enqueue_event(event);
+        }
+    }
+
+    fn record_watcher_mode(&mut self, mode: WatcherMode) {
+        if self.watcher_mode == Some(mode) {
+            return;
+        }
+
+        self.watcher_mode = Some(mode);
+        self.enqueue_event(WorkspaceEvent::WatcherModeChanged { mode });
+    }
+
+    fn record_watcher_degraded_to_polling(&mut self, reason: WatcherFallbackReason) {
+        self.watcher_fallback_reason = Some(reason.clone());
+        self.enqueue_event(WorkspaceEvent::WatcherDegradedToPolling { reason });
+        self.record_watcher_mode(WatcherMode::Polling);
+    }
+
+    fn page_event_states(&self) -> BTreeMap<PageId, PageEventState> {
+        self.cache
+            .pages()
+            .iter()
+            .map(|(page_id, page)| {
+                (
+                    page_id.clone(),
+                    PageEventState {
+                        fingerprint: page.fingerprint,
+                        child_page_ids: page.child_page_ids.clone(),
+                        incoming_refs: page.incoming_refs.clone(),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn emit_cache_diff(&mut self, old_states: BTreeMap<PageId, PageEventState>) {
+        self.enqueue_events(
+            cache_diff_from_states(&old_states, &self.page_event_states()).into_events(),
+        );
     }
 
     fn poll_once(&mut self) -> Result<(), CoreError> {
@@ -255,12 +405,11 @@ impl WorkspaceSessionState {
         &mut self,
         write: impl FnOnce(&Path, &mut WorkspaceCache) -> Result<(), CoreError>,
     ) -> Result<(), CoreError> {
-        let old_cache = self.cache.clone();
+        let old_states = self.page_event_states();
         write(&self.root, &mut self.cache)?;
         self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
         self.last_watch_error = None;
-        self.pending_events
-            .extend(cache_diff(&old_cache, &self.cache).into_events());
+        self.emit_cache_diff(old_states);
         Ok(())
     }
 
@@ -269,7 +418,7 @@ impl WorkspaceSessionState {
         snapshot: WorkspaceFsSnapshot,
         change: IsolatedFsChange,
     ) -> Result<(), CoreError> {
-        let old_cache = self.cache.clone();
+        let old_states = self.page_event_states();
         let refresh_result = match change {
             IsolatedFsChange::Created(relative_path)
             | IsolatedFsChange::Modified(relative_path) => {
@@ -288,8 +437,7 @@ impl WorkspaceSessionState {
             Ok(()) => {
                 self.fs_snapshot = snapshot;
                 self.last_watch_error = None;
-                self.pending_events
-                    .extend(cache_diff(&old_cache, &self.cache).into_events());
+                self.emit_cache_diff(old_states);
                 Ok(())
             }
             Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
@@ -299,8 +447,54 @@ impl WorkspaceSessionState {
         }
     }
 
+    fn apply_isolated_native_event_hint(
+        &mut self,
+        change: IsolatedFsChange,
+    ) -> Result<(), CoreError> {
+        let old_states = self.page_event_states();
+        match &change {
+            IsolatedFsChange::Created(relative_path)
+            | IsolatedFsChange::Modified(relative_path) => {
+                let absolute_path = self.root.join(relative_path);
+                let page = load_page_from_relative_path(&self.root, relative_path)?;
+                let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+                self.cache.upsert_page(page);
+                self.fs_snapshot
+                    .markdown_files
+                    .insert(relative_path.clone(), file_stamp);
+            }
+            IsolatedFsChange::Deleted(relative_path) => {
+                let page_id = PageId::from_workspace_path(relative_path)?;
+                self.cache.remove_page(&page_id);
+                self.fs_snapshot.markdown_files.remove(relative_path);
+            }
+        }
+
+        self.last_watch_error = None;
+        self.emit_cache_diff(old_states);
+        Ok(())
+    }
+
+    fn apply_native_event_hint(&mut self, event: &Event) -> Result<(), CoreError> {
+        match classify_native_event_action(&self.root, event) {
+            NativeEventAction::Noop => {
+                self.last_watch_error = None;
+                Ok(())
+            }
+            NativeEventAction::TransactionPathChanged => self.full_refresh(true),
+            NativeEventAction::Isolated(change) => match self
+                .apply_isolated_native_event_hint(change)
+            {
+                Ok(()) => Ok(()),
+                Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => self.poll_once(),
+                Err(error) => Err(error),
+            },
+            NativeEventAction::FallbackToSnapshot => self.poll_once(),
+        }
+    }
+
     fn full_refresh(&mut self, may_need_recovery: bool) -> Result<(), CoreError> {
-        let old_cache = self.cache.clone();
+        let old_states = self.page_event_states();
         let recovery_applied = if may_need_recovery || transaction_record_exists(&self.root) {
             recover_workspace_transactions(&self.root, &mut self.cache)?
         } else {
@@ -314,12 +508,14 @@ impl WorkspaceSessionState {
         self.fs_snapshot = WorkspaceFsSnapshot::capture(&self.root)?;
         self.last_watch_error = None;
         if recovery_applied {
-            self.pending_events.push(WorkspaceEvent::RecoveryApplied);
+            self.enqueue_event(WorkspaceEvent::RecoveryApplied);
         }
-        self.pending_events.push(WorkspaceEvent::WorkspaceReloaded);
+        // WorkspaceReloaded is intentionally additive rather than authoritative:
+        // callers still receive precise page-level invalidations from the cache
+        // diff below and should prefer those for selective frontend refresh.
+        self.enqueue_event(WorkspaceEvent::WorkspaceReloaded);
 
-        let diff = cache_diff(&old_cache, &self.cache);
-        self.pending_events.extend(diff.into_events());
+        self.emit_cache_diff(old_states);
         Ok(())
     }
 }
@@ -331,6 +527,19 @@ impl WorkspaceFsSnapshot {
         Ok(Self {
             markdown_files,
             transaction_exists: transaction_record_exists(root),
+        })
+    }
+}
+
+impl FileStamp {
+    fn from_absolute_path(absolute_path: &Path) -> Result<Self, CoreError> {
+        let metadata =
+            fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        Ok(Self {
+            len_bytes: metadata.len(),
+            modified_at: metadata
+                .modified()
+                .map_err(|error| CoreError::io(absolute_path, &error))?,
         })
     }
 }
@@ -352,13 +561,16 @@ impl CacheDiff {
     }
 }
 
-fn cache_diff(old_cache: &WorkspaceCache, new_cache: &WorkspaceCache) -> CacheDiff {
+fn cache_diff_from_states(
+    old_states: &BTreeMap<PageId, PageEventState>,
+    new_states: &BTreeMap<PageId, PageEventState>,
+) -> CacheDiff {
     let mut changed_page_ids = BTreeSet::new();
     let mut removed_page_ids = Vec::new();
 
-    for (page_id, old_page) in old_cache.pages() {
-        match new_cache.page(page_id) {
-            Some(new_page) if new_page == old_page => {}
+    for (page_id, old_state) in old_states {
+        match new_states.get(page_id) {
+            Some(new_state) if new_state == old_state => {}
             Some(_) => {
                 changed_page_ids.insert(page_id.clone());
             }
@@ -366,10 +578,10 @@ fn cache_diff(old_cache: &WorkspaceCache, new_cache: &WorkspaceCache) -> CacheDi
         }
     }
 
-    for (page_id, new_page) in new_cache.pages() {
-        if old_cache
-            .page(page_id)
-            .is_none_or(|old_page| old_page != new_page)
+    for (page_id, new_state) in new_states {
+        if old_states
+            .get(page_id)
+            .is_none_or(|old_state| old_state != new_state)
         {
             changed_page_ids.insert(page_id.clone());
         }
@@ -408,6 +620,60 @@ fn classify_isolated_fs_change(
         1 if modified.len() == 1 => Some(IsolatedFsChange::Modified(modified.pop().unwrap())),
         1 if deleted.len() == 1 => Some(IsolatedFsChange::Deleted(deleted.pop().unwrap())),
         _ => None,
+    }
+}
+
+fn classify_native_event_action(root: &Path, event: &Event) -> NativeEventAction {
+    if event.paths.is_empty() {
+        return NativeEventAction::FallbackToSnapshot;
+    }
+
+    let mut markdown_paths = Vec::new();
+    for path in &event.paths {
+        let Ok(relative_path) = path.strip_prefix(root) else {
+            return NativeEventAction::FallbackToSnapshot;
+        };
+
+        if is_transaction_relative_path(relative_path) {
+            return NativeEventAction::TransactionPathChanged;
+        }
+
+        let relative_path = relative_path.to_path_buf();
+        let is_markdown = relative_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
+        if is_markdown {
+            markdown_paths.push(relative_path);
+        }
+    }
+
+    if markdown_paths.is_empty() {
+        return match event.kind {
+            EventKind::Access(_) => NativeEventAction::Noop,
+            _ => NativeEventAction::FallbackToSnapshot,
+        };
+    }
+
+    if markdown_paths.len() != 1 {
+        return NativeEventAction::FallbackToSnapshot;
+    }
+
+    let path = markdown_paths.pop().unwrap();
+    match event.kind {
+        EventKind::Create(CreateKind::Any | CreateKind::File) | EventKind::Create(_) => {
+            NativeEventAction::Isolated(IsolatedFsChange::Created(path))
+        }
+        EventKind::Modify(ModifyKind::Data(_))
+        | EventKind::Modify(ModifyKind::Metadata(_))
+        | EventKind::Modify(ModifyKind::Any) => {
+            NativeEventAction::Isolated(IsolatedFsChange::Modified(path))
+        }
+        EventKind::Remove(RemoveKind::Any | RemoveKind::File) | EventKind::Remove(_) => {
+            NativeEventAction::Isolated(IsolatedFsChange::Deleted(path))
+        }
+        EventKind::Access(_) => NativeEventAction::Noop,
+        _ => NativeEventAction::FallbackToSnapshot,
     }
 }
 
@@ -469,6 +735,118 @@ fn collect_workspace_snapshot(
     }
 
     Ok(())
+}
+
+fn run_native_or_polling_watch_loop(
+    state: Arc<Mutex<WorkspaceSessionState>>,
+    rx: Receiver<WatchLoopMessage>,
+    tx: Sender<WatchLoopMessage>,
+    poll_interval: Duration,
+) {
+    if let Err(reason) = run_native_watch_loop(&state, &rx, tx, poll_interval) {
+        {
+            let mut state = state.lock().unwrap();
+            state.record_watcher_degraded_to_polling(reason);
+        }
+        run_polling_watch_loop(&state, &rx, poll_interval);
+    }
+}
+
+fn run_native_watch_loop(
+    state: &Arc<Mutex<WorkspaceSessionState>>,
+    rx: &Receiver<WatchLoopMessage>,
+    tx: Sender<WatchLoopMessage>,
+    poll_interval: Duration,
+) -> Result<(), WatcherFallbackReason> {
+    let root = state.lock().unwrap().root.clone();
+    let mut watcher = notify::recommended_watcher(move |result| {
+        let _ = tx.send(WatchLoopMessage::Fs(result));
+    })
+    .map_err(|error| WatcherFallbackReason::NativeWatcherSetupFailed {
+        message: error.to_string(),
+    })?;
+
+    watcher
+        .configure(NotifyConfig::default())
+        .map_err(|error| WatcherFallbackReason::NativeWatcherSetupFailed {
+            message: error.to_string(),
+        })?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .map_err(|error| WatcherFallbackReason::NativeWatcherSetupFailed {
+            message: error.to_string(),
+        })?;
+
+    {
+        let mut state = state.lock().unwrap();
+        state.record_watcher_mode(WatcherMode::Native);
+        state.watcher_fallback_reason = None;
+    }
+
+    loop {
+        match rx.recv_timeout(poll_interval) {
+            Ok(WatchLoopMessage::Fs(Ok(event))) => {
+                while let Ok(message) = rx.try_recv() {
+                    match message {
+                        WatchLoopMessage::Fs(Ok(_)) => {}
+                        WatchLoopMessage::Fs(Err(error)) => {
+                            return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
+                                message: error.to_string(),
+                            });
+                        }
+                        WatchLoopMessage::Stop => return Ok(()),
+                    }
+                }
+                apply_native_event_once(state, &event);
+            }
+            Ok(WatchLoopMessage::Fs(Err(error))) => {
+                return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
+                    message: error.to_string(),
+                });
+            }
+            Ok(WatchLoopMessage::Stop) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(WatcherFallbackReason::ControlChannelDisconnected);
+            }
+        }
+    }
+}
+
+fn run_polling_watch_loop(
+    state: &Arc<Mutex<WorkspaceSessionState>>,
+    rx: &Receiver<WatchLoopMessage>,
+    poll_interval: Duration,
+) {
+    {
+        let mut state = state.lock().unwrap();
+        state.record_watcher_mode(WatcherMode::Polling);
+    }
+
+    loop {
+        match rx.recv_timeout(poll_interval) {
+            Ok(WatchLoopMessage::Stop) => break,
+            Ok(WatchLoopMessage::Fs(_)) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                poll_state_once(state);
+            }
+        }
+    }
+}
+
+fn poll_state_once(state: &Arc<Mutex<WorkspaceSessionState>>) {
+    let mut state = state.lock().unwrap();
+    if let Err(error) = state.poll_once() {
+        state.last_watch_error = Some(error);
+    }
+}
+
+fn apply_native_event_once(state: &Arc<Mutex<WorkspaceSessionState>>, event: &Event) {
+    let mut state = state.lock().unwrap();
+    if let Err(error) = state.apply_native_event_hint(event) {
+        state.last_watch_error = Some(error);
+    }
 }
 
 #[cfg(test)]
@@ -569,6 +947,40 @@ mod tests {
     }
 
     #[test]
+    fn native_event_hint_refreshes_single_changed_page_without_snapshot_rescan() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "- [[B]]\n");
+        workspace.write_file("B.md", "");
+        workspace.write_file("C.md", "");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        workspace.write_file("A.md", "- [[C]]\n");
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![workspace.root.join("A.md")],
+            attrs: Default::default(),
+        };
+        session
+            .state
+            .lock()
+            .unwrap()
+            .apply_native_event_hint(&event)
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["A"]).unwrap(),
+                    PageId::new(["B"]).unwrap(),
+                    PageId::new(["C"]).unwrap(),
+                ],
+            }]
+        );
+    }
+
+    #[test]
     fn poll_once_adds_created_pages_incrementally() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "");
@@ -632,6 +1044,9 @@ mod tests {
 
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
+        }));
     }
 
     #[test]
@@ -675,6 +1090,83 @@ mod tests {
     }
 
     #[test]
+    fn event_queue_coalesces_pages_changed_and_watcher_mode_updates() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        let mut state = session.state.lock().unwrap();
+
+        state.enqueue_event(WorkspaceEvent::PagesChanged {
+            page_ids: vec![PageId::new(["B"]).unwrap()],
+        });
+        state.enqueue_event(WorkspaceEvent::PagesChanged {
+            page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap()],
+        });
+        state.enqueue_event(WorkspaceEvent::WatcherModeChanged {
+            mode: WatcherMode::Native,
+        });
+        state.enqueue_event(WorkspaceEvent::WatcherModeChanged {
+            mode: WatcherMode::Polling,
+        });
+
+        assert_eq!(
+            state.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["B"]).unwrap(),],
+                },
+                WorkspaceEvent::WatcherModeChanged {
+                    mode: WatcherMode::Polling,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn transaction_dir_event_triggers_recovery_and_workspace_reload() {
+        let workspace = TestWorkspace::new();
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        stage_page_rename_transaction_for_testing(
+            &workspace.root,
+            &PageId::new(["A", "B"]).unwrap(),
+            &PageName::new("C").unwrap(),
+        )
+        .unwrap();
+
+        let event = Event {
+            kind: EventKind::Modify(ModifyKind::Any),
+            paths: vec![
+                workspace
+                    .root
+                    .join(".uniseq-page-transaction")
+                    .join("manifest.tsv"),
+            ],
+            attrs: Default::default(),
+        };
+        session
+            .state
+            .lock()
+            .unwrap()
+            .apply_native_event_hint(&event)
+            .unwrap();
+
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::RecoveryApplied));
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(
+            session
+                .page_summary(&PageId::new(["A", "C"]).unwrap())
+                .is_ok()
+        );
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+    }
+
+    #[test]
     fn poll_once_is_quiet_after_backend_write_refreshes_snapshot() {
         let workspace = TestWorkspace::new();
         workspace.write_file("A.md", "- old\n");
@@ -710,16 +1202,40 @@ mod tests {
         let mut session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
         session.start_watching(Duration::from_millis(25));
+        thread::sleep(Duration::from_millis(50));
+
+        match session.watcher_mode() {
+            Some(WatcherMode::Native) => {
+                assert!(session.watcher_fallback_reason().is_none());
+            }
+            Some(WatcherMode::Polling) => {
+                assert!(matches!(
+                    session.watcher_fallback_reason(),
+                    Some(
+                        WatcherFallbackReason::NativeWatcherSetupFailed { .. }
+                            | WatcherFallbackReason::NativeWatcherRuntimeFailed { .. }
+                            | WatcherFallbackReason::ControlChannelDisconnected
+                    )
+                ));
+            }
+            None => panic!("watcher mode was not recorded"),
+        }
 
         fs::create_dir_all(workspace.root.join("nested")).unwrap();
         workspace.write_file("nested\\A.md", "");
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(200));
         session.stop_watching();
 
-        assert!(matches!(
-            session.take_last_watch_error(),
-            Some(CoreError::InvalidPagePath(_))
-        ));
+        match session.take_last_watch_error() {
+            Some(CoreError::InvalidPagePath(_)) => {}
+            Some(other) => panic!("unexpected watcher error: {other:?}"),
+            None => {
+                assert!(matches!(
+                    session.poll_once(),
+                    Err(CoreError::InvalidPagePath(_))
+                ));
+            }
+        }
     }
 
     #[test]

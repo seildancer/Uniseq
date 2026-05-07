@@ -58,20 +58,14 @@ pub fn apply_page_rename(
         return Ok(());
     }
 
-    let disk_cache = load_workspace_cache(root)?;
-    let plan = plan_transaction(
-        &disk_cache,
+    plan_and_commit_transaction(
+        root,
+        cache,
         OperationKind::Rename,
         &request.source_page_id,
         &target_page_id,
         None,
-    )?;
-    let mut record = TransactionRecord::stage(root, &plan)?;
-    record.mark_applying(root)?;
-    record.apply_final_state(root, None, false)?;
-    record.remove(root)?;
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    )
 }
 
 pub fn apply_page_move(
@@ -98,20 +92,14 @@ pub fn apply_page_move(
         return Ok(());
     }
 
-    let disk_cache = load_workspace_cache(root)?;
-    let plan = plan_transaction(
-        &disk_cache,
+    plan_and_commit_transaction(
+        root,
+        cache,
         OperationKind::Move,
         &request.source_page_id,
         &target_page_id,
         request.destination_parent_page_id.as_ref(),
-    )?;
-    let mut record = TransactionRecord::stage(root, &plan)?;
-    record.mark_applying(root)?;
-    record.apply_final_state(root, None, false)?;
-    record.remove(root)?;
-    refresh_workspace_cache(root, cache)?;
-    Ok(())
+    )
 }
 
 pub fn recover_workspace_transactions(
@@ -123,16 +111,55 @@ pub fn recover_workspace_transactions(
         return Ok(false);
     }
 
-    let mut record = TransactionRecord::load(root)?;
-    record.mark_applying(root)?;
-    record.apply_final_state(root, None, false)?;
-    record.remove(root)?;
-    refresh_workspace_cache(root, cache)?;
+    let record = TransactionRecord::load(root)?;
+    complete_transaction_record(root, cache, record)?;
     Ok(true)
 }
 
 pub(crate) fn transaction_record_exists(root: impl AsRef<Path>) -> bool {
     TransactionRecord::exists(root.as_ref())
+}
+
+pub(crate) fn is_transaction_relative_path(path: &Path) -> bool {
+    path.components()
+        .next()
+        .is_some_and(|component| component.as_os_str() == ".uniseq-page-transaction")
+}
+
+fn plan_and_commit_transaction(
+    root: &Path,
+    cache: &mut WorkspaceCache,
+    operation_kind: OperationKind,
+    source_page_id: &PageId,
+    target_page_id: &PageId,
+    destination_parent_page_id: Option<&PageId>,
+) -> Result<(), CoreError> {
+    let disk_cache = load_workspace_cache(root)?;
+    let plan = plan_transaction(
+        &disk_cache,
+        operation_kind,
+        source_page_id,
+        target_page_id,
+        destination_parent_page_id,
+    )?;
+    let record = TransactionRecord::stage(root, &plan)?;
+    complete_transaction_record(root, cache, record)
+}
+
+fn complete_transaction_record(
+    root: &Path,
+    cache: &mut WorkspaceCache,
+    mut record: TransactionRecord,
+) -> Result<(), CoreError> {
+    // Recovery intentionally finishes the rename/move to its planned final state
+    // rather than attempting rollback. Markdown files remain authoritative, and
+    // startup/runtime recovery replays the recorded final state until disk and
+    // cache converge on one deterministic committed outcome.
+    record.mark_applying(root)?;
+    record.apply_final_state(root, None, false)?;
+    record.remove(root)?;
+    refresh_workspace_cache(root, cache)?;
+    Ok(())
 }
 
 #[cfg(test)]
