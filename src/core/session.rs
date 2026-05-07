@@ -17,19 +17,15 @@ use crate::core::files::{
     load_workspace_cache,
 };
 use crate::core::structure::{
-    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
-    StreamPageCreate, StreamPageDelete,
-    apply_page_create_with_update, apply_page_delete_subtree_with_update, apply_page_move_with_update,
-    apply_page_rename_with_update, apply_stream_page_create_with_update,
-    apply_stream_page_delete_with_update, is_transaction_relative_path, recover_workspace_transactions,
-    transaction_record_exists,
+    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, StreamPageCreate, StreamPageDelete,
+    apply_page_create_with_update, apply_page_delete_subtree_with_update,
+    apply_stream_page_create_with_update, apply_stream_page_delete_with_update,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
-    RecoveryApplied,
     // Advisory coarse invalidation for runtime consumers. Frontends should treat
     // page-level events as the authoritative selective refresh signal and may
     // use WorkspaceReloaded only for broad caches or diagnostics.
@@ -77,7 +73,6 @@ struct WorkspaceSessionState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkspaceFsSnapshot {
     markdown_files: BTreeMap<PathBuf, FileStamp>,
-    transaction_exists: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +111,6 @@ struct IncrementalFsUpdate {
 struct PreparedFullRefresh {
     cache: WorkspaceCache,
     fs_snapshot: WorkspaceFsSnapshot,
-    recovery_applied: bool,
 }
 
 #[derive(Debug)]
@@ -136,7 +130,6 @@ struct PreparedWrittenFile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NativeEventAction {
     Noop,
-    TransactionPathChanged,
     IncrementalPaths(BTreeSet<PathBuf>),
     FallbackToSnapshot,
 }
@@ -149,24 +142,15 @@ enum WatchLoopMessage {
 impl WorkspaceSession {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, CoreError> {
         let root = root.as_ref().to_path_buf();
-        let mut cache = WorkspaceCache::new();
-        let recovery_applied = recover_workspace_transactions(&root, &mut cache)?;
-        if !recovery_applied {
-            cache = load_workspace_cache(&root)?;
-        }
-
+        let cache = load_workspace_cache(&root)?;
         let fs_snapshot = WorkspaceFsSnapshot::capture(&root)?;
-        let mut pending_events = Vec::new();
-        if recovery_applied {
-            pending_events.push(WorkspaceEvent::RecoveryApplied);
-        }
 
         Ok(Self {
             state: Arc::new(RwLock::new(WorkspaceSessionState {
                 root,
                 cache,
                 fs_snapshot,
-                pending_events,
+                pending_events: Vec::new(),
                 last_watch_error: None,
                 watcher_mode: None,
                 watcher_fallback_reason: None,
@@ -261,20 +245,6 @@ impl WorkspaceSession {
             })
     }
 
-    pub fn apply_page_rename(&self, request: PageRename) -> Result<(), CoreError> {
-        self.state
-            .write()
-            .unwrap()
-            .apply_incremental_write(|root, cache| apply_page_rename_with_update(root, cache, request))
-    }
-
-    pub fn apply_page_move(&self, request: PageMove) -> Result<(), CoreError> {
-        self.state
-            .write()
-            .unwrap()
-            .apply_incremental_write(|root, cache| apply_page_move_with_update(root, cache, request))
-    }
-
     pub fn poll_once(&self) -> Result<(), CoreError> {
         let (root, old_snapshot) = {
             let state = self.state.read().unwrap();
@@ -285,15 +255,6 @@ impl WorkspaceSession {
         if snapshot == old_snapshot {
             self.state.write().unwrap().last_watch_error = None;
             return Ok(());
-        }
-
-        if snapshot.transaction_exists || old_snapshot.transaction_exists {
-            let prepared = prepare_full_refresh(&root, true)?;
-            let mut state = self.state.write().unwrap();
-            if state.fs_snapshot != old_snapshot {
-                return state.poll_once();
-            }
-            return state.apply_prepared_full_refresh(prepared);
         }
 
         let update = classify_snapshot_fs_changes(&old_snapshot, &snapshot);
@@ -399,15 +360,6 @@ impl WorkspaceSessionState {
                 self.pending_events
                     .push(WorkspaceEvent::WatcherDegradedToPolling { reason });
             }
-            WorkspaceEvent::RecoveryApplied => {
-                if !self
-                    .pending_events
-                    .iter()
-                    .any(|event| matches!(event, WorkspaceEvent::RecoveryApplied))
-                {
-                    self.pending_events.push(WorkspaceEvent::RecoveryApplied);
-                }
-            }
             WorkspaceEvent::WorkspaceReloaded => {
                 if !self
                     .pending_events
@@ -511,13 +463,6 @@ impl WorkspaceSessionState {
             return Ok(());
         }
 
-        if snapshot.transaction_exists || self.fs_snapshot.transaction_exists {
-            println!(
-                "[uniseq-backend] whole-cache refresh: polling detected transaction state, triggering full refresh"
-            );
-            return self.full_refresh(true);
-        }
-
         let update = classify_snapshot_fs_changes(&self.fs_snapshot, &snapshot);
         self.apply_incremental_fs_update(snapshot, update)
     }
@@ -549,7 +494,7 @@ impl WorkspaceSessionState {
         let update = self.incremental_update_from_native_paths(relative_paths);
         let prepared = prepare_incremental_fs_update(&self.root, &update)?;
         let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
-            return self.full_refresh(false);
+            return self.full_refresh();
         };
         let deleted_paths = prepared.deleted_paths.clone();
         let written_snapshot_entries = prepared
@@ -575,12 +520,6 @@ impl WorkspaceSessionState {
                 self.last_watch_error = None;
                 Ok(())
             }
-            NativeEventAction::TransactionPathChanged => {
-                println!(
-                    "[uniseq-backend] native watcher fallback: transaction path changed, triggering full refresh"
-                );
-                self.full_refresh(true)
-            }
             NativeEventAction::IncrementalPaths(relative_paths) => {
                 self.apply_incremental_native_paths(relative_paths)
             }
@@ -593,13 +532,12 @@ impl WorkspaceSessionState {
         }
     }
 
-    fn full_refresh(&mut self, may_need_recovery: bool) -> Result<(), CoreError> {
+    fn full_refresh(&mut self) -> Result<(), CoreError> {
         println!(
-            "[uniseq-backend] whole-cache refresh: rebuilding cache from disk at {} (recovery={})",
-            self.root.display(),
-            may_need_recovery
+            "[uniseq-backend] whole-cache refresh: rebuilding cache from disk at {}",
+            self.root.display()
         );
-        let prepared = prepare_full_refresh(&self.root, may_need_recovery)?;
+        let prepared = prepare_full_refresh(&self.root)?;
         self.apply_prepared_full_refresh(prepared)
     }
 
@@ -611,9 +549,6 @@ impl WorkspaceSessionState {
         self.cache = prepared.cache;
         self.fs_snapshot = prepared.fs_snapshot;
         self.last_watch_error = None;
-        if prepared.recovery_applied {
-            self.enqueue_event(WorkspaceEvent::RecoveryApplied);
-        }
         // WorkspaceReloaded is intentionally additive rather than authoritative:
         // callers still receive precise page-level invalidations from the cache
         // diff below and should prefer those for selective frontend refresh.
@@ -623,63 +558,8 @@ impl WorkspaceSessionState {
         Ok(())
     }
 
-    fn incremental_update_preserves_parent_pages(
-        &self,
-        deleted_page_ids: &[PageId],
-        written_pages: &[crate::core::Page],
-    ) -> bool {
-        let deleted_page_ids = deleted_page_ids.iter().cloned().collect::<BTreeSet<_>>();
-        let written_page_ids = written_pages
-            .iter()
-            .map(|page| page.page_id.clone())
-            .collect::<BTreeSet<_>>();
-
-        for page in written_pages {
-            if !page.location.is_page_backed() {
-                continue;
-            }
-
-            for ancestor_page_id in page.ancestor_page_ids() {
-                let ancestor_survives_batch = written_page_ids.contains(&ancestor_page_id)
-                    || (!deleted_page_ids.contains(&ancestor_page_id)
-                        && self.cache.page(&ancestor_page_id).is_some());
-                if !ancestor_survives_batch {
-                    return false;
-                }
-            }
-        }
-
-        if deleted_page_ids.is_empty() {
-            return true;
-        }
-
-        for page in self.cache.pages().values() {
-            if deleted_page_ids.contains(&page.page_id) || written_page_ids.contains(&page.page_id) {
-                continue;
-            }
-
-            if !page.location.is_page_backed() {
-                continue;
-            }
-
-            if page
-                .ancestor_page_ids()
-                .iter()
-                .any(|ancestor_page_id| deleted_page_ids.contains(ancestor_page_id))
-            {
-                return false;
-            }
-        }
-
-        true
-    }
-
     fn apply_incremental_page_update(&mut self, page: crate::core::Page) {
-        if self.cache.page(&page.page_id).is_some() {
-            self.cache.refresh_page_content(page);
-        } else {
-            self.cache.upsert_page(page);
-        }
+        self.cache.refresh_page_content(page);
     }
 
     fn apply_snapshot_delta(
@@ -695,7 +575,6 @@ impl WorkspaceSessionState {
             self.fs_snapshot.markdown_files.insert(written_path, file_stamp);
         }
 
-        self.fs_snapshot.transaction_exists = false;
     }
 
     fn apply_prepared_incremental_fs_update(
@@ -704,7 +583,7 @@ impl WorkspaceSessionState {
         prepared: PreparedIncrementalFsUpdate,
     ) -> Result<(), CoreError> {
         let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
-            return self.full_refresh(false);
+            return self.full_refresh();
         };
         match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
             Ok(()) => {
@@ -714,7 +593,7 @@ impl WorkspaceSessionState {
                 Ok(())
             }
             Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
-                self.full_refresh(false)
+                self.full_refresh()
             }
             Err(error) => Err(error),
         }
@@ -741,98 +620,35 @@ impl WorkspaceSessionState {
         &self,
         prepared: &PreparedIncrementalFsUpdate,
     ) -> Option<CacheDiff> {
-        let written_pages = prepared
-            .written_files
-            .iter()
-            .filter(|written_file| self.written_file_changes_page(written_file))
-            .map(|written_file| written_file.page.clone())
-            .collect::<Vec<_>>();
-        if !self.incremental_update_preserves_parent_pages(
-            &prepared.deleted_page_ids,
-            &written_pages,
-        ) {
+        if !prepared.deleted_paths.is_empty() {
             return None;
         }
 
-        let removed_page_ids = prepared
-            .deleted_page_ids
-            .iter()
-            .filter(|page_id| self.cache.page(page_id).is_some())
-            .cloned()
-            .collect::<Vec<_>>();
-        let removed_page_ids_set = removed_page_ids.iter().cloned().collect::<BTreeSet<_>>();
-        let written_page_ids = prepared
-            .written_files
-            .iter()
-            .map(|written_file| written_file.page.page_id.clone())
-            .collect::<BTreeSet<_>>();
-        let created_page_ids = written_page_ids
-            .iter()
-            .filter(|page_id| self.cache.page(page_id).is_none())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-
         let mut changed_page_ids = BTreeSet::new();
-        let existence_toggled_page_ids = removed_page_ids_set
-            .union(&created_page_ids)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-
-        changed_page_ids.extend(
-            self.page_ids_referring_to_any(&existence_toggled_page_ids)
-                .into_iter()
-                .filter(|page_id| !removed_page_ids_set.contains(page_id)),
-        );
-
-        for removed_page_id in &removed_page_ids {
-            let Some(page) = self.cache.page(removed_page_id) else {
-                continue;
-            };
-
-            if let Some(parent_page_id) = page.parent_page_id() {
-                if !removed_page_ids_set.contains(&parent_page_id) {
-                    changed_page_ids.insert(parent_page_id);
-                }
-            }
-
-            changed_page_ids.extend(
-                target_page_ids_from_page(page)
-                    .into_iter()
-                    .filter(|page_id| !removed_page_ids_set.contains(page_id)),
-            );
-        }
 
         for written_file in &prepared.written_files {
             let page = &written_file.page;
+            let Some(existing_page) = self.cache.page(&page.page_id) else {
+                return None;
+            };
+            if existing_page.workspace_path != written_file.relative_path {
+                return None;
+            }
+
+            if existing_page.fingerprint == page.fingerprint {
+                continue;
+            }
+
             changed_page_ids.insert(page.page_id.clone());
-
-            if self.cache.page(&page.page_id).is_none() {
-                if let Some(parent_page_id) = page.parent_page_id() {
-                    changed_page_ids.insert(parent_page_id);
-                }
-            }
-
-            if let Some(old_page) = self.cache.page(&page.page_id) {
-                changed_page_ids.extend(
-                    target_page_ids_from_page(old_page)
-                        .into_iter()
-                        .filter(|page_id| !removed_page_ids_set.contains(page_id)),
-                );
-            }
-
-            changed_page_ids.extend(
-                target_page_ids_from_page(page)
-                    .into_iter()
-                    .filter(|page_id| !removed_page_ids_set.contains(page_id)),
-            );
+            changed_page_ids.extend(target_page_ids_from_page(existing_page));
+            changed_page_ids.extend(target_page_ids_from_page(page));
+            changed_page_ids.extend(self.page_ids_referring_to_any(&target_page_ids_from_page(existing_page)));
+            changed_page_ids.extend(self.page_ids_referring_to_any(&target_page_ids_from_page(page)));
         }
 
         Some(CacheDiff {
-            changed_page_ids: changed_page_ids
-                .into_iter()
-                .filter(|page_id| !removed_page_ids_set.contains(page_id))
-                .collect(),
-            removed_page_ids,
+            changed_page_ids: changed_page_ids.into_iter().collect(),
+            removed_page_ids: Vec::new(),
         })
     }
 
@@ -888,12 +704,10 @@ impl WorkspaceSessionState {
     }
 
     fn written_file_changes_page(&self, written_file: &PreparedWrittenFile) -> bool {
-        self.cache
-            .page(&written_file.page.page_id)
-            .is_none_or(|existing_page| {
-                existing_page.workspace_path != written_file.relative_path
-                    || existing_page.fingerprint != written_file.page.fingerprint
-            })
+        self.cache.page(&written_file.page.page_id).is_some_and(|existing_page| {
+            existing_page.workspace_path == written_file.relative_path
+                && existing_page.fingerprint != written_file.page.fingerprint
+        })
     }
 }
 
@@ -912,10 +726,7 @@ impl WorkspaceFsSnapshot {
             "[uniseq-backend] supported-root scan complete: {} supported markdown files in snapshot",
             markdown_files.len()
         );
-        Ok(Self {
-            markdown_files,
-            transaction_exists: transaction_record_exists(root),
-        })
+        Ok(Self { markdown_files })
     }
 }
 
@@ -1011,30 +822,16 @@ fn classify_snapshot_fs_changes(
     update
 }
 
-fn prepare_full_refresh(
-    root: &Path,
-    may_need_recovery: bool,
-) -> Result<PreparedFullRefresh, CoreError> {
+fn prepare_full_refresh(root: &Path) -> Result<PreparedFullRefresh, CoreError> {
     println!(
-        "[uniseq-backend] whole-cache refresh: preparing full refresh at {} (recovery={})",
-        root.display(),
-        may_need_recovery
+        "[uniseq-backend] whole-cache refresh: preparing full refresh at {}",
+        root.display()
     );
-    let mut cache = WorkspaceCache::new();
-    let recovery_applied = if may_need_recovery || transaction_record_exists(root) {
-        recover_workspace_transactions(root, &mut cache)?
-    } else {
-        false
-    };
-
-    if !recovery_applied {
-        cache = load_workspace_cache(root)?;
-    }
+    let cache = load_workspace_cache(root)?;
 
     Ok(PreparedFullRefresh {
         fs_snapshot: WorkspaceFsSnapshot::capture(root)?,
         cache,
-        recovery_applied,
     })
 }
 
@@ -1088,10 +885,6 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
             let Ok(relative_path) = path.strip_prefix(root) else {
                 return NativeEventAction::FallbackToSnapshot;
             };
-
-            if is_transaction_relative_path(relative_path) {
-                return NativeEventAction::TransactionPathChanged;
-            }
 
             let relative_path = relative_path.to_path_buf();
             let is_markdown = relative_path
@@ -1253,35 +1046,7 @@ mod tests {
     use crate::{
         FileFingerprint, PageName,
         core::files::{TestWorkspace, workspace_test_relative_path},
-        core::structure::stage_page_rename_transaction_for_testing,
     };
-
-    #[test]
-    fn startup_recovers_interrupted_transactions_before_reads() {
-        let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- body\n");
-        workspace.write_file("X.md", "- [[A/B]]\n");
-        stage_page_rename_transaction_for_testing(
-            &workspace.root,
-            &PageId::new(["A", "B"]).unwrap(),
-            &PageName::new("C").unwrap(),
-        )
-        .unwrap();
-
-        let session = WorkspaceSession::open(&workspace.root).unwrap();
-
-        assert!(
-            session
-                .page_summary(&PageId::new(["A", "C"]).unwrap())
-                .is_ok()
-        );
-        assert_eq!(
-            session.drain_events(),
-            vec![WorkspaceEvent::RecoveryApplied]
-        );
-        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
-    }
 
     #[test]
     fn poll_once_refreshes_single_changed_page_and_targets() {
@@ -1399,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn poll_once_adds_created_pages_incrementally() {
+    fn poll_once_falls_back_to_full_refresh_for_created_pages() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
@@ -1408,17 +1173,16 @@ mod tests {
         workspace.write_file("B.md", "- body\n");
         session.poll_once().unwrap();
 
-        assert_eq!(
-            session.drain_events(),
-            vec![WorkspaceEvent::PagesChanged {
-                page_ids: vec![PageId::new(["B"]).unwrap()],
-            }]
-        );
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![PageId::new(["B"]).unwrap()],
+        }));
         assert_eq!(session.all_pages().len(), 2);
     }
 
     #[test]
-    fn poll_once_removes_deleted_pages_and_rebuilds_refs() {
+    fn poll_once_falls_back_to_full_refresh_for_deleted_pages() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
@@ -1428,17 +1192,14 @@ mod tests {
         workspace.remove_file("A.md");
         session.poll_once().unwrap();
 
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                WorkspaceEvent::PagesChanged {
-                    page_ids: vec![PageId::new(["B"]).unwrap()],
-                },
-                WorkspaceEvent::PageRemoved {
-                    page_id: PageId::new(["A"]).unwrap(),
-                },
-            ]
-        );
+        let events = session.drain_events();
+        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
+        assert!(events.contains(&WorkspaceEvent::PagesChanged {
+            page_ids: vec![PageId::new(["B"]).unwrap()],
+        }));
+        assert!(events.contains(&WorkspaceEvent::PageRemoved {
+            page_id: PageId::new(["A"]).unwrap(),
+        }));
         assert_eq!(
             session
                 .page_detail(&PageId::new(["B"]).unwrap())
@@ -1513,7 +1274,7 @@ mod tests {
         session.drain_events();
 
         workspace.write_file("A___B___C.md", "");
-        session.state.write().unwrap().full_refresh(false).unwrap();
+        session.state.write().unwrap().full_refresh().unwrap();
 
         assert!(workspace
             .root
@@ -1642,7 +1403,6 @@ mod tests {
                     fingerprint: super::super::FileFingerprint::from_text("- [[B]]\n"),
                 },
             )]),
-            transaction_exists: false,
         };
         let new_snapshot = WorkspaceFsSnapshot {
             markdown_files: BTreeMap::from([(
@@ -1651,7 +1411,6 @@ mod tests {
                     fingerprint: super::super::FileFingerprint::from_text("- [[C]]\n"),
                 },
             )]),
-            transaction_exists: false,
         };
 
         let update = classify_snapshot_fs_changes(&old_snapshot, &new_snapshot);
@@ -1802,115 +1561,6 @@ mod tests {
     }
 
     #[test]
-    fn structural_rename_updates_snapshot_without_followup_refresh() {
-        let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- body\n");
-        workspace.write_file("X.md", "- [[A/B]]\n");
-        let session = WorkspaceSession::open(&workspace.root).unwrap();
-        session.drain_events();
-
-        session
-            .apply_page_rename(PageRename {
-                source_page_id: PageId::new(["A", "B"]).unwrap(),
-                new_leaf_name: PageName::new("C").unwrap(),
-            })
-            .unwrap();
-        session.drain_events();
-
-        {
-            let state = session.state.read().unwrap();
-            assert!(!state
-                .fs_snapshot
-                .markdown_files
-                .contains_key(&workspace_test_relative_path("A___B.md")));
-            assert!(state
-                .fs_snapshot
-                .markdown_files
-                .contains_key(&workspace_test_relative_path("A___C.md")));
-            assert!(!state.fs_snapshot.transaction_exists);
-        }
-
-        session.poll_once().unwrap();
-        assert!(session.drain_events().is_empty());
-    }
-
-    #[test]
-    fn structural_rename_emits_precise_events_without_workspace_reload() {
-        let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
-        workspace.write_file("A___B___C.md", "- child\n");
-        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
-        let session = WorkspaceSession::open(&workspace.root).unwrap();
-        session.drain_events();
-
-        session
-            .apply_page_rename(PageRename {
-                source_page_id: PageId::new(["A", "B"]).unwrap(),
-                new_leaf_name: PageName::new("Renamed").unwrap(),
-            })
-            .unwrap();
-
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                WorkspaceEvent::PagesChanged {
-                    page_ids: vec![
-                        PageId::new(["A", "Renamed"]).unwrap(),
-                        PageId::new(["A", "Renamed", "C"]).unwrap(),
-                        PageId::new(["X"]).unwrap(),
-                    ],
-                },
-                WorkspaceEvent::PageRemoved {
-                    page_id: PageId::new(["A", "B"]).unwrap(),
-                },
-                WorkspaceEvent::PageRemoved {
-                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn structural_move_emits_precise_events_without_workspace_reload() {
-        let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
-        workspace.write_file("A___B___C.md", "- child\n");
-        workspace.write_file("Z.md", "");
-        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
-        let session = WorkspaceSession::open(&workspace.root).unwrap();
-        session.drain_events();
-
-        session
-            .apply_page_move(PageMove {
-                source_page_id: PageId::new(["A", "B"]).unwrap(),
-                destination_parent_page_id: Some(PageId::new(["Z"]).unwrap()),
-            })
-            .unwrap();
-
-        assert_eq!(
-            session.drain_events(),
-            vec![
-                WorkspaceEvent::PagesChanged {
-                    page_ids: vec![
-                        PageId::new(["X"]).unwrap(),
-                        PageId::new(["Z", "B"]).unwrap(),
-                        PageId::new(["Z", "B", "C"]).unwrap(),
-                    ],
-                },
-                WorkspaceEvent::PageRemoved {
-                    page_id: PageId::new(["A", "B"]).unwrap(),
-                },
-                WorkspaceEvent::PageRemoved {
-                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn event_queue_coalesces_pages_changed_and_watcher_mode_updates() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
@@ -1941,50 +1591,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    #[test]
-    fn transaction_dir_event_triggers_recovery_and_workspace_reload() {
-        let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- body\n");
-        workspace.write_file("X.md", "- [[A/B]]\n");
-        let session = WorkspaceSession::open(&workspace.root).unwrap();
-        session.drain_events();
-
-        stage_page_rename_transaction_for_testing(
-            &workspace.root,
-            &PageId::new(["A", "B"]).unwrap(),
-            &PageName::new("C").unwrap(),
-        )
-        .unwrap();
-
-        let event = Event {
-            kind: EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![
-                workspace
-                    .root
-                    .join(".uniseq-page-transaction")
-                    .join("manifest.tsv"),
-            ],
-            attrs: Default::default(),
-        };
-        session
-            .state
-            .write()
-            .unwrap()
-            .apply_native_event_burst(&[event])
-            .unwrap();
-
-        let events = session.drain_events();
-        assert!(events.contains(&WorkspaceEvent::RecoveryApplied));
-        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
-        assert!(
-            session
-                .page_summary(&PageId::new(["A", "C"]).unwrap())
-                .is_ok()
-        );
-        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
     }
 
     #[test]

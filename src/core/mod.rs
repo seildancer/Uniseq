@@ -28,8 +28,7 @@ pub use read::{
 pub use session::{WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession};
 pub use span::SourceSpan;
 pub use structure::{
-    PageCreate, PageDeleteSubtree, PageMove, PageRename, StreamPageCreate, StreamPageDelete,
-    apply_page_create, apply_page_delete_subtree, apply_page_move, apply_page_rename,
-    apply_stream_page_create, apply_stream_page_delete, recover_workspace_transactions,
+    PageCreate, PageDeleteSubtree, StreamPageCreate, StreamPageDelete, apply_page_create,
+    apply_page_delete_subtree, apply_stream_page_create, apply_stream_page_delete,
 };
 pub use workspace::WorkspaceCache;

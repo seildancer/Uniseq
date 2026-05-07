@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use super::{Block, CoreError, FileFingerprint, IncomingRef, Page, PageId, parse_blocks};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct WorkspaceCache {
     pages: BTreeMap<PageId, Page>,
+    page_ids_by_path: BTreeMap<std::path::PathBuf, PageId>,
     incoming_refs_by_target: BTreeMap<PageId, Vec<IncomingRef>>,
 }
 
@@ -22,8 +24,10 @@ impl WorkspaceCache {
                 .into_iter()
                 .map(|page| (page.page_id.clone(), page))
                 .collect(),
+            page_ids_by_path: BTreeMap::new(),
             incoming_refs_by_target: BTreeMap::new(),
         };
+        cache.rebuild_path_index();
         cache.rebuild_hierarchy();
         cache.rebuild_all_incoming_refs();
         cache
@@ -37,6 +41,10 @@ impl WorkspaceCache {
         self.pages.get(page_id)
     }
 
+    pub fn page_id_for_path(&self, workspace_path: impl AsRef<Path>) -> Option<&PageId> {
+        self.page_ids_by_path.get(workspace_path.as_ref())
+    }
+
     pub fn incoming_refs(&self, page_id: &PageId) -> &[IncomingRef] {
         self.incoming_refs_by_target
             .get(page_id)
@@ -48,7 +56,12 @@ impl WorkspaceCache {
         let page_id = page.page_id.clone();
         self.remove_child_from_parent(&page_id);
         self.remove_incoming_refs_from_source(&page_id);
+        if let Some(existing_page) = self.pages.get(&page_id) {
+            self.page_ids_by_path.remove(&existing_page.workspace_path);
+        }
         page.child_page_ids = self.child_page_ids_for(&page_id);
+        self.page_ids_by_path
+            .insert(page.workspace_path.clone(), page_id.clone());
         self.pages.insert(page_id.clone(), page);
         self.add_child_to_parent(page_id.clone());
         self.insert_incoming_refs_from_source(&page_id);
@@ -62,6 +75,11 @@ impl WorkspaceCache {
         };
 
         let old_target_page_ids = target_page_ids_from_page(&existing_page);
+        if existing_page.workspace_path != page.workspace_path {
+            self.page_ids_by_path.remove(&existing_page.workspace_path);
+            self.page_ids_by_path
+                .insert(page.workspace_path.clone(), page_id.clone());
+        }
         page.child_page_ids = existing_page.child_page_ids;
         self.pages.insert(page_id.clone(), page);
         self.remove_incoming_refs_from_source_from_targets(&page_id, &old_target_page_ids);
@@ -72,6 +90,7 @@ impl WorkspaceCache {
         self.remove_child_from_parent(page_id);
         self.remove_incoming_refs_from_source(page_id);
         let removed = self.pages.remove(page_id)?;
+        self.page_ids_by_path.remove(&removed.workspace_path);
         Some(removed)
     }
 
@@ -131,6 +150,14 @@ impl WorkspaceCache {
         for page in self.pages.values_mut() {
             page.child_page_ids.sort();
         }
+    }
+
+    fn rebuild_path_index(&mut self) {
+        self.page_ids_by_path = self
+            .pages
+            .values()
+            .map(|page| (page.workspace_path.clone(), page.page_id.clone()))
+            .collect();
     }
 
     fn rebuild_all_incoming_refs(&mut self) {
