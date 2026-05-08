@@ -70,7 +70,45 @@ impl IncrementalWorkspaceUpdate {
         }
     }
 
-    fn from_plan(plan: &RenameTransactionPlan) -> Self {
+    fn from_plan(cache: &WorkspaceCache, plan: &RenameTransactionPlan) -> Self {
+        let moved_old_page_ids = plan
+            .page_mappings
+            .iter()
+            .map(|mapping| mapping.old_page_id.clone())
+            .collect::<BTreeSet<_>>();
+        let moved_new_page_ids = plan
+            .page_mappings
+            .iter()
+            .map(|mapping| mapping.new_page_id.clone())
+            .collect::<BTreeSet<_>>();
+        let mut changed_page_ids = plan
+            .file_changes
+            .iter()
+            .map(|change| PageId::from_workspace_path(&change.final_path))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .expect("transaction plans only contain valid workspace paths");
+
+        for mapping in &plan.page_mappings {
+            if mapping.old_page_id.parent() != mapping.new_page_id.parent() {
+                if let Some(old_parent_page_id) = mapping.old_page_id.parent() {
+                    if cache.page(&old_parent_page_id).is_some()
+                        && !moved_old_page_ids.contains(&old_parent_page_id)
+                    {
+                        changed_page_ids.insert(old_parent_page_id);
+                    }
+                }
+
+                if let Some(new_parent_page_id) = mapping.new_page_id.parent() {
+                    if (cache.page(&new_parent_page_id).is_some()
+                        && !moved_old_page_ids.contains(&new_parent_page_id))
+                        || moved_new_page_ids.contains(&new_parent_page_id)
+                    {
+                        changed_page_ids.insert(new_parent_page_id);
+                    }
+                }
+            }
+        }
+
         Self {
             written_paths: plan
                 .file_changes
@@ -78,12 +116,7 @@ impl IncrementalWorkspaceUpdate {
                 .map(|change| change.final_path.clone())
                 .collect(),
             deleted_paths: plan.deletes.clone(),
-            changed_page_ids: plan
-                .file_changes
-                .iter()
-                .map(|change| PageId::from_workspace_path(&change.final_path))
-                .collect::<Result<Vec<_>, _>>()
-                .expect("transaction plans only contain valid workspace paths"),
+            changed_page_ids: changed_page_ids.into_iter().collect(),
             removed_page_ids: plan
                 .deletes
                 .iter()
@@ -462,7 +495,7 @@ fn complete_transaction_record(
     record.apply_final_state(root, None, false)?;
     let update = if let Some(plan) = prepared_plan {
         apply_transaction_plan_to_cache(cache, plan)?;
-        IncrementalWorkspaceUpdate::from_plan(plan)
+        IncrementalWorkspaceUpdate::from_plan(cache, plan)
     } else {
         let final_writes = record.final_writes(root)?;
         apply_transaction_writes_to_cache(cache, &final_writes, record.deletes())?;

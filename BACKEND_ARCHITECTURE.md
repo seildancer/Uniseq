@@ -21,6 +21,7 @@
 - References inside fenced code blocks are ignored. Indentation-only Markdown code blocks are not special to the backend.
 - `linked references` are derived views over source blocks and never live in the target page file.
 - Disposable indexes and caches may exist, but the backend must be rebuildable from files alone.
+- In-app page identity changes must use backend-owned structural operations. Raw external filesystem renames/moves reconcile from disk truth, but they do not preserve semantic rename/move behavior or rewrite refs.
 
 ## Backend Responsibilities
 
@@ -33,6 +34,8 @@
 - Apply only narrow structural mutations:
   - page create
   - page delete-subtree
+  - page rename
+  - page move
   - stream create
   - stream delete
 - Reconcile ordinary file-content edits back into derived cache/index state.
@@ -44,13 +47,14 @@
 - Handle editor UX and translate user actions into markdown text edits.
 - Write ordinary page-content markdown edits directly to files.
 - Route edits performed from linked-reference views back to the source page.
+- Call backend-owned structural operations for page identity changes instead of performing raw file renames/moves directly.
 
 ## Write Model
 
 - Ordinary content editing is frontend-driven: React computes markdown edits and writes the affected page file directly.
 - Rust treats those file changes as authoritative and reparses affected existing files asynchronously.
 - Derived views such as linked references, counts, and hierarchy metadata may be briefly stale during reconciliation, but should converge quickly.
-- Structural workspace mutations are backend-owned only for create/delete operations listed above.
+- Structural workspace mutations are backend-owned for create/delete/rename/move and stream create/delete.
 
 ## Reconciliation Model
 
@@ -61,6 +65,7 @@
   - deleted files
   - hierarchy healing
   - unsupported or ambiguous watcher bursts
+- External raw renames/moves remain part of that structural ambiguity path and are reconciled as disk-truth changes rather than semantic in-app rename/move operations.
 - `WorkspaceReloaded` means a real coarse rebuild occurred.
 - `PagesChanged` and `PageRemoved` remain the primary frontend invalidation signals.
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
@@ -13,16 +13,18 @@ use super::{
     PageId, PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
 use crate::core::files::{
-    collect_supported_workspace_markdown_paths, load_page_with_fingerprint_from_relative_path,
-    load_workspace_cache,
+    collect_supported_workspace_markdown_paths, load_workspace_cache, page_and_fingerprint_from_text,
 };
 use crate::core::structure::{
-    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, StreamPageCreate, StreamPageDelete,
-    apply_page_create_with_update, apply_page_delete_subtree_with_update,
-    apply_stream_page_create_with_update, apply_stream_page_delete_with_update,
+    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
+    StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
+    apply_page_delete_subtree_with_update, apply_page_move_with_update,
+    apply_page_rename_with_update, apply_stream_page_create_with_update,
+    apply_stream_page_delete_with_update,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const NATIVE_EVENT_DEBOUNCE: Duration = Duration::from_millis(40);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
@@ -77,7 +79,8 @@ struct WorkspaceFsSnapshot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileStamp {
-    fingerprint: super::FileFingerprint,
+    len_bytes: u64,
+    modified_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +146,7 @@ impl WorkspaceSession {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, CoreError> {
         let root = root.as_ref().to_path_buf();
         let cache = load_workspace_cache(&root)?;
-        let fs_snapshot = WorkspaceFsSnapshot::capture(&root)?;
+        let fs_snapshot = WorkspaceFsSnapshot::capture_for_cache(&root, &cache)?;
 
         Ok(Self {
             state: Arc::new(RwLock::new(WorkspaceSessionState {
@@ -227,6 +230,22 @@ impl WorkspaceSession {
             })
     }
 
+    pub fn apply_page_rename(&self, request: PageRename) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .apply_incremental_write(|root, cache| {
+                apply_page_rename_with_update(root, cache, request)
+            })
+    }
+
+    pub fn apply_page_move(&self, request: PageMove) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .apply_incremental_write(|root, cache| apply_page_move_with_update(root, cache, request))
+    }
+
     pub fn apply_stream_page_create(&self, request: StreamPageCreate) -> Result<(), CoreError> {
         self.state
             .write()
@@ -295,6 +314,13 @@ impl WorkspaceSession {
         });
 
         self.watcher = Some(WatcherHandle { stop, handle });
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < deadline {
+            if self.watcher_mode().is_some() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     pub fn start_watching_default(&mut self) {
@@ -728,14 +754,48 @@ impl WorkspaceFsSnapshot {
         );
         Ok(Self { markdown_files })
     }
+
+    fn capture_for_cache(root: &Path, cache: &WorkspaceCache) -> Result<Self, CoreError> {
+        println!(
+            "[uniseq-backend] supported-root scan: capturing workspace snapshot from loaded cache at {}",
+            root.display()
+        );
+        let markdown_files = cache
+            .pages()
+            .values()
+            .map(|page| {
+                let absolute_path = root.join(&page.workspace_path);
+                Ok((
+                    page.workspace_path.clone(),
+                    FileStamp::from_metadata_path(&absolute_path)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>, CoreError>>()?;
+        println!(
+            "[uniseq-backend] supported-root scan complete: {} supported markdown files in snapshot",
+            markdown_files.len()
+        );
+        Ok(Self { markdown_files })
+    }
 }
 
 impl FileStamp {
     fn from_absolute_path(absolute_path: &Path) -> Result<Self, CoreError> {
-        let text =
-            fs::read_to_string(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        Self::from_metadata_path(absolute_path)
+    }
+
+    fn from_metadata_path(absolute_path: &Path) -> Result<Self, CoreError> {
+        let metadata = fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        let modified_at = metadata
+            .modified()
+            .map(Some)
+            .or_else(|error| {
+                (error.kind() == std::io::ErrorKind::Unsupported).then_some(None).ok_or(error)
+            })
+            .map_err(|error| CoreError::io(absolute_path, &error))?;
         Ok(Self {
-            fingerprint: super::FileFingerprint::from_text(&text),
+            len_bytes: metadata.len(),
+            modified_at,
         })
     }
 }
@@ -830,7 +890,7 @@ fn prepare_full_refresh(root: &Path) -> Result<PreparedFullRefresh, CoreError> {
     let cache = load_workspace_cache(root)?;
 
     Ok(PreparedFullRefresh {
-        fs_snapshot: WorkspaceFsSnapshot::capture(root)?,
+        fs_snapshot: WorkspaceFsSnapshot::capture_for_cache(root, &cache)?,
         cache,
     })
 }
@@ -850,8 +910,10 @@ fn prepare_incremental_fs_update(
         .iter()
         .map(|relative_path| {
             let absolute_path = root.join(relative_path);
+            let text =
+                fs::read_to_string(&absolute_path).map_err(|error| CoreError::io(&absolute_path, &error))?;
             let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
-            let (page, _) = load_page_with_fingerprint_from_relative_path(root, relative_path)?;
+            let (page, _) = page_and_fingerprint_from_text(relative_path, text)?;
             Ok::<PreparedWrittenFile, CoreError>(PreparedWrittenFile {
                 relative_path: relative_path.clone(),
                 page,
@@ -923,7 +985,15 @@ fn collect_native_event_burst(
     rx: &Receiver<WatchLoopMessage>,
 ) -> Result<Vec<Event>, WatcherFallbackReason> {
     let mut events = vec![first_event];
-    while let Ok(message) = rx.try_recv() {
+    loop {
+        let message = match rx.recv_timeout(NATIVE_EVENT_DEBOUNCE) {
+            Ok(message) => message,
+            Err(RecvTimeoutError::Timeout) => break,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(WatcherFallbackReason::ControlChannelDisconnected);
+            }
+        };
+
         match message {
             WatchLoopMessage::Fs(Ok(event)) => events.push(event),
             WatchLoopMessage::Fs(Err(error)) => {
@@ -1044,7 +1114,7 @@ fn apply_native_event_burst_once(state: &Arc<RwLock<WorkspaceSessionState>>, eve
 mod tests {
     use super::*;
     use crate::{
-        FileFingerprint, PageName,
+        FileFingerprint, PageMove, PageName, PageRename,
         core::files::{TestWorkspace, workspace_test_relative_path},
     };
 
@@ -1394,13 +1464,14 @@ mod tests {
     }
 
     #[test]
-    fn classify_snapshot_fs_changes_uses_content_fingerprints() {
+    fn classify_snapshot_fs_changes_uses_file_metadata() {
         let path = workspace_test_relative_path("A.md");
         let old_snapshot = WorkspaceFsSnapshot {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    fingerprint: super::super::FileFingerprint::from_text("- [[B]]\n"),
+                    len_bytes: 8,
+                    modified_at: None,
                 },
             )]),
         };
@@ -1408,7 +1479,8 @@ mod tests {
             markdown_files: BTreeMap::from([(
                 path.clone(),
                 FileStamp {
-                    fingerprint: super::super::FileFingerprint::from_text("- [[C]]\n"),
+                    len_bytes: 8,
+                    modified_at: Some(SystemTime::UNIX_EPOCH),
                 },
             )]),
         };
@@ -1515,6 +1587,118 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn structural_rename_emits_precise_events_and_keeps_snapshot_incremental() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_rename(PageRename {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                new_leaf_name: PageName::new("Renamed").unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![
+                        PageId::new(["A", "Renamed"]).unwrap(),
+                        PageId::new(["A", "Renamed", "C"]).unwrap(),
+                        PageId::new(["X"]).unwrap(),
+                    ],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B"]).unwrap(),
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(workspace.read_file("A___Renamed.md"), "- [[A/Renamed/C]]\n");
+        assert_eq!(
+            workspace.read_file("X.md"),
+            "- [[A/Renamed]] and #A/Renamed/C\n"
+        );
+        assert_eq!(
+            session
+                .page_detail(&PageId::new(["A", "Renamed", "C"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            2
+        );
+
+        session.poll_once().unwrap();
+        assert!(session.drain_events().is_empty());
+    }
+
+    #[test]
+    fn structural_move_emits_precise_events_and_keeps_snapshot_incremental() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("Z.md", "");
+        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_move(PageMove {
+                source_page_id: PageId::new(["A", "B"]).unwrap(),
+                destination_parent_page_id: Some(PageId::new(["Z"]).unwrap()),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![
+                        PageId::new(["A"]).unwrap(),
+                        PageId::new(["X"]).unwrap(),
+                        PageId::new(["Z"]).unwrap(),
+                        PageId::new(["Z", "B"]).unwrap(),
+                        PageId::new(["Z", "B", "C"]).unwrap(),
+                    ],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B"]).unwrap(),
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A", "B", "C"]).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(workspace.read_file("Z___B.md"), "- [[Z/B/C]]\n");
+        assert_eq!(workspace.read_file("X.md"), "- [[Z/B]] and #Z/B/C\n");
+        assert_eq!(
+            session
+                .page_summary(&PageId::new(["A"]).unwrap())
+                .unwrap()
+                .child_page_count,
+            0
+        );
+        assert_eq!(
+            session
+                .page_summary(&PageId::new(["Z"]).unwrap())
+                .unwrap()
+                .child_page_count,
+            1
+        );
+
+        session.poll_once().unwrap();
+        assert!(session.drain_events().is_empty());
     }
 
     #[test]

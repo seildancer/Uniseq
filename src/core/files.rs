@@ -28,13 +28,10 @@ pub(crate) fn load_page_with_fingerprint_from_relative_path(
     root: &Path,
     relative_path: &Path,
 ) -> Result<(Page, FileFingerprint), CoreError> {
-    let resolved = resolve_workspace_path(relative_path)?;
     let absolute_path = root.join(relative_path);
     let text =
         fs::read_to_string(&absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
-    let fingerprint = FileFingerprint::from_text(&text);
-    let page = page_from_markdown_in_location(resolved.page_id, resolved.location, text)?;
-    Ok((page, fingerprint))
+    page_and_fingerprint_from_text(relative_path, text)
 }
 
 pub(crate) fn page_from_markdown_in_location(
@@ -44,6 +41,16 @@ pub(crate) fn page_from_markdown_in_location(
 ) -> Result<Page, CoreError> {
     let blocks = parse_blocks(&text)?;
     Ok(Page::new_in_location(page_id, location, text)?.with_blocks(blocks))
+}
+
+pub(crate) fn page_and_fingerprint_from_text(
+    relative_path: &Path,
+    text: String,
+) -> Result<(Page, FileFingerprint), CoreError> {
+    let resolved = resolve_workspace_path(relative_path)?;
+    let fingerprint = FileFingerprint::from_text(&text);
+    let page = page_from_markdown_in_location(resolved.page_id, resolved.location, text)?;
+    Ok((page, fingerprint))
 }
 
 #[cfg(test)]
