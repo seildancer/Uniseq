@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -9,6 +9,61 @@ const INITIAL_CREATE_STATE = {
 };
 
 const appWindow = getCurrentWindow();
+
+function readPageLeafName(pageId) {
+  if (typeof pageId !== "string") {
+    return "";
+  }
+
+  if (pageId.startsWith("pages:")) {
+    return pageId.slice("pages:".length).split("/").at(-1) ?? pageId;
+  }
+
+  if (pageId.startsWith("stream:")) {
+    return pageId.slice("stream:".length).split("/").at(-1) ?? pageId;
+  }
+
+  return pageId;
+}
+
+function pageLabel(page) {
+  return page.title || readPageLeafName(page.page_id) || page.page_id;
+}
+
+function buildPageTree(pages) {
+  const childrenByParent = new Map();
+
+  for (const page of pages) {
+    const parentId = page.parent_page_id ?? null;
+    const siblings = childrenByParent.get(parentId) ?? [];
+    siblings.push(page);
+    childrenByParent.set(parentId, siblings);
+  }
+
+  for (const siblings of childrenByParent.values()) {
+    siblings.sort((left, right) => left.page_id.localeCompare(right.page_id));
+  }
+
+  const buildNodes = (parentId = null) =>
+    (childrenByParent.get(parentId) ?? []).map((page) => ({
+      page,
+      children: buildNodes(page.page_id),
+    }));
+
+  return buildNodes(null);
+}
+
+function collectAncestorPageIds(pageId, pagesById) {
+  const ancestorPageIds = [];
+  let currentPage = pagesById.get(pageId) ?? null;
+
+  while (currentPage?.parent_page_id) {
+    ancestorPageIds.push(currentPage.parent_page_id);
+    currentPage = pagesById.get(currentPage.parent_page_id) ?? null;
+  }
+
+  return ancestorPageIds;
+}
 
 function normalizeError(error) {
   if (error && typeof error === "object" && "message" in error) {
@@ -31,11 +86,7 @@ function formatError(error) {
     return "";
   }
 
-  if (error.path) {
-    return `${error.message} (${error.path})`;
-  }
-
-  return error.message;
+  return error.path ? `${error.message} (${error.path})` : error.message;
 }
 
 function readStreamName(location) {
@@ -65,69 +116,110 @@ function flattenBlocks(blocks, depth = 0) {
   ]);
 }
 
+function PageTree({
+  nodes,
+  depth = 0,
+  expandedPageIds,
+  selectedPageId,
+  onSelectPage,
+  onTogglePageTree,
+}) {
+  return (
+    <ul className={depth === 0 ? "page-tree" : "page-tree page-tree--nested"}>
+      {nodes.map(({ page, children }) => {
+        const hasChildren = children.length > 0;
+        const isExpanded = Boolean(expandedPageIds[page.page_id]);
+        const isActive = page.page_id === selectedPageId;
+
+        return (
+          <li key={page.page_id} className="page-tree-node">
+            <div
+              className={isActive ? "page-tree-row page-tree-row--active" : "page-tree-row"}
+              style={{ "--page-tree-depth": depth }}
+            >
+              {hasChildren ? (
+                <button
+                  className="page-tree-toggle"
+                  type="button"
+                  aria-label={isExpanded ? "Collapse page" : "Expand page"}
+                  aria-expanded={isExpanded}
+                  onClick={() => onTogglePageTree(page.page_id)}
+                >
+                  <span
+                    className={
+                      isExpanded
+                        ? "page-tree-caret page-tree-caret--expanded"
+                        : "page-tree-caret"
+                    }
+                  >
+                    &gt;
+                  </span>
+                </button>
+              ) : (
+                <span
+                  className="page-tree-toggle page-tree-toggle--placeholder"
+                  aria-hidden="true"
+                />
+              )}
+
+              <button
+                className="page-tree-item"
+                type="button"
+                onClick={() => onSelectPage(page.page_id)}
+              >
+                <span className="page-tree-title">{pageLabel(page)}</span>
+              </button>
+            </div>
+
+            {hasChildren && isExpanded ? (
+              <PageTree
+                nodes={children}
+                depth={depth + 1}
+                expandedPageIds={expandedPageIds}
+                selectedPageId={selectedPageId}
+                onSelectPage={onSelectPage}
+                onTogglePageTree={onTogglePageTree}
+              />
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export default function App() {
+  const didAttemptBootRef = useRef(false);
+  const isBootEffectMountedRef = useRef(false);
+
   const [mode, setMode] = useState("booting");
   const [workspace, setWorkspace] = useState(null);
   const [pages, setPages] = useState([]);
+  const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedPageBlocks, setSelectedPageBlocks] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
+  const [expandedPageIds, setExpandedPageIds] = useState({});
 
-  useEffect(() => {
-    let cancelled = false;
+  const regularPages = pages.filter((page) => readStreamName(page.location) === null);
+  const pageTree = buildPageTree(regularPages);
+  const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
+  const editorRows = selectedPageBlocks ? flattenBlocks(selectedPageBlocks.blocks ?? []) : [];
+  const createDisabled =
+    busyAction === "create" ||
+    !createState.parentPath ||
+    !createState.folderName.trim();
 
-    async function boot() {
-      setMode("booting");
-      setStartupError(null);
-
-      try {
-        const lastWorkspacePath = await invoke("get_last_workspace_path");
-        if (!lastWorkspacePath) {
-          if (!cancelled) {
-            setMode("onboarding");
-          }
-          return;
-        }
-
-        const openedWorkspace = await invoke("open_workspace", {
-          rootPath: lastWorkspacePath,
-        });
-        const allPages = await invoke("all_pages");
-
-        if (!cancelled) {
-          setWorkspace(openedWorkspace);
-          setPages(allPages);
-          setMode("workspace");
-        }
-      } catch (error) {
-        await invoke("clear_last_workspace_path").catch(() => undefined);
-
-        if (!cancelled) {
-          setStartupError({
-            code: "workspace_reopen_failed",
-            message:
-              "The last workspace could not be reopened. Choose a workspace folder or create a new one.",
-            path: null,
-            cause: normalizeError(error),
-          });
-          setMode("onboarding");
-        }
-      }
-    }
-
-    boot();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  async function loadWorkspacePages() {
-    const allPages = await invoke("all_pages");
+  async function loadWorkspaceLists() {
+    const [allPages, allStreamNames] = await Promise.all([
+      invoke("all_pages"),
+      invoke("all_streams"),
+    ]);
     setPages(allPages);
+    setStreamNames(allStreamNames);
   }
 
   async function loadPageBlocks(pageId) {
@@ -143,7 +235,7 @@ export default function App() {
   async function openWorkspaceRoot(rootPath) {
     const openedWorkspace = await invoke("open_workspace", { rootPath });
     setWorkspace(openedWorkspace);
-    await loadWorkspacePages();
+    await loadWorkspaceLists();
     setMode("workspace");
   }
 
@@ -157,7 +249,6 @@ export default function App() {
         multiple: false,
         title: "Choose an existing workspace folder",
       });
-
       if (!selected || Array.isArray(selected)) {
         return;
       }
@@ -181,7 +272,6 @@ export default function App() {
         multiple: false,
         title: "Choose where to create the new workspace folder",
       });
-
       if (!selected || Array.isArray(selected)) {
         return;
       }
@@ -208,7 +298,7 @@ export default function App() {
         folderName: createState.folderName,
       });
       setWorkspace(openedWorkspace);
-      await loadWorkspacePages();
+      await loadWorkspaceLists();
       setStartupError(null);
       setMode("workspace");
     } catch (error) {
@@ -222,9 +312,12 @@ export default function App() {
     await invoke("close_workspace");
     setWorkspace(null);
     setPages([]);
+    setStreamNames([]);
     setSelectedPageId("");
     setSelectedPageBlocks(null);
+    setStartupError(null);
     setActionError(null);
+    setExpandedPageIds({});
     setMode("onboarding");
   }
 
@@ -239,6 +332,13 @@ export default function App() {
     }
   }
 
+  function handleTogglePageTree(pageId) {
+    setExpandedPageIds((current) => ({
+      ...current,
+      [pageId]: !current[pageId],
+    }));
+  }
+
   async function handleMinimizeWindow() {
     await appWindow.minimize();
   }
@@ -247,9 +347,9 @@ export default function App() {
     await appWindow.toggleMaximize();
   }
 
-async function handleCloseWindow() {
-  await appWindow.close();
-}
+  async function handleCloseWindow() {
+    await appWindow.close();
+  }
 
   function handleTopbarMouseDown(event) {
     if (event.button !== 0) {
@@ -273,18 +373,64 @@ async function handleCloseWindow() {
   }
 
   useEffect(() => {
+    isBootEffectMountedRef.current = true;
+
+    async function boot() {
+      if (didAttemptBootRef.current) {
+        return;
+      }
+      didAttemptBootRef.current = true;
+
+      setMode("booting");
+      setStartupError(null);
+
+      try {
+        const lastWorkspacePath = await invoke("get_last_workspace_path");
+        if (!lastWorkspacePath) {
+          if (isBootEffectMountedRef.current) {
+            setMode("onboarding");
+          }
+          return;
+        }
+
+        await openWorkspaceRoot(lastWorkspacePath);
+      } catch (error) {
+        await invoke("clear_last_workspace_path").catch(() => undefined);
+
+        if (isBootEffectMountedRef.current) {
+          setStartupError({
+            code: "workspace_reopen_failed",
+            message:
+              "The last workspace could not be reopened. Choose a workspace folder or create a new one.",
+            path: null,
+            cause: normalizeError(error),
+          });
+          setMode("onboarding");
+        }
+      }
+    }
+
+    void boot();
+
+    return () => {
+      isBootEffectMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (mode !== "workspace") {
       return;
     }
 
-    if (pages.length === 0) {
+    if (regularPages.length === 0) {
       setSelectedPageId("");
       setSelectedPageBlocks(null);
       return;
     }
 
-    const hasSelectedPage = pages.some((page) => page.page_id === selectedPageId);
-    const nextPageId = hasSelectedPage ? selectedPageId : pages[0].page_id;
+    const nextPageId = regularPages.some((page) => page.page_id === selectedPageId)
+      ? selectedPageId
+      : regularPages[0].page_id;
 
     if (nextPageId !== selectedPageId) {
       setSelectedPageId(nextPageId);
@@ -293,29 +439,36 @@ async function handleCloseWindow() {
     loadPageBlocks(nextPageId).catch((error) => {
       setActionError(normalizeError(error));
     });
-  }, [mode, pages, selectedPageId]);
+  }, [mode, regularPages, selectedPageId]);
 
-  const createDisabled =
-    busyAction === "create" ||
-    !createState.parentPath ||
-    !createState.folderName.trim();
-
-  const regularPages = pages.filter((page) => readStreamName(page.location) === null);
-  const streamGroups = pages.reduce((groups, page) => {
-    const streamName = readStreamName(page.location);
-    if (!streamName) {
-      return groups;
+  useEffect(() => {
+    if (!selectedPageId) {
+      return;
     }
 
-    if (!groups[streamName]) {
-      groups[streamName] = [];
+    const pagesById = new Map(regularPages.map((page) => [page.page_id, page]));
+    const ancestorPageIds = collectAncestorPageIds(selectedPageId, pagesById);
+    if (ancestorPageIds.length === 0) {
+      return;
     }
 
-    groups[streamName].push(page);
-    return groups;
-  }, {});
-  const selectedPage = pages.find((page) => page.page_id === selectedPageId) ?? null;
-  const editorRows = selectedPageBlocks ? flattenBlocks(selectedPageBlocks.blocks ?? []) : [];
+    setExpandedPageIds((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const ancestorPageId of ancestorPageIds) {
+        if (!next[ancestorPageId]) {
+          next[ancestorPageId] = true;
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [selectedPageId, regularPages]);
+
+  const visibleError =
+    startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
 
   if (mode === "booting") {
     return (
@@ -349,7 +502,7 @@ async function handleCloseWindow() {
                 aria-label="Minimize window"
                 onClick={handleMinimizeWindow}
               >
-                _
+                -
               </button>
               <button
                 className="window-control-button"
@@ -357,7 +510,7 @@ async function handleCloseWindow() {
                 aria-label="Maximize window"
                 onClick={handleToggleMaximizeWindow}
               >
-                □
+                []
               </button>
               <button
                 className="window-control-button window-control-button--close"
@@ -365,22 +518,16 @@ async function handleCloseWindow() {
                 aria-label="Close window"
                 onClick={handleCloseWindow}
               >
-                ×
+                x
               </button>
             </div>
           </header>
 
-          {(startupError || actionError) && (
+          {visibleError ? (
             <div className="error-banner" role="alert">
-              <span>
-                {startupError?.cause
-                  ? formatError(startupError.cause)
-                  : actionError
-                    ? formatError(actionError)
-                    : startupError?.message}
-              </span>
+              <span>{formatError(visibleError)}</span>
             </div>
-          )}
+          ) : null}
 
           <div className="workspace-body">
             <aside className="workspace-sidebar">
@@ -389,41 +536,23 @@ async function handleCloseWindow() {
                   <h2>Streams</h2>
                 </div>
 
-                {Object.keys(streamGroups).length === 0 ? (
+                {streamNames.length === 0 ? (
                   <p className="empty-state">No stream pages yet.</p>
                 ) : (
-                  <div className="nav-groups">
-                    {Object.entries(streamGroups).map(([streamName, streamPages]) => (
-                      <section key={streamName} className="nav-group">
-                        <p className="nav-group-title">{streamName}</p>
-                        <ul className="nav-list">
-                          {streamPages.map((page) => (
-                            <li key={page.page_id}>
-                              <button
-                                className={
-                                  page.page_id === selectedPageId
-                                    ? "nav-item nav-item--active"
-                                    : "nav-item"
-                                }
-                                type="button"
-                                onClick={() => handleSelectPage(page.page_id)}
-                              >
-                                <strong>{page.title || page.page_id}</strong>
-                                <span>{page.workspace_path}</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
+                  <ul className="stream-list">
+                    {streamNames.map((streamName) => (
+                      <li key={streamName} className="stream-list-item">
+                        <span className="stream-list-label">{streamName}</span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </div>
 
               <div className="sidebar-section">
                 <div className="section-heading">
                   <h2>Pages</h2>
-                  <button className="ghost-button" type="button" onClick={loadWorkspacePages}>
+                  <button className="ghost-button" type="button" onClick={loadWorkspaceLists}>
                     Refresh
                   </button>
                 </div>
@@ -431,24 +560,13 @@ async function handleCloseWindow() {
                 {regularPages.length === 0 ? (
                   <p className="empty-state">No regular pages yet.</p>
                 ) : (
-                  <ul className="nav-list">
-                    {regularPages.map((page) => (
-                      <li key={page.page_id}>
-                        <button
-                          className={
-                            page.page_id === selectedPageId
-                              ? "nav-item nav-item--active"
-                              : "nav-item"
-                          }
-                          type="button"
-                          onClick={() => handleSelectPage(page.page_id)}
-                        >
-                          <strong>{page.title || page.page_id}</strong>
-                          <span>{page.workspace_path}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  <PageTree
+                    nodes={pageTree}
+                    expandedPageIds={expandedPageIds}
+                    selectedPageId={selectedPageId}
+                    onSelectPage={handleSelectPage}
+                    onTogglePageTree={handleTogglePageTree}
+                  />
                 )}
               </div>
 
@@ -463,6 +581,7 @@ async function handleCloseWindow() {
                     <dd>{workspace.watcher_status.mode ?? "starting"}</dd>
                   </div>
                 </dl>
+
                 <button className="secondary-button" type="button" onClick={handleCloseWorkspace}>
                   Close workspace
                 </button>
@@ -522,17 +641,11 @@ async function handleCloseWindow() {
           <h1>Uniseq</h1>
         </div>
 
-        {(startupError || actionError) && (
+        {visibleError ? (
           <div className="error-banner" role="alert">
-            <span>
-              {startupError?.cause
-                ? formatError(startupError.cause)
-                : actionError
-                  ? formatError(actionError)
-                  : startupError?.message}
-            </span>
+            <span>{formatError(visibleError)}</span>
           </div>
-        )}
+        ) : null}
 
         <div className="minimal-stack">
           <section className="minimal-section">
@@ -540,6 +653,7 @@ async function handleCloseWindow() {
               <h2>Open existing workspace</h2>
               <p>Select the workspace folder.</p>
             </div>
+
             <button
               className="primary-button"
               type="button"

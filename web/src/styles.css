@@ -362,56 +362,112 @@ h2 {
   align-content: start;
 }
 
-.nav-groups,
-.nav-list {
-  display: grid;
-  gap: 10px;
-}
-
-.nav-list {
+.stream-list,
+.page-tree {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.nav-group {
+.stream-list {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
-.nav-group-title {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.85rem;
-  text-transform: capitalize;
+.stream-list-item {
+  min-height: 30px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
 }
 
-.nav-item {
-  width: 100%;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: transparent;
+.stream-list-label {
   color: var(--ink);
+  font-size: 0.94rem;
+}
+
+.page-tree {
   display: grid;
-  gap: 4px;
+  gap: 2px;
+}
+
+.page-tree--nested {
+  margin-top: 2px;
+}
+
+.page-tree-node {
+  display: grid;
+}
+
+.page-tree-row {
+  min-height: 28px;
+  padding-left: calc(var(--page-tree-depth, 0) * 18px);
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+}
+
+.page-tree-row:hover {
+  background: rgba(17, 17, 17, 0.035);
+}
+
+.page-tree-row--active {
+  background: rgba(17, 17, 17, 0.07);
+}
+
+.page-tree-toggle,
+.page-tree-item {
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.page-tree-toggle {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7a7a73;
+}
+
+.page-tree-toggle:hover {
+  background: rgba(17, 17, 17, 0.06);
+}
+
+.page-tree-toggle--placeholder {
+  pointer-events: none;
+}
+
+.page-tree-caret {
+  font-size: 0.9rem;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.page-tree-caret--expanded {
+  transform: rotate(90deg);
+}
+
+.page-tree-item {
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 8px 4px 6px;
+  border-radius: 8px;
   text-align: left;
 }
 
-.nav-item strong {
-  font-size: 0.95rem;
-  font-weight: 600;
-}
-
-.nav-item span {
-  color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1.4;
-}
-
-.nav-item--active {
-  background: rgba(17, 17, 17, 0.04);
-  border-color: #c6c6bd;
+.page-tree-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
 }
 
 .sidebar-footer {

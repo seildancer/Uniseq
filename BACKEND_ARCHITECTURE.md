@@ -24,6 +24,8 @@
 - `linked references` are derived views over source blocks and never live in the target page file.
 - Disposable indexes and caches may exist, but the backend must be rebuildable from files alone.
 - In-app page identity changes must use backend-owned structural operations. Raw external filesystem renames/moves reconcile from disk truth, but they do not preserve semantic rename/move behavior or rewrite refs.
+- If it defines truth about the workspace, put it in core.
+- If it adapts truth for the desktop app, keep it in Tauri.
 
 ## Backend Responsibilities
 

@@ -206,7 +206,11 @@ impl PageId {
         match &self.location {
             PageLocation::Pages => format!("pages:{}", self.hierarchy_display()),
             PageLocation::Stream { stream_name } => {
-                format!("stream:{}/{}", stream_name.as_str(), self.leaf_name().as_str())
+                format!(
+                    "stream:{}/{}",
+                    stream_name.as_str(),
+                    self.leaf_name().as_str()
+                )
             }
         }
     }
@@ -220,8 +224,10 @@ impl PageLocation {
 
         match self {
             Self::Pages => Ok(PathBuf::from(PAGES_ROOT).join(flat_page_file_name(page_id))),
-            Self::Stream { stream_name } => Ok(PathBuf::from(stream_name.as_str())
-                .join(markdown_file_name(page_id.leaf_name()))),
+            Self::Stream { stream_name } => {
+                Ok(PathBuf::from(stream_name.as_str())
+                    .join(markdown_file_name(page_id.leaf_name())))
+            }
         }
     }
 
@@ -260,7 +266,9 @@ pub fn resolve_workspace_path(
 
     match components[0].as_str() {
         PAGES_ROOT => resolve_page_backed_workspace_path(&components),
-        root_name if !is_reserved_root_name(root_name) => resolve_stream_workspace_path(&components),
+        root_name if !is_reserved_root_name(root_name) => {
+            resolve_stream_workspace_path(&components)
+        }
         _ => Err(PagePathError::NestedPath),
     }
 }

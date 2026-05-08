@@ -16,7 +16,7 @@ use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
     page_and_fingerprint_from_text,
 };
-use crate::core::storage::is_supported_workspace_markdown_path;
+use crate::core::storage::{all_stream_names, is_supported_workspace_markdown_path};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
@@ -174,6 +174,11 @@ impl WorkspaceSession {
             .read()
             .unwrap()
             .with_read_api(|read_api| read_api.all_pages())
+    }
+
+    pub fn all_streams(&self) -> Result<Vec<String>, CoreError> {
+        let root = self.workspace_root();
+        all_stream_names(&root)
     }
 
     pub fn page_summary(&self, page_id: &PageId) -> Result<PageSummary, CoreError> {
@@ -1172,7 +1177,9 @@ mod tests {
     };
 
     fn markdown_event(workspace: &TestWorkspace, relative_path: &str, exists: bool) -> Event {
-        let path = workspace.root.join(workspace_test_relative_path(relative_path));
+        let path = workspace
+            .root
+            .join(workspace_test_relative_path(relative_path));
         Event {
             kind: if exists {
                 EventKind::Modify(notify::event::ModifyKind::Any)
@@ -1182,6 +1189,19 @@ mod tests {
             paths: vec![path],
             attrs: Default::default(),
         }
+    }
+
+    #[test]
+    fn all_streams_returns_only_valid_stream_directories() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        std::fs::create_dir_all(workspace.root.join("journal")).unwrap();
+        std::fs::create_dir_all(workspace.root.join("archive")).unwrap();
+        workspace.write_raw_file("archive/notes.txt", "");
+        std::fs::create_dir_all(workspace.root.join("logs")).unwrap();
+        std::fs::create_dir_all(workspace.root.join("logs").join("nested")).unwrap();
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        assert_eq!(session.all_streams().unwrap(), vec!["journal"]);
     }
 
     #[test]
@@ -1662,9 +1682,9 @@ mod tests {
                 .contains_key(&workspace_test_relative_path("A.md"))
         );
         assert!(
-            snapshot.markdown_files.contains_key(
-                &PathBuf::from("journal").join("2026_05_07.md")
-            )
+            snapshot
+                .markdown_files
+                .contains_key(&PathBuf::from("journal").join("2026_05_07.md"))
         );
         assert!(
             !snapshot

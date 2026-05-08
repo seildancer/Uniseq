@@ -133,7 +133,11 @@ pub enum CoreError {
     InvalidPagePath(PagePathError),
     InvalidSpan(SpanError),
     InvalidParse(ParserError),
+    InvalidWorkspaceName { message: String },
     InvalidWorkspaceStructure { path: PathBuf, message: String },
+    WorkspaceParentMissing { path: PathBuf },
+    WorkspaceParentNotDirectory { path: PathBuf },
+    WorkspaceTargetExists { path: PathBuf },
     DuplicatePageIdentity { page_id: String },
     Io { path: PathBuf, kind: io::ErrorKind },
     StructuralConflict { path: PathBuf },
@@ -153,8 +157,30 @@ impl fmt::Display for CoreError {
             Self::InvalidPagePath(err) => write!(f, "{err}"),
             Self::InvalidSpan(err) => write!(f, "{err}"),
             Self::InvalidParse(err) => write!(f, "{err}"),
+            Self::InvalidWorkspaceName { message } => write!(f, "{message}"),
             Self::InvalidWorkspaceStructure { path, message } => {
-                write!(f, "invalid workspace structure at '{}': {message}", path.display())
+                write!(
+                    f,
+                    "invalid workspace structure at '{}': {message}",
+                    path.display()
+                )
+            }
+            Self::WorkspaceParentMissing { path } => {
+                write!(
+                    f,
+                    "workspace parent folder does not exist: '{}'",
+                    path.display()
+                )
+            }
+            Self::WorkspaceParentNotDirectory { path } => {
+                write!(
+                    f,
+                    "workspace parent path is not a directory: '{}'",
+                    path.display()
+                )
+            }
+            Self::WorkspaceTargetExists { path } => {
+                write!(f, "workspace folder already exists: '{}'", path.display())
             }
             Self::DuplicatePageIdentity { page_id } => {
                 write!(f, "duplicate page identity detected for '{page_id}'")
@@ -179,7 +205,10 @@ impl fmt::Display for CoreError {
                 write!(f, "stream pages do not support the '{operation}' operation")
             }
             Self::ConcurrentWorkspaceReconciliation => {
-                write!(f, "workspace reconciliation is already running in the background")
+                write!(
+                    f,
+                    "workspace reconciliation is already running in the background"
+                )
             }
             Self::CorruptTransaction => write!(f, "transaction record is missing or invalid"),
         }
