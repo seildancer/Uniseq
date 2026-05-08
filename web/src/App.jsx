@@ -247,8 +247,29 @@ export default function App() {
     await appWindow.toggleMaximize();
   }
 
-  async function handleCloseWindow() {
-    await appWindow.close();
+async function handleCloseWindow() {
+  await appWindow.close();
+}
+
+  function handleTopbarMouseDown(event) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    if (
+      target.closest(
+        'button, input, textarea, select, option, a, summary, [role="button"], [data-no-window-drag="true"]',
+      )
+    ) {
+      return;
+    }
+
+    void appWindow.startDragging();
   }
 
   useEffect(() => {
@@ -311,17 +332,17 @@ export default function App() {
     return (
       <main className="app-shell app-shell--workspace">
         <section className="workspace-shell">
-          <header className="app-topbar">
-            <div className="topbar-brand" data-tauri-drag-region>
+          <header className="app-topbar" onMouseDown={handleTopbarMouseDown}>
+            <div className="topbar-brand">
               <strong>Uniseq</strong>
               <span>{workspace.root_path}</span>
             </div>
 
-            <div className="topbar-tabs" data-tauri-drag-region>
+            <div className="topbar-tabs">
               <span className="topbar-tab topbar-tab--placeholder">Tabs later</span>
             </div>
 
-            <div className="window-controls">
+            <div className="window-controls" data-no-window-drag="true">
               <button
                 className="window-control-button"
                 type="button"
