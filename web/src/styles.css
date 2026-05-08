@@ -53,8 +53,11 @@ button:disabled {
 }
 
 .app-shell--workspace {
+  height: 100%;
   padding: 0;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
 .hero-panel,
@@ -263,7 +266,8 @@ h2 {
 }
 
 .workspace-shell {
-  min-height: 100vh;
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto 1fr;
   background: var(--bg);
@@ -339,6 +343,7 @@ h2 {
 }
 
 .workspace-sidebar {
+  overflow-y: auto;
   display: grid;
   grid-template-rows: auto auto 1fr;
   gap: 0;
