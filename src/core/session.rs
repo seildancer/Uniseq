@@ -20,7 +20,7 @@ use crate::core::structure::{
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
     apply_page_delete_subtree_with_update, apply_page_move_with_update,
     apply_page_rename_with_update, apply_stream_page_create_with_update,
-    apply_stream_page_delete_with_update,
+    apply_stream_page_delete_with_update, recover_workspace_transactions,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -145,7 +145,8 @@ enum WatchLoopMessage {
 impl WorkspaceSession {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, CoreError> {
         let root = root.as_ref().to_path_buf();
-        let cache = load_workspace_cache(&root)?;
+        let mut cache = load_workspace_cache(&root)?;
+        recover_workspace_transactions(&root, &mut cache)?;
         let fs_snapshot = WorkspaceFsSnapshot::capture_for_cache(&root, &cache)?;
 
         Ok(Self {
@@ -1116,6 +1117,10 @@ mod tests {
     use crate::{
         FileFingerprint, PageMove, PageName, PageRename,
         core::files::{TestWorkspace, workspace_test_relative_path},
+        core::structure::{
+            apply_staged_transaction_partially_for_testing,
+            stage_page_rename_transaction_for_testing,
+        },
     };
 
     #[test]
@@ -1460,6 +1465,45 @@ mod tests {
                 .incoming_refs
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn open_recovers_interrupted_rename_transaction_before_exposing_cache() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+
+        stage_page_rename_transaction_for_testing(
+            &workspace.root,
+            &PageId::new(["A", "B"]).unwrap(),
+            &PageName::new("Renamed").unwrap(),
+        )
+        .unwrap();
+        apply_staged_transaction_partially_for_testing(&workspace.root, Some(1), true).unwrap();
+
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        assert_eq!(workspace.read_file("A___Renamed.md"), "- [[A/Renamed/C]]\n");
+        assert_eq!(workspace.read_file("A___Renamed___C.md"), "- child\n");
+        assert_eq!(
+            workspace.read_file("X.md"),
+            "- [[A/Renamed]] and #A/Renamed/C\n"
+        );
+        assert!(!workspace.file_exists("A___B.md"));
+        assert!(!workspace.file_exists("A___B___C.md"));
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+        assert!(
+            session
+                .page_summary(&PageId::new(["A", "Renamed"]).unwrap())
+                .is_ok()
+        );
+        assert!(
+            session
+                .page_summary(&PageId::new(["A", "Renamed", "C"]).unwrap())
+                .is_ok()
         );
     }
 

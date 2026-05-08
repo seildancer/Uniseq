@@ -537,6 +537,18 @@ pub(crate) fn stage_page_rename_transaction_for_testing(
     Ok(())
 }
 
+#[cfg(test)]
+pub(crate) fn apply_staged_transaction_partially_for_testing(
+    root: impl AsRef<Path>,
+    write_limit: Option<usize>,
+    skip_deletes: bool,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    let mut record = TransactionRecord::load(root)?;
+    record.mark_applying(root)?;
+    record.apply_final_state(root, write_limit, skip_deletes)
+}
+
 fn apply_transaction_plan_to_cache(
     cache: &mut WorkspaceCache,
     plan: &RenameTransactionPlan,
