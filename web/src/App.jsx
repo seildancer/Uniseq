@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const INITIAL_CREATE_STATE = {
   parentPath: "",
   folderName: "",
 };
+
+const appWindow = getCurrentWindow();
 
 function normalizeError(error) {
   if (error && typeof error === "object" && "message" in error) {
@@ -35,10 +38,39 @@ function formatError(error) {
   return error.message;
 }
 
+function readStreamName(location) {
+  if (!location || typeof location !== "object") {
+    return null;
+  }
+
+  if ("stream" in location && location.stream?.stream_name) {
+    return location.stream.stream_name;
+  }
+
+  if ("Stream" in location && location.Stream?.stream_name) {
+    return location.Stream.stream_name;
+  }
+
+  return null;
+}
+
+function flattenBlocks(blocks, depth = 0) {
+  return blocks.flatMap((block) => [
+    {
+      depth,
+      kind: block.kind,
+      content: block.content,
+    },
+    ...flattenBlocks(block.children ?? [], depth + 1),
+  ]);
+}
+
 export default function App() {
   const [mode, setMode] = useState("booting");
   const [workspace, setWorkspace] = useState(null);
   const [pages, setPages] = useState([]);
+  const [selectedPageId, setSelectedPageId] = useState("");
+  const [selectedPageBlocks, setSelectedPageBlocks] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [busyAction, setBusyAction] = useState("");
@@ -96,6 +128,16 @@ export default function App() {
   async function loadWorkspacePages() {
     const allPages = await invoke("all_pages");
     setPages(allPages);
+  }
+
+  async function loadPageBlocks(pageId) {
+    if (!pageId) {
+      setSelectedPageBlocks(null);
+      return;
+    }
+
+    const blocks = await invoke("page_blocks", { pageId });
+    setSelectedPageBlocks(blocks);
   }
 
   async function openWorkspaceRoot(rootPath) {
@@ -180,14 +222,79 @@ export default function App() {
     await invoke("close_workspace");
     setWorkspace(null);
     setPages([]);
+    setSelectedPageId("");
+    setSelectedPageBlocks(null);
     setActionError(null);
     setMode("onboarding");
   }
+
+  async function handleSelectPage(pageId) {
+    setSelectedPageId(pageId);
+    setActionError(null);
+
+    try {
+      await loadPageBlocks(pageId);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    }
+  }
+
+  async function handleMinimizeWindow() {
+    await appWindow.minimize();
+  }
+
+  async function handleToggleMaximizeWindow() {
+    await appWindow.toggleMaximize();
+  }
+
+  async function handleCloseWindow() {
+    await appWindow.close();
+  }
+
+  useEffect(() => {
+    if (mode !== "workspace") {
+      return;
+    }
+
+    if (pages.length === 0) {
+      setSelectedPageId("");
+      setSelectedPageBlocks(null);
+      return;
+    }
+
+    const hasSelectedPage = pages.some((page) => page.page_id === selectedPageId);
+    const nextPageId = hasSelectedPage ? selectedPageId : pages[0].page_id;
+
+    if (nextPageId !== selectedPageId) {
+      setSelectedPageId(nextPageId);
+    }
+
+    loadPageBlocks(nextPageId).catch((error) => {
+      setActionError(normalizeError(error));
+    });
+  }, [mode, pages, selectedPageId]);
 
   const createDisabled =
     busyAction === "create" ||
     !createState.parentPath ||
     !createState.folderName.trim();
+
+  const regularPages = pages.filter((page) => readStreamName(page.location) === null);
+  const streamGroups = pages.reduce((groups, page) => {
+    const streamName = readStreamName(page.location);
+    if (!streamName) {
+      return groups;
+    }
+
+    if (!groups[streamName]) {
+      groups[streamName] = [];
+    }
+
+    groups[streamName].push(page);
+    return groups;
+  }, {});
+  const selectedPage = pages.find((page) => page.page_id === selectedPageId) ?? null;
+  const editorRows = selectedPageBlocks ? flattenBlocks(selectedPageBlocks.blocks ?? []) : [];
 
   if (mode === "booting") {
     return (
@@ -202,56 +309,186 @@ export default function App() {
 
   if (mode === "workspace" && workspace) {
     return (
-      <main className="app-shell">
-        <section className="workspace-panel">
-          <div className="workspace-header">
-            <div>
-              <p className="eyebrow">Workspace Open</p>
-              <h1>Uniseq</h1>
-              <p className="body-copy">
-                {workspace.root_path}
-              </p>
+      <main className="app-shell app-shell--workspace">
+        <section className="workspace-shell">
+          <header className="app-topbar">
+            <div className="topbar-brand" data-tauri-drag-region>
+              <strong>Uniseq</strong>
+              <span>{workspace.root_path}</span>
             </div>
-            <button className="secondary-button" type="button" onClick={handleCloseWorkspace}>
-              Close
-            </button>
-          </div>
 
-          <dl className="workspace-meta">
-            <div>
-              <dt>Pages</dt>
-              <dd>{pages.length}</dd>
+            <div className="topbar-tabs" data-tauri-drag-region>
+              <span className="topbar-tab topbar-tab--placeholder">Tabs later</span>
             </div>
-            <div>
-              <dt>Watcher</dt>
-              <dd>{workspace.watcher_status.mode ?? "starting"}</dd>
-            </div>
-          </dl>
 
-          <section className="page-list-panel">
-            <div className="section-heading">
-              <h2>Discovered Pages</h2>
-              <button className="ghost-button" type="button" onClick={loadWorkspacePages}>
-                Refresh
+            <div className="window-controls">
+              <button
+                className="window-control-button"
+                type="button"
+                aria-label="Minimize window"
+                onClick={handleMinimizeWindow}
+              >
+                _
+              </button>
+              <button
+                className="window-control-button"
+                type="button"
+                aria-label="Maximize window"
+                onClick={handleToggleMaximizeWindow}
+              >
+                □
+              </button>
+              <button
+                className="window-control-button window-control-button--close"
+                type="button"
+                aria-label="Close window"
+                onClick={handleCloseWindow}
+              >
+                ×
               </button>
             </div>
+          </header>
 
-            {pages.length === 0 ? (
-              <p className="empty-state">
-                This workspace is ready. Add files under <code>pages/</code> or in a top-level
-                stream folder like <code>journal/2026_05_08.md</code>.
-              </p>
-            ) : (
-              <ul className="page-list">
-                {pages.map((page) => (
-                  <li key={page.page_id}>
-                    <strong>{page.title || page.page_id}</strong>
-                    <span>{page.workspace_path}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          {(startupError || actionError) && (
+            <div className="error-banner" role="alert">
+              <span>
+                {startupError?.cause
+                  ? formatError(startupError.cause)
+                  : actionError
+                    ? formatError(actionError)
+                    : startupError?.message}
+              </span>
+            </div>
+          )}
+
+          <div className="workspace-body">
+            <aside className="workspace-sidebar">
+              <div className="sidebar-section">
+                <div className="section-heading">
+                  <h2>Streams</h2>
+                </div>
+
+                {Object.keys(streamGroups).length === 0 ? (
+                  <p className="empty-state">No stream pages yet.</p>
+                ) : (
+                  <div className="nav-groups">
+                    {Object.entries(streamGroups).map(([streamName, streamPages]) => (
+                      <section key={streamName} className="nav-group">
+                        <p className="nav-group-title">{streamName}</p>
+                        <ul className="nav-list">
+                          {streamPages.map((page) => (
+                            <li key={page.page_id}>
+                              <button
+                                className={
+                                  page.page_id === selectedPageId
+                                    ? "nav-item nav-item--active"
+                                    : "nav-item"
+                                }
+                                type="button"
+                                onClick={() => handleSelectPage(page.page_id)}
+                              >
+                                <strong>{page.title || page.page_id}</strong>
+                                <span>{page.workspace_path}</span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="sidebar-section">
+                <div className="section-heading">
+                  <h2>Pages</h2>
+                  <button className="ghost-button" type="button" onClick={loadWorkspacePages}>
+                    Refresh
+                  </button>
+                </div>
+
+                {regularPages.length === 0 ? (
+                  <p className="empty-state">No regular pages yet.</p>
+                ) : (
+                  <ul className="nav-list">
+                    {regularPages.map((page) => (
+                      <li key={page.page_id}>
+                        <button
+                          className={
+                            page.page_id === selectedPageId
+                              ? "nav-item nav-item--active"
+                              : "nav-item"
+                          }
+                          type="button"
+                          onClick={() => handleSelectPage(page.page_id)}
+                        >
+                          <strong>{page.title || page.page_id}</strong>
+                          <span>{page.workspace_path}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="sidebar-footer">
+                <dl className="workspace-stats">
+                  <div>
+                    <dt>Pages</dt>
+                    <dd>{pages.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Watcher</dt>
+                    <dd>{workspace.watcher_status.mode ?? "starting"}</dd>
+                  </div>
+                </dl>
+                <button className="secondary-button" type="button" onClick={handleCloseWorkspace}>
+                  Close workspace
+                </button>
+              </div>
+            </aside>
+
+            <section className="editor-panel">
+              {selectedPage ? (
+                <>
+                  <div className="editor-header">
+                    <div>
+                      <p className="eyebrow">Editor</p>
+                      <h1>{selectedPage.title || selectedPage.page_id}</h1>
+                      <p className="body-copy">{selectedPage.workspace_path}</p>
+                    </div>
+                  </div>
+
+                  {editorRows.length === 0 ? (
+                    <div className="editor-empty">
+                      <p className="empty-state">This page is empty. Editor surface comes next.</p>
+                    </div>
+                  ) : (
+                    <div className="editor-surface">
+                      {editorRows.map((row, index) => (
+                        <div
+                          key={`${row.kind}-${row.content}-${index}`}
+                          className="editor-row"
+                          style={{ paddingLeft: `${16 + row.depth * 18}px` }}
+                        >
+                          <span className="editor-row-kind">{row.kind}</span>
+                          <span>{row.content || "Untitled block"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="editor-empty">
+                  <h1>Workspace ready</h1>
+                  <p className="body-copy">
+                    Add files under <code>pages/</code> or in a stream folder like{" "}
+                    <code>journal/2026_05_08.md</code>.
+                  </p>
+                </div>
+              )}
+            </section>
+          </div>
         </section>
       </main>
     );
