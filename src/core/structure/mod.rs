@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use super::{CoreError, PageId, PageLocation, PageName, WorkspaceCache, resolve_workspace_path};
 use crate::core::discovery::materialize_parent_pages;
-use crate::core::files::{load_workspace_cache, page_from_markdown_in_location};
+use crate::core::files::page_from_markdown_in_location;
 
 use planning::{RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
 use transaction::TransactionRecord;
@@ -298,8 +298,7 @@ pub(crate) fn apply_page_delete_subtree_with_update(
     let root = root.as_ref();
     recover_workspace_transactions(root, cache)?;
 
-    let disk_cache = load_workspace_cache(root)?;
-    let Some(page) = disk_cache.page(&request.page_id) else {
+    let Some(page) = cache.page(&request.page_id) else {
         return Err(CoreError::MissingPage);
     };
     if page.location.is_stream_backed() {
@@ -308,7 +307,7 @@ pub(crate) fn apply_page_delete_subtree_with_update(
         });
     }
 
-    let deleted_pages = disk_cache
+    let deleted_pages = cache
         .pages()
         .values()
         .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id))
@@ -367,8 +366,7 @@ pub(crate) fn apply_stream_page_delete_with_update(
     recover_workspace_transactions(root, cache)?;
 
     let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
-    let disk_cache = load_workspace_cache(root)?;
-    let Some(page) = disk_cache.page(&page_id) else {
+    let Some(page) = cache.page(&page_id).cloned() else {
         return Err(CoreError::MissingPage);
     };
     if page.location.is_page_backed() {
@@ -525,7 +523,7 @@ pub(crate) fn stage_page_rename_transaction_for_testing(
 ) -> Result<(), CoreError> {
     let root = root.as_ref();
     let target_page_id = renamed_page_id(source_page_id, new_leaf_name)?;
-    let disk_cache = load_workspace_cache(root)?;
+    let disk_cache = crate::core::files::load_workspace_cache(root)?;
     let plan = plan_transaction(
         &disk_cache,
         OperationKind::Rename,
@@ -1005,7 +1003,7 @@ mod tests {
         workspace.write_file("A___B___C.md", "- child\n");
         workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
 
-        let disk_cache = load_workspace_cache(&workspace.root).unwrap();
+        let disk_cache = crate::core::files::load_workspace_cache(&workspace.root).unwrap();
         let plan = plan_transaction(
             &disk_cache,
             OperationKind::Rename,
