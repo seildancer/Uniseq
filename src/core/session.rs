@@ -522,7 +522,7 @@ impl WorkspaceSessionState {
     ) -> Result<(), CoreError> {
         let update = self.incremental_update_from_native_paths(relative_paths);
         let prepared = prepare_incremental_fs_update(&self.root, &update)?;
-        let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
+        let Some(cache_diff) = self.plan_incremental_reconciliation(&prepared) else {
             return self.full_refresh();
         };
         let deleted_paths = prepared.deleted_paths.clone();
@@ -612,7 +612,7 @@ impl WorkspaceSessionState {
         snapshot: WorkspaceFsSnapshot,
         prepared: PreparedIncrementalFsUpdate,
     ) -> Result<(), CoreError> {
-        let Some(cache_diff) = self.plan_incremental_cache_diff(&prepared) else {
+        let Some(cache_diff) = self.plan_incremental_reconciliation(&prepared) else {
             return self.full_refresh();
         };
         match self.apply_prepared_incremental_fs_update_to_cache(prepared) {
@@ -644,15 +644,48 @@ impl WorkspaceSessionState {
         Ok(())
     }
 
-    fn plan_incremental_cache_diff(
+    fn plan_incremental_reconciliation(
         &self,
         prepared: &PreparedIncrementalFsUpdate,
     ) -> Option<CacheDiff> {
-        if !prepared.deleted_paths.is_empty() {
-            return None;
-        }
-
         let mut changed_page_ids = BTreeSet::new();
+        let mut removed_page_ids = Vec::new();
+        let removed_page_id_set = prepared
+            .deleted_page_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        for (deleted_path, deleted_page_id) in prepared
+            .deleted_paths
+            .iter()
+            .zip(prepared.deleted_page_ids.iter())
+        {
+            match self.cache.page(deleted_page_id) {
+                Some(existing_page) => {
+                    if existing_page.workspace_path != *deleted_path {
+                        return None;
+                    }
+
+                    removed_page_ids.push(deleted_page_id.clone());
+
+                    if let Some(parent_page_id) = existing_page.parent_page_id() {
+                        if !removed_page_id_set.contains(&parent_page_id)
+                            && self.cache.page(&parent_page_id).is_some()
+                        {
+                            changed_page_ids.insert(parent_page_id);
+                        }
+                    }
+
+                    changed_page_ids.extend(target_page_ids_from_page(existing_page));
+                }
+                None => {
+                    if self.fs_snapshot.markdown_files.contains_key(deleted_path) {
+                        return None;
+                    }
+                }
+            }
+        }
 
         for written_file in &prepared.written_files {
             let page = &written_file.page;
@@ -678,7 +711,7 @@ impl WorkspaceSessionState {
 
         Some(CacheDiff {
             changed_page_ids: changed_page_ids.into_iter().collect(),
-            removed_page_ids: Vec::new(),
+            removed_page_ids,
         })
     }
 
@@ -1133,6 +1166,19 @@ mod tests {
         },
     };
 
+    fn markdown_event(workspace: &TestWorkspace, relative_path: &str, exists: bool) -> Event {
+        let path = workspace.root.join(workspace_test_relative_path(relative_path));
+        Event {
+            kind: if exists {
+                EventKind::Modify(notify::event::ModifyKind::Any)
+            } else {
+                EventKind::Remove(notify::event::RemoveKind::Any)
+            },
+            paths: vec![path],
+            attrs: Default::default(),
+        }
+    }
+
     #[test]
     fn poll_once_refreshes_single_changed_page_and_targets() {
         let workspace = TestWorkspace::new("uniseq-session");
@@ -1267,7 +1313,7 @@ mod tests {
     }
 
     #[test]
-    fn poll_once_falls_back_to_full_refresh_for_deleted_pages() {
+    fn poll_once_reconciles_deleted_pages_incrementally() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "- [[B]]\n");
         workspace.write_file("B.md", "");
@@ -1278,13 +1324,17 @@ mod tests {
         session.poll_once().unwrap();
 
         let events = session.drain_events();
-        assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
-        assert!(events.contains(&WorkspaceEvent::PagesChanged {
-            page_ids: vec![PageId::new(["B"]).unwrap()],
-        }));
-        assert!(events.contains(&WorkspaceEvent::PageRemoved {
-            page_id: PageId::new(["A"]).unwrap(),
-        }));
+        assert_eq!(
+            events,
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![PageId::new(["B"]).unwrap()],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A"]).unwrap(),
+                },
+            ]
+        );
         assert_eq!(
             session
                 .page_detail(&PageId::new(["B"]).unwrap())
@@ -1650,6 +1700,17 @@ mod tests {
         );
 
         session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A.md", true),
+                markdown_event(&workspace, "A___B.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
+        session
             .apply_page_delete_subtree(PageDeleteSubtree {
                 page_id: PageId::new(["A"]).unwrap(),
             })
@@ -1669,6 +1730,17 @@ mod tests {
                 },
             ]
         );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A.md", false),
+                markdown_event(&workspace, "A___B.md", false),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
     }
 
     #[test]
@@ -1719,6 +1791,20 @@ mod tests {
                 .len(),
             2
         );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A___B.md", false),
+                markdown_event(&workspace, "A___B___C.md", false),
+                markdown_event(&workspace, "A___Renamed.md", true),
+                markdown_event(&workspace, "A___Renamed___C.md", true),
+                markdown_event(&workspace, "X.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
 
         session.poll_once().unwrap();
         assert!(session.drain_events().is_empty());
@@ -1779,6 +1865,20 @@ mod tests {
             1
         );
 
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A___B.md", false),
+                markdown_event(&workspace, "A___B___C.md", false),
+                markdown_event(&workspace, "Z___B.md", true),
+                markdown_event(&workspace, "Z___B___C.md", true),
+                markdown_event(&workspace, "X.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
         session.poll_once().unwrap();
         assert!(session.drain_events().is_empty());
     }
@@ -1810,6 +1910,18 @@ mod tests {
         );
 
         session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[Event {
+                kind: EventKind::Create(notify::event::CreateKind::Any),
+                paths: vec![workspace.root.join("streams").join("journal").join("2026-05-07.md")],
+                attrs: Default::default(),
+            }])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
+        session
             .apply_stream_page_delete(StreamPageDelete {
                 stream_name: PageName::new("journal").unwrap(),
                 date_name: PageName::new("2026-05-07").unwrap(),
@@ -1826,6 +1938,18 @@ mod tests {
                 .unwrap(),
             }]
         );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[Event {
+                kind: EventKind::Remove(notify::event::RemoveKind::Any),
+                paths: vec![workspace.root.join("streams").join("journal").join("2026-05-07.md")],
+                attrs: Default::default(),
+            }])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
     }
 
     #[test]
