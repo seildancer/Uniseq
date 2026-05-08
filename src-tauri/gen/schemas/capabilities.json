@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default desktop permissions for the main Uniseq window.","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}

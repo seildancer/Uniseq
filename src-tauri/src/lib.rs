@@ -1,19 +1,20 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Mutex;
 
 #[cfg(test)]
-use std::fs;
-#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
     BlockSnapshot, BlockSnapshotKind, CoreError, FileFingerprint, IncomingPageRefSnapshot,
     OutgoingPageRefSnapshot, PageBlocksSnapshot, PageId, PageLocation, PageName, PageSummary,
     SourceSpan, WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession,
 };
+
+const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
 
 #[derive(Default)]
 struct AppState {
@@ -161,6 +162,28 @@ impl WorkspaceController {
             root_path,
             watcher_status,
         })
+    }
+
+    fn create_workspace(
+        &mut self,
+        parent_path: String,
+        folder_name: String,
+    ) -> CommandResult<WorkspaceOpenDto> {
+        let folder_name = validate_workspace_folder_name(&folder_name)?;
+        let parent_path = PathBuf::from(parent_path);
+        ensure_directory_exists(&parent_path)?;
+
+        let root_path = parent_path.join(folder_name);
+        if root_path.exists() {
+            if root_path.is_dir() && looks_like_workspace_root(&root_path) {
+                return self.open_workspace(root_path.to_string_lossy().to_string());
+            }
+
+            return Err(ErrorDto::workspace_target_exists(&root_path));
+        }
+
+        fs::create_dir_all(root_path.join("pages")).map_err(|error| ErrorDto::io(&root_path, &error))?;
+        self.open_workspace(root_path.to_string_lossy().to_string())
     }
 
     fn close_workspace(&mut self) -> bool {
@@ -453,6 +476,54 @@ impl ErrorDto {
             path: None,
         }
     }
+
+    fn invalid_workspace_name(message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_workspace_name",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn workspace_parent_missing(path: &Path) -> Self {
+        Self {
+            code: "workspace_parent_missing",
+            message: "workspace parent folder does not exist".to_owned(),
+            path: Some(workspace_path_to_string(path)),
+        }
+    }
+
+    fn workspace_parent_not_directory(path: &Path) -> Self {
+        Self {
+            code: "workspace_parent_not_directory",
+            message: "workspace parent path is not a directory".to_owned(),
+            path: Some(workspace_path_to_string(path)),
+        }
+    }
+
+    fn workspace_target_exists(path: &Path) -> Self {
+        Self {
+            code: "workspace_target_exists",
+            message: "workspace folder already exists".to_owned(),
+            path: Some(workspace_path_to_string(path)),
+        }
+    }
+
+    fn app_config_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            code: "app_config_unavailable",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn io(path: &Path, error: &std::io::Error) -> Self {
+        Self {
+            code: "io_error",
+            message: format!("i/o error: {}", error.kind()),
+            path: Some(workspace_path_to_string(path)),
+        }
+    }
 }
 
 impl From<CoreError> for ErrorDto {
@@ -519,6 +590,12 @@ impl From<CoreError> for ErrorDto {
                 message: format!("stream pages do not support the '{operation}' operation"),
                 path: None,
             },
+            CoreError::ConcurrentWorkspaceReconciliation => Self {
+                code: "concurrent_workspace_reconciliation",
+                message: "workspace reconciliation is already running in the background"
+                    .to_owned(),
+                path: None,
+            },
             CoreError::CorruptTransaction => Self {
                 code: "corrupt_transaction",
                 message: "transaction record is missing or invalid".to_owned(),
@@ -530,15 +607,44 @@ impl From<CoreError> for ErrorDto {
 
 #[tauri::command]
 fn open_workspace(
+    app: AppHandle,
     state: State<'_, AppState>,
     root_path: String,
 ) -> CommandResult<WorkspaceOpenDto> {
-    state.controller.lock().unwrap().open_workspace(root_path)
+    let opened = state.controller.lock().unwrap().open_workspace(root_path)?;
+    write_last_workspace_path(&app, &opened.root_path)?;
+    Ok(opened)
+}
+
+#[tauri::command]
+fn create_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    parent_path: String,
+    folder_name: String,
+) -> CommandResult<WorkspaceOpenDto> {
+    let opened = state
+        .controller
+        .lock()
+        .unwrap()
+        .create_workspace(parent_path, folder_name)?;
+    write_last_workspace_path(&app, &opened.root_path)?;
+    Ok(opened)
 }
 
 #[tauri::command]
 fn close_workspace(state: State<'_, AppState>) -> bool {
     state.controller.lock().unwrap().close_workspace()
+}
+
+#[tauri::command]
+fn get_last_workspace_path(app: AppHandle) -> CommandResult<Option<String>> {
+    read_last_workspace_path(&app)
+}
+
+#[tauri::command]
+fn clear_last_workspace_path(app: AppHandle) -> CommandResult<bool> {
+    clear_persisted_last_workspace_path(&app)
 }
 
 #[tauri::command]
@@ -599,10 +705,14 @@ fn stop_watching(state: State<'_, AppState>) -> CommandResult<bool> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_workspace,
+            create_workspace,
             close_workspace,
+            get_last_workspace_path,
+            clear_last_workspace_path,
             all_pages,
             page_summary,
             page_detail,
@@ -616,6 +726,70 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
+}
+
+fn validate_workspace_folder_name(input: &str) -> CommandResult<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(ErrorDto::invalid_workspace_name(
+            "workspace folder name cannot be empty",
+        ));
+    }
+
+    if matches!(trimmed, "." | "..") {
+        return Err(ErrorDto::invalid_workspace_name(
+            "workspace folder name cannot be '.' or '..'",
+        ));
+    }
+
+    if trimmed.ends_with('.') || trimmed.ends_with(' ') {
+        return Err(ErrorDto::invalid_workspace_name(
+            "workspace folder name cannot end with a dot or space",
+        ));
+    }
+
+    for ch in trimmed.chars() {
+        if ch.is_control() {
+            return Err(ErrorDto::invalid_workspace_name(format!(
+                "workspace folder name contains control character U+{:04X}",
+                ch as u32
+            )));
+        }
+
+        if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+            return Err(ErrorDto::invalid_workspace_name(format!(
+                "workspace folder name contains reserved character '{ch}'"
+            )));
+        }
+    }
+
+    let upper = trimmed.to_ascii_uppercase();
+    let reserved = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+        "LPT9",
+    ];
+    if reserved.contains(&upper.as_str()) {
+        return Err(ErrorDto::invalid_workspace_name(
+            "workspace folder name cannot be a reserved Windows device name",
+        ));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn ensure_directory_exists(path: &Path) -> CommandResult<()> {
+    if !path.exists() {
+        return Err(ErrorDto::workspace_parent_missing(path));
+    }
+    if !path.is_dir() {
+        return Err(ErrorDto::workspace_parent_not_directory(path));
+    }
+    Ok(())
+}
+
+fn looks_like_workspace_root(path: &Path) -> bool {
+    path.join("pages").is_dir() || path.join("streams").is_dir()
 }
 
 fn parse_page_id_input(input: &str) -> CommandResult<PageId> {
@@ -651,6 +825,51 @@ fn page_id_to_string(page_id: &PageId) -> String {
 
 fn workspace_path_to_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn app_storage_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    app.path().app_config_dir().map_err(|error| {
+        ErrorDto::app_config_unavailable(format!(
+            "failed to resolve app config directory: {error}"
+        ))
+    })
+}
+
+fn last_workspace_path_file(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(app_storage_dir(app)?.join(LAST_WORKSPACE_FILE_NAME))
+}
+
+fn read_last_workspace_path(app: &AppHandle) -> CommandResult<Option<String>> {
+    let path = last_workspace_path_file(app)?;
+    match fs::read_to_string(&path) {
+        Ok(contents) => {
+            let trimmed = contents.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_owned()))
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
+}
+
+fn write_last_workspace_path(app: &AppHandle, workspace_path: &str) -> CommandResult<()> {
+    let path = last_workspace_path_file(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
+    }
+    fs::write(&path, workspace_path).map_err(|error| ErrorDto::io(&path, &error))
+}
+
+fn clear_persisted_last_workspace_path(app: &AppHandle) -> CommandResult<bool> {
+    let path = last_workspace_path_file(app)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
 }
 
 #[cfg(test)]
@@ -732,10 +951,9 @@ mod tests {
         write_workspace_file(&root, "pages/B.md", "");
         write_workspace_file(&root, "pages/C.md", "");
 
-        let mut controller = WorkspaceController::default();
-        controller
-            .open_workspace(root.to_string_lossy().to_string())
-            .unwrap();
+        let mut controller = WorkspaceController {
+            session: Some(WorkspaceSession::open(&root).unwrap()),
+        };
         let _ = controller.drain_workspace_events().unwrap();
 
         write_workspace_file(&root, "pages/A.md", "- [[C]]\n");
@@ -755,5 +973,51 @@ mod tests {
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn create_workspace_bootstraps_pages_directory_and_opens_session() {
+        let root = unique_temp_dir("uniseq-desktop-create");
+        fs::create_dir_all(&root).unwrap();
+
+        let mut controller = WorkspaceController::default();
+        let opened = controller
+            .create_workspace(root.to_string_lossy().to_string(), "Notebook".to_owned())
+            .unwrap();
+
+        let workspace_root = root.join("Notebook");
+        assert_eq!(PathBuf::from(&opened.root_path), workspace_root);
+        assert!(workspace_root.join("pages").is_dir());
+        assert!(controller.all_pages().unwrap().is_empty());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn create_workspace_reopens_existing_workspace_target() {
+        let root = unique_temp_dir("uniseq-desktop-create-existing");
+        fs::create_dir_all(root.join("Notebook").join("pages")).unwrap();
+        write_workspace_file(&root.join("Notebook"), "pages/A.md", "");
+
+        let mut controller = WorkspaceController::default();
+        let opened = controller
+            .create_workspace(root.to_string_lossy().to_string(), "Notebook".to_owned())
+            .unwrap();
+
+        assert_eq!(PathBuf::from(&opened.root_path), root.join("Notebook"));
+        assert_eq!(controller.all_pages().unwrap().len(), 1);
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn invalid_workspace_folder_names_are_rejected() {
+        let error = validate_workspace_folder_name("  ").unwrap_err();
+        assert_eq!(error.code, "invalid_workspace_name");
+
+        let error = validate_workspace_folder_name("bad/name").unwrap_err();
+        assert_eq!(error.code, "invalid_workspace_name");
     }
 }

@@ -459,16 +459,6 @@ pub fn recover_workspace_transactions(
     Ok(true)
 }
 
-pub(crate) fn transaction_record_exists(root: impl AsRef<Path>) -> bool {
-    TransactionRecord::exists(root.as_ref())
-}
-
-pub(crate) fn is_transaction_relative_path(path: &Path) -> bool {
-    path.components()
-        .next()
-        .is_some_and(|component| component.as_os_str() == ".uniseq-page-transaction")
-}
-
 fn plan_and_commit_transaction(
     root: &Path,
     cache: &mut WorkspaceCache,

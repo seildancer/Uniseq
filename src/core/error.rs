@@ -141,6 +141,7 @@ pub enum CoreError {
     DestinationPageExists,
     InvalidPageMove,
     UnsupportedStreamOperation { operation: &'static str },
+    ConcurrentWorkspaceReconciliation,
     CorruptTransaction,
 }
 
@@ -172,6 +173,9 @@ impl fmt::Display for CoreError {
             Self::InvalidPageMove => write!(f, "page move would create an invalid hierarchy"),
             Self::UnsupportedStreamOperation { operation } => {
                 write!(f, "stream pages do not support the '{operation}' operation")
+            }
+            Self::ConcurrentWorkspaceReconciliation => {
+                write!(f, "workspace reconciliation is already running in the background")
             }
             Self::CorruptTransaction => write!(f, "transaction record is missing or invalid"),
         }

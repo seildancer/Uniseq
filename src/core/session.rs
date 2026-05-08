@@ -271,6 +271,10 @@ impl WorkspaceSession {
     }
 
     pub fn poll_once(&self) -> Result<(), CoreError> {
+        if self.watcher.is_some() {
+            return Err(CoreError::ConcurrentWorkspaceReconciliation);
+        }
+
         let (root, old_snapshot) = {
             let state = self.state.read().unwrap();
             (state.root.clone(), state.fs_snapshot.clone())

@@ -1,83 +1,346 @@
 :root {
   color-scheme: light;
-  font-family: "Segoe UI", sans-serif;
-  background: #f4efe7;
-  color: #1e1d1a;
+  --bg: #f5f5f2;
+  --panel: #ffffff;
+  --panel-strong: #ffffff;
+  --ink: #111111;
+  --muted: #5f5f5a;
+  --line: #ddddd5;
+  --accent: #111111;
+  --accent-ink: #ffffff;
+  --warn: #8c2f2f;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+  font-family: "Segoe UI", "Aptos", sans-serif;
+  background: var(--bg);
+  color: var(--ink);
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
-  background:
-    radial-gradient(circle at top, rgba(201, 128, 73, 0.18), transparent 35%),
-    linear-gradient(180deg, #f8f3ec 0%, #efe7db 100%);
+  background: var(--bg);
 }
 
-.shell {
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.app-shell {
   min-height: 100vh;
+  padding: 32px;
   display: grid;
   place-items: center;
-  padding: 32px;
 }
 
-.panel {
-  width: min(720px, 100%);
-  padding: 40px;
-  border-radius: 24px;
-  background: rgba(255, 251, 246, 0.88);
-  border: 1px solid rgba(88, 63, 41, 0.14);
-  box-shadow: 0 20px 60px rgba(75, 51, 34, 0.12);
+.hero-panel,
+.workspace-panel,
+.boot-panel {
+  width: min(760px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
 }
 
-.eyebrow {
-  margin: 0 0 12px;
+.hero-panel,
+.workspace-panel {
+  padding: 24px;
+}
+
+.boot-panel {
+  max-width: 420px;
+  padding: 24px;
+}
+
+.hero-copy {
+  max-width: 760px;
+}
+
+.eyebrow,
+.card-label,
+.workspace-meta dt {
+  margin: 0 0 10px;
+  color: #8a6542;
   text-transform: uppercase;
   letter-spacing: 0.18em;
   font-size: 12px;
-  color: #8a5d3a;
+  font-weight: 700;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-family: inherit;
+  font-weight: 600;
 }
 
 h1 {
-  margin: 0;
-  font-size: clamp(40px, 8vw, 72px);
-  line-height: 0.95;
+  font-size: 1.75rem;
+  line-height: 1.1;
 }
 
-.body {
-  margin: 20px 0 0;
-  max-width: 48ch;
-  font-size: 18px;
-  line-height: 1.6;
-  color: #47392d;
+h2 {
+  font-size: 1rem;
+  line-height: 1.2;
 }
 
-.status {
-  margin: 28px 0 0;
+.body-copy,
+.action-card p,
+.empty-state,
+.page-list span {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.body-copy {
+  max-width: 58ch;
+  margin: 10px 0 0;
+  font-size: 1rem;
+}
+
+.error-banner {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(140, 47, 47, 0.15);
+  background: rgba(140, 47, 47, 0.06);
+  color: var(--warn);
+  font-size: 0.92rem;
+}
+
+.action-grid {
+  margin-top: 28px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.action-card {
+  min-height: 100%;
+  padding: 24px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.54);
+  border: 1px solid var(--line);
+}
+
+.action-card--accent {
+  background:
+    linear-gradient(180deg, rgba(31, 111, 95, 0.08), rgba(255, 255, 255, 0.6)),
+    rgba(255, 255, 255, 0.6);
+}
+
+.action-card p {
+  margin: 14px 0 0;
+}
+
+.primary-button,
+.secondary-button,
+.ghost-button {
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.secondary-button {
+  background: var(--panel-strong);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.ghost-button {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+.create-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.field span {
+  font-size: 0.85rem;
+}
+
+.field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.field input:focus-visible,
+.primary-button:focus-visible,
+.secondary-button:focus-visible,
+.ghost-button:focus-visible {
+  outline: 2px solid rgba(31, 111, 95, 0.42);
+  outline-offset: 2px;
+}
+
+.inline-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.minimal-panel {
+  max-width: 520px;
+}
+
+.compact-copy {
+  margin-bottom: 12px;
+}
+
+.status-copy,
+.section-copy p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.minimal-stack {
+  display: grid;
   gap: 16px;
 }
 
-.status div {
-  padding: 16px;
+.minimal-section {
+  padding: 14px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.section-copy {
+  margin-bottom: 12px;
+}
+
+.compact-form {
+  max-width: 100%;
+}
+
+.workspace-header,
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workspace-meta {
+  margin: 28px 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.workspace-meta div,
+.page-list-panel {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.56);
+  border-radius: 20px;
+}
+
+.workspace-meta div {
+  padding: 18px;
+}
+
+.workspace-meta dd {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--ink);
+}
+
+.page-list-panel {
+  margin-top: 22px;
+  padding: 22px;
+}
+
+.page-list {
+  list-style: none;
+  margin: 18px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.page-list li {
+  padding: 14px 16px;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid rgba(88, 63, 41, 0.1);
+  background: rgba(255, 250, 242, 0.92);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
 }
 
-dt {
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #8a5d3a;
+.page-list strong {
+  font-size: 1rem;
 }
 
-dd {
-  margin: 8px 0 0;
-  font-size: 16px;
-  color: #2f241b;
+.empty-state {
+  margin: 18px 0 0;
+}
+
+code {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.95em;
+}
+
+@media (max-width: 900px) {
+  .action-grid,
+  .workspace-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .app-shell {
+    padding: 16px;
+  }
+
+  .hero-panel,
+  .workspace-panel,
+  .boot-panel {
+    border-radius: 14px;
+    padding: 18px;
+  }
+
+  .workspace-header,
+  .section-heading,
+  .inline-field {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
 }
