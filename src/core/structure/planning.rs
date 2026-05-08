@@ -60,7 +60,9 @@ pub(super) fn plan_transaction(
     let page_mappings = cache
         .pages()
         .values()
-        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, source_page_id))
+        .filter(|page| {
+            page.location.is_page_backed() && page_id_has_prefix(&page.page_id, source_page_id)
+        })
         .map(|page| {
             let old_page_id = page.page_id.clone();
             let new_page_id = replace_page_id_prefix(&old_page_id, source_page_id, target_page_id)?;

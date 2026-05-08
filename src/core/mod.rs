@@ -22,8 +22,8 @@ pub use page_id::{
 };
 pub use parser::parse_blocks;
 pub use read::{
-    BlockSnapshot, BlockSnapshotKind, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageBlocksSnapshot,
-    PageDetail, PageSummary, WorkspaceReadApi,
+    BlockSnapshot, BlockSnapshotKind, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
+    PageBlocksSnapshot, PageDetail, PageSummary, WorkspaceReadApi,
 };
 pub use session::{WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession};
 pub use span::SourceSpan;

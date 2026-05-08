@@ -305,7 +305,8 @@ impl TransactionRecord {
                 .map_err(|error| CoreError::io(&absolute_path, &error))?;
         }
 
-        fs::rename(&temp_path, &absolute_path).map_err(|error| CoreError::io(&absolute_path, &error))
+        fs::rename(&temp_path, &absolute_path)
+            .map_err(|error| CoreError::io(&absolute_path, &error))
     }
 
     fn cleanup_temp_files(&self, root: &Path) -> Result<(), CoreError> {
@@ -410,9 +411,7 @@ fn temp_path_for_destination(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or(CoreError::CorruptTransaction)?;
-    Ok(destination_path.with_file_name(format!(
-        "{file_name}.uniseq-txn-{blob_name}.tmp"
-    )))
+    Ok(destination_path.with_file_name(format!("{file_name}.uniseq-txn-{blob_name}.tmp")))
 }
 
 fn remove_if_exists(path: &Path) -> Result<(), CoreError> {

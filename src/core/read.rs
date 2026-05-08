@@ -141,7 +141,10 @@ impl<'a> WorkspaceReadApi<'a> {
         self.cache
             .pages()
             .values()
-            .filter(|page| page.outgoing_refs().any(|outgoing_ref| self.cache.page(&outgoing_ref.target_page_id).is_none()))
+            .filter(|page| {
+                page.outgoing_refs()
+                    .any(|outgoing_ref| self.cache.page(&outgoing_ref.target_page_id).is_none())
+            })
             .map(page_summary)
             .collect()
     }
@@ -187,7 +190,10 @@ fn page_summary(page: &Page) -> PageSummary {
     }
 }
 
-fn outgoing_ref_snapshots(cache: &WorkspaceCache, source_page: &Page) -> Vec<OutgoingPageRefSnapshot> {
+fn outgoing_ref_snapshots(
+    cache: &WorkspaceCache,
+    source_page: &Page,
+) -> Vec<OutgoingPageRefSnapshot> {
     source_page
         .outgoing_refs()
         .map(|outgoing_ref| OutgoingPageRefSnapshot {
@@ -339,7 +345,10 @@ mod tests {
 
         assert_eq!(blocks.page_id, PageId::new(["A"]).unwrap());
         assert_eq!(blocks.revision, FileFingerprint::from_text(text));
-        assert_eq!(blocks.blocks[0].block_span, SourceSpan::unchecked(0, text.len()));
+        assert_eq!(
+            blocks.blocks[0].block_span,
+            SourceSpan::unchecked(0, text.len())
+        );
         assert_eq!(blocks.blocks[0].content_span, SourceSpan::unchecked(2, 10));
         assert_eq!(blocks.blocks[0].children[0].content, "child");
     }
@@ -393,10 +402,16 @@ mod tests {
             .page_outgoing_refs(&PageId::new(["A"]).unwrap())
             .unwrap();
         assert_eq!(outgoing_refs.len(), 2);
-        assert!(outgoing_refs.iter().any(|outgoing_ref| outgoing_ref.target_exists));
-        assert!(outgoing_refs
-            .iter()
-            .any(|outgoing_ref| !outgoing_ref.target_exists));
+        assert!(
+            outgoing_refs
+                .iter()
+                .any(|outgoing_ref| outgoing_ref.target_exists)
+        );
+        assert!(
+            outgoing_refs
+                .iter()
+                .any(|outgoing_ref| !outgoing_ref.target_exists)
+        );
 
         assert_eq!(
             read_api

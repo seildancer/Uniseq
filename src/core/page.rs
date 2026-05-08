@@ -158,7 +158,9 @@ mod tests {
 
         assert_eq!(
             page.workspace_path,
-            PathBuf::from("streams").join("journal").join("2026-05-07.md")
+            PathBuf::from("streams")
+                .join("journal")
+                .join("2026-05-07.md")
         );
         assert!(page.parent_page_id().is_none());
     }

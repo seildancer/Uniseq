@@ -144,14 +144,18 @@ mod tests {
 
         assert!(discovery.missing_parent_page_ids.is_empty());
         assert_eq!(discovery.cache.pages().len(), 3);
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A.md"))
-            .exists());
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A___B.md"))
-            .exists());
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A.md"))
+                .exists()
+        );
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A___B.md"))
+                .exists()
+        );
     }
 
     #[test]
@@ -199,24 +203,30 @@ mod tests {
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
-        assert!(discovery
-            .cache
-            .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
-            .is_some());
-        assert!(discovery
-            .cache
-            .page(
-                &PageId::stream(
-                    crate::PageName::new("journal").unwrap(),
-                    crate::PageName::new("2026-05-07").unwrap(),
+        assert!(
+            discovery
+                .cache
+                .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+                .is_some()
+        );
+        assert!(
+            discovery
+                .cache
+                .page(
+                    &PageId::stream(
+                        crate::PageName::new("journal").unwrap(),
+                        crate::PageName::new("2026-05-07").unwrap(),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .is_some());
-        assert!(discovery
-            .cache
-            .page(&PageId::new(["journal"]).unwrap())
-            .is_some());
+                .is_some()
+        );
+        assert!(
+            discovery
+                .cache
+                .page(&PageId::new(["journal"]).unwrap())
+                .is_some()
+        );
         assert_eq!(discovery.cache.pages().len(), 3);
     }
 
@@ -240,16 +250,18 @@ mod tests {
         let discovery = discover_workspace(&workspace.root).unwrap();
 
         assert!(discovery.cache.page(&PageId::new(["A"]).unwrap()).is_some());
-        assert!(discovery
-            .cache
-            .page(
-                &PageId::stream(
-                    crate::PageName::new("journal").unwrap(),
-                    crate::PageName::new("2026-05-07").unwrap(),
+        assert!(
+            discovery
+                .cache
+                .page(
+                    &PageId::stream(
+                        crate::PageName::new("journal").unwrap(),
+                        crate::PageName::new("2026-05-07").unwrap(),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .is_some());
+                .is_some()
+        );
         assert_eq!(discovery.cache.pages().len(), 2);
     }
 
@@ -307,14 +319,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["A", "A/B"]
         );
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A.md"))
-            .exists());
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A___B.md"))
-            .exists());
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A.md"))
+                .exists()
+        );
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A___B.md"))
+                .exists()
+        );
         assert!(
             discover_workspace(&workspace.root)
                 .unwrap()

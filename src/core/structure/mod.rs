@@ -9,7 +9,9 @@ use super::{CoreError, PageId, PageLocation, PageName, WorkspaceCache, resolve_w
 use crate::core::discovery::materialize_parent_pages;
 use crate::core::files::page_from_markdown_in_location;
 
-use planning::{RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id};
+use planning::{
+    RenameTransactionPlan, moved_page_id, page_id_has_prefix, plan_transaction, renamed_page_id,
+};
 use transaction::TransactionRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +225,12 @@ pub(crate) fn apply_page_create_with_update(
     }
 
     let ancestor_page_ids = request.page_id.ancestors();
-    let referrers = pages_referring_to_any(cache, ancestor_page_ids.iter().chain(std::iter::once(&request.page_id)))?;
+    let referrers = pages_referring_to_any(
+        cache,
+        ancestor_page_ids
+            .iter()
+            .chain(std::iter::once(&request.page_id)),
+    )?;
     let created_ancestors = materialize_parent_pages(root, cache, ancestor_page_ids)?;
     if let Some(parent) = absolute_path.parent() {
         fs::create_dir_all(parent).map_err(|error| CoreError::io(parent, &error))?;
@@ -260,7 +267,8 @@ pub(crate) fn apply_stream_page_create_with_update(
     recover_workspace_transactions(root, cache)?;
 
     let page_id = stream_page_id(&request.stream_name, &request.date_name)?;
-    let relative_path = stream_location(&request.stream_name).workspace_path_for_page_id(&page_id)?;
+    let relative_path =
+        stream_location(&request.stream_name).workspace_path_for_page_id(&page_id)?;
     let absolute_path = root.join(&relative_path);
     if cache.page(&page_id).is_some() || absolute_path.exists() {
         return Err(CoreError::DestinationPageExists);
@@ -310,7 +318,9 @@ pub(crate) fn apply_page_delete_subtree_with_update(
     let deleted_pages = cache
         .pages()
         .values()
-        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id))
+        .filter(|page| {
+            page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id)
+        })
         .cloned()
         .collect::<Vec<_>>();
     if deleted_pages.is_empty() {
@@ -598,7 +608,10 @@ fn pages_referring_to_any<'a>(
     cache: &WorkspaceCache,
     target_page_ids: impl IntoIterator<Item = &'a PageId>,
 ) -> Result<Vec<PageId>, CoreError> {
-    let target_page_ids = target_page_ids.into_iter().cloned().collect::<BTreeSet<_>>();
+    let target_page_ids = target_page_ids
+        .into_iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut source_page_ids = BTreeSet::new();
 
     for target_page_id in target_page_ids {
@@ -842,15 +855,17 @@ mod tests {
         .unwrap();
 
         assert!(workspace.file_exists("streams/journal/2026-05-07.md"));
-        assert!(cache
-            .page(
-                &PageId::stream(
-                    PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
+        assert!(
+            cache
+                .page(
+                    &PageId::stream(
+                        PageName::new("journal").unwrap(),
+                        PageName::new("2026-05-07").unwrap(),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .is_some());
+                .is_some()
+        );
 
         apply_stream_page_delete(
             &workspace.root,
@@ -863,15 +878,17 @@ mod tests {
         .unwrap();
 
         assert!(!workspace.file_exists("streams/journal/2026-05-07.md"));
-        assert!(cache
-            .page(
-                &PageId::stream(
-                    PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
+        assert!(
+            cache
+                .page(
+                    &PageId::stream(
+                        PageName::new("journal").unwrap(),
+                        PageName::new("2026-05-07").unwrap(),
+                    )
+                    .unwrap(),
                 )
-                .unwrap(),
-            )
-            .is_none());
+                .is_none()
+        );
     }
 
     #[test]
@@ -1218,5 +1235,4 @@ mod tests {
         assert_eq!(workspace.read_file("A___C.md"), "- external\n");
         assert!(workspace.root.join(".uniseq-page-transaction").exists());
     }
-
 }

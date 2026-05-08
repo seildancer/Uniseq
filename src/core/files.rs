@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::storage;
 use super::{
     CoreError, FileFingerprint, Page, WorkspaceCache, discover_workspace, parse_blocks,
     resolve_workspace_path,
 };
-use super::storage;
 
 pub(crate) fn load_workspace_cache(root: impl AsRef<Path>) -> Result<WorkspaceCache, CoreError> {
     Ok(discover_workspace(root)?.cache)
@@ -112,7 +112,9 @@ impl TestWorkspace {
     }
 
     pub(crate) fn file_exists(&self, relative_path: &str) -> bool {
-        self.root.join(workspace_test_relative_path(relative_path)).exists()
+        self.root
+            .join(workspace_test_relative_path(relative_path))
+            .exists()
     }
 }
 

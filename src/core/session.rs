@@ -13,7 +13,8 @@ use super::{
     PageId, PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
 };
 use crate::core::files::{
-    collect_supported_workspace_markdown_paths, load_workspace_cache, page_and_fingerprint_from_text,
+    collect_supported_workspace_markdown_paths, load_workspace_cache,
+    page_and_fingerprint_from_text,
 };
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
@@ -219,7 +220,9 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_incremental_write(|root, cache| apply_page_create_with_update(root, cache, request))
+            .apply_incremental_write(|root, cache| {
+                apply_page_create_with_update(root, cache, request)
+            })
     }
 
     pub fn apply_page_delete_subtree(&self, request: PageDeleteSubtree) -> Result<(), CoreError> {
@@ -244,7 +247,9 @@ impl WorkspaceSession {
         self.state
             .write()
             .unwrap()
-            .apply_incremental_write(|root, cache| apply_page_move_with_update(root, cache, request))
+            .apply_incremental_write(|root, cache| {
+                apply_page_move_with_update(root, cache, request)
+            })
     }
 
     pub fn apply_stream_page_create(&self, request: StreamPageCreate) -> Result<(), CoreError> {
@@ -441,10 +446,7 @@ impl WorkspaceSessionState {
                     PageEventState {
                         fingerprint: page.fingerprint,
                         child_page_ids: page.child_page_ids.clone(),
-                        incoming_refs: self
-                            .cache
-                            .incoming_refs(page_id)
-                            .to_vec(),
+                        incoming_refs: self.cache.incoming_refs(page_id).to_vec(),
                         outgoing_refs: page
                             .outgoing_refs()
                             .map(|page_ref| OutgoingRefEventState {
@@ -599,9 +601,10 @@ impl WorkspaceSessionState {
         }
 
         for (written_path, file_stamp) in written_files {
-            self.fs_snapshot.markdown_files.insert(written_path, file_stamp);
+            self.fs_snapshot
+                .markdown_files
+                .insert(written_path, file_stamp);
         }
-
     }
 
     fn apply_prepared_incremental_fs_update(
@@ -619,9 +622,7 @@ impl WorkspaceSessionState {
                 self.enqueue_events(cache_diff.into_events());
                 Ok(())
             }
-            Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => {
-                self.full_refresh()
-            }
+            Err(CoreError::InvalidPagePath(_)) | Err(CoreError::Io { .. }) => self.full_refresh(),
             Err(error) => Err(error),
         }
     }
@@ -669,8 +670,10 @@ impl WorkspaceSessionState {
             changed_page_ids.insert(page.page_id.clone());
             changed_page_ids.extend(target_page_ids_from_page(existing_page));
             changed_page_ids.extend(target_page_ids_from_page(page));
-            changed_page_ids.extend(self.page_ids_referring_to_any(&target_page_ids_from_page(existing_page)));
-            changed_page_ids.extend(self.page_ids_referring_to_any(&target_page_ids_from_page(page)));
+            changed_page_ids
+                .extend(self.page_ids_referring_to_any(&target_page_ids_from_page(existing_page)));
+            changed_page_ids
+                .extend(self.page_ids_referring_to_any(&target_page_ids_from_page(page)));
         }
 
         Some(CacheDiff {
@@ -731,10 +734,12 @@ impl WorkspaceSessionState {
     }
 
     fn written_file_changes_page(&self, written_file: &PreparedWrittenFile) -> bool {
-        self.cache.page(&written_file.page.page_id).is_some_and(|existing_page| {
-            existing_page.workspace_path == written_file.relative_path
-                && existing_page.fingerprint != written_file.page.fingerprint
-        })
+        self.cache
+            .page(&written_file.page.page_id)
+            .is_some_and(|existing_page| {
+                existing_page.workspace_path == written_file.relative_path
+                    && existing_page.fingerprint != written_file.page.fingerprint
+            })
     }
 }
 
@@ -747,7 +752,10 @@ impl WorkspaceFsSnapshot {
         let mut markdown_files = BTreeMap::new();
         for relative_path in collect_supported_workspace_markdown_paths(root)? {
             let absolute_path = root.join(&relative_path);
-            markdown_files.insert(relative_path, FileStamp::from_absolute_path(&absolute_path)?);
+            markdown_files.insert(
+                relative_path,
+                FileStamp::from_absolute_path(&absolute_path)?,
+            );
         }
         println!(
             "[uniseq-backend] supported-root scan complete: {} supported markdown files in snapshot",
@@ -786,12 +794,15 @@ impl FileStamp {
     }
 
     fn from_metadata_path(absolute_path: &Path) -> Result<Self, CoreError> {
-        let metadata = fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
+        let metadata =
+            fs::metadata(absolute_path).map_err(|error| CoreError::io(absolute_path, &error))?;
         let modified_at = metadata
             .modified()
             .map(Some)
             .or_else(|error| {
-                (error.kind() == std::io::ErrorKind::Unsupported).then_some(None).ok_or(error)
+                (error.kind() == std::io::ErrorKind::Unsupported)
+                    .then_some(None)
+                    .ok_or(error)
             })
             .map_err(|error| CoreError::io(absolute_path, &error))?;
         Ok(Self {
@@ -911,8 +922,8 @@ fn prepare_incremental_fs_update(
         .iter()
         .map(|relative_path| {
             let absolute_path = root.join(relative_path);
-            let text =
-                fs::read_to_string(&absolute_path).map_err(|error| CoreError::io(&absolute_path, &error))?;
+            let text = fs::read_to_string(&absolute_path)
+                .map_err(|error| CoreError::io(&absolute_path, &error))?;
             let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
             let (page, _) = page_and_fingerprint_from_text(relative_path, text)?;
             Ok::<PreparedWrittenFile, CoreError>(PreparedWrittenFile {
@@ -971,7 +982,6 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
         if event_markdown_path_count == 0 && !matches!(event.kind, EventKind::Access(_)) {
             saw_non_markdown_noise = true;
         }
-
     }
 
     match markdown_paths.len() {
@@ -1351,14 +1361,18 @@ mod tests {
         workspace.write_file("A___B___C.md", "");
         session.state.write().unwrap().full_refresh().unwrap();
 
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A.md"))
-            .exists());
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A___B.md"))
-            .exists());
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A.md"))
+                .exists()
+        );
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A___B.md"))
+                .exists()
+        );
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1379,14 +1393,18 @@ mod tests {
         workspace.write_file("A___B___C.md", "- body\n");
         session.poll_once().unwrap();
 
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A.md"))
-            .exists());
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A___B.md"))
-            .exists());
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A.md"))
+                .exists()
+        );
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A___B.md"))
+                .exists()
+        );
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1407,7 +1425,11 @@ mod tests {
         workspace.write_file("A___B___C.md", "- body\n");
         let event = Event {
             kind: EventKind::Create(notify::event::CreateKind::Any),
-            paths: vec![workspace.root.join(workspace_test_relative_path("A___B___C.md"))],
+            paths: vec![
+                workspace
+                    .root
+                    .join(workspace_test_relative_path("A___B___C.md")),
+            ],
             attrs: Default::default(),
         };
         session
@@ -1417,14 +1439,18 @@ mod tests {
             .apply_native_event_burst(&[event])
             .unwrap();
 
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A.md"))
-            .exists());
-        assert!(workspace
-            .root
-            .join(workspace_test_relative_path("A___B.md"))
-            .exists());
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A.md"))
+                .exists()
+        );
+        assert!(
+            workspace
+                .root
+                .join(workspace_test_relative_path("A___B.md"))
+                .exists()
+        );
         let events = session.drain_events();
         assert!(events.contains(&WorkspaceEvent::WorkspaceReloaded));
         assert!(events.contains(&WorkspaceEvent::PagesChanged {
@@ -1575,16 +1601,28 @@ mod tests {
 
         let snapshot = WorkspaceFsSnapshot::capture(&workspace.root).unwrap();
 
-        assert!(snapshot
-            .markdown_files
-            .contains_key(&workspace_test_relative_path("A.md")));
-        assert!(snapshot
-            .markdown_files
-            .contains_key(&PathBuf::from("streams").join("journal").join("2026-05-07.md")));
-        assert!(!snapshot.markdown_files.contains_key(&PathBuf::from("Loose.md")));
-        assert!(!snapshot
-            .markdown_files
-            .contains_key(&PathBuf::from("archive").join("Old.md")));
+        assert!(
+            snapshot
+                .markdown_files
+                .contains_key(&workspace_test_relative_path("A.md"))
+        );
+        assert!(
+            snapshot.markdown_files.contains_key(
+                &PathBuf::from("streams")
+                    .join("journal")
+                    .join("2026-05-07.md")
+            )
+        );
+        assert!(
+            !snapshot
+                .markdown_files
+                .contains_key(&PathBuf::from("Loose.md"))
+        );
+        assert!(
+            !snapshot
+                .markdown_files
+                .contains_key(&PathBuf::from("archive").join("Old.md"))
+        );
     }
 
     #[test]
@@ -1761,11 +1799,13 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![WorkspaceEvent::PagesChanged {
-                page_ids: vec![PageId::stream(
-                    PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
-                )
-                .unwrap()],
+                page_ids: vec![
+                    PageId::stream(
+                        PageName::new("journal").unwrap(),
+                        PageName::new("2026-05-07").unwrap(),
+                    )
+                    .unwrap()
+                ],
             }]
         );
 
@@ -1896,5 +1936,4 @@ mod tests {
             FileFingerprint::from_text("- body\r\n")
         );
     }
-
 }

@@ -224,8 +224,7 @@ impl WorkspaceCache {
 
     fn remove_incoming_refs_from_source(&mut self, source_page_id: &PageId) {
         for incoming_refs in self.incoming_refs_by_target.values_mut() {
-            incoming_refs
-                .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
+            incoming_refs.retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
         }
         self.incoming_refs_by_target
             .retain(|_, incoming_refs| !incoming_refs.is_empty());
@@ -238,8 +237,7 @@ impl WorkspaceCache {
     ) {
         for target_page_id in target_page_ids {
             if let Some(incoming_refs) = self.incoming_refs_by_target.get_mut(target_page_id) {
-                incoming_refs
-                    .retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
+                incoming_refs.retain(|incoming_ref| &incoming_ref.source_page_id != source_page_id);
             }
         }
         self.incoming_refs_by_target
@@ -375,27 +373,15 @@ mod tests {
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache.upsert_page(page(&["C"], "", Vec::new()));
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            1
-        );
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
-            0
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 1);
+        assert_eq!(cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(), 0);
 
         cache
             .reparse_and_upsert_page_markdown(&source_page_id, "- [[C]]\n")
             .unwrap();
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            0
-        );
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
-            1
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 0);
+        assert_eq!(cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(), 1);
     }
 
     #[test]
@@ -409,10 +395,7 @@ mod tests {
             .reparse_and_upsert_page_markdown(&source_page_id, "- [[B]]\n")
             .unwrap();
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            1
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 1);
     }
 
     #[test]
@@ -426,14 +409,8 @@ mod tests {
         cache.upsert_page(page(&["B"], "", Vec::new()));
         cache.upsert_page(page(&["C"], "", Vec::new()));
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            1
-        );
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
-            1
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 1);
+        assert_eq!(cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(), 1);
     }
 
     #[test]
@@ -494,14 +471,8 @@ mod tests {
             .reparse_and_upsert_page_markdown(&source_page_id, "- [[C]]\n")
             .unwrap();
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            0
-        );
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(),
-            1
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 0);
+        assert_eq!(cache.incoming_refs(&PageId::new(["C"]).unwrap()).len(), 1);
     }
 
     #[test]
@@ -535,7 +506,8 @@ mod tests {
         );
 
         cache.refresh_page_content(
-            Page::new(target_page_id.clone(), "- new\n").with_blocks(parse_blocks("- new\n").unwrap()),
+            Page::new(target_page_id.clone(), "- new\n")
+                .with_blocks(parse_blocks("- new\n").unwrap()),
         );
 
         let page = cache.page(&target_page_id).unwrap();
@@ -554,7 +526,8 @@ mod tests {
         cache.upsert_page(page(&["A", "B"], "", Vec::new()));
 
         cache.refresh_page_content(
-            Page::new(parent_page_id.clone(), "- new\n").with_blocks(parse_blocks("- new\n").unwrap()),
+            Page::new(parent_page_id.clone(), "- new\n")
+                .with_blocks(parse_blocks("- new\n").unwrap()),
         );
 
         let page = cache.page(&parent_page_id).unwrap();
@@ -581,17 +554,18 @@ mod tests {
             Page::new(source_page_id, "- [[C]]\n").with_blocks(parse_blocks("- [[C]]\n").unwrap()),
         );
 
-        assert_eq!(
-            cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(),
-            0
-        );
+        assert_eq!(cache.incoming_refs(&PageId::new(["B"]).unwrap()).len(), 0);
         let c_incoming_refs = cache.incoming_refs(&PageId::new(["C"]).unwrap());
         assert_eq!(c_incoming_refs.len(), 2);
-        assert!(c_incoming_refs
-            .iter()
-            .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["A"]).unwrap()));
-        assert!(c_incoming_refs
-            .iter()
-            .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["X"]).unwrap()));
+        assert!(
+            c_incoming_refs
+                .iter()
+                .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["A"]).unwrap())
+        );
+        assert!(
+            c_incoming_refs
+                .iter()
+                .any(|incoming_ref| incoming_ref.source_page_id == PageId::new(["X"]).unwrap())
+        );
     }
 }

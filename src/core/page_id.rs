@@ -78,10 +78,7 @@ impl PageId {
         Self::new_in_location(PageLocation::Pages, segments)
     }
 
-    pub fn new_in_location<I, S>(
-        location: PageLocation,
-        segments: I,
-    ) -> Result<Self, PagePathError>
+    pub fn new_in_location<I, S>(location: PageLocation, segments: I) -> Result<Self, PagePathError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -204,7 +201,11 @@ impl PageId {
         match &self.location {
             PageLocation::Pages => format!("pages:{}", self.hierarchy_display()),
             PageLocation::Stream { stream_name } => {
-                format!("streams/{}/{}", stream_name.as_str(), self.leaf_name().as_str())
+                format!(
+                    "streams/{}/{}",
+                    stream_name.as_str(),
+                    self.leaf_name().as_str()
+                )
             }
         }
     }
@@ -375,12 +376,14 @@ fn resolve_stream_workspace_path(
     let location = PageLocation::Stream {
         stream_name: stream_name.clone(),
     };
-    let page_id = PageId::from_page_names_in_location(location.clone(), vec![stream_name, date_name])?;
+    let page_id =
+        PageId::from_page_names_in_location(location.clone(), vec![stream_name, date_name])?;
     Ok(ResolvedWorkspacePath { page_id, location })
 }
 
 fn parse_page_file_name(file_name: &str) -> Result<PageId, PagePathError> {
-    let stem = strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
+    let stem =
+        strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
     if stem.is_empty() || stem.split(HIERARCHY_DELIMITER).any(str::is_empty) {
         return Err(PagePathError::EmptyHierarchySegment);
     }
@@ -389,7 +392,8 @@ fn parse_page_file_name(file_name: &str) -> Result<PageId, PagePathError> {
 }
 
 fn parse_single_page_name_file_name(file_name: &str) -> Result<PageName, PagePathError> {
-    let stem = strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
+    let stem =
+        strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
     PageName::new(stem).map_err(PagePathError::from)
 }
 
@@ -443,7 +447,10 @@ mod tests {
     fn page_id_round_trips_to_flat_workspace_path() {
         let page_id = PageId::new(["A", "B", "C"]).unwrap();
 
-        assert_eq!(page_id.to_workspace_path(), PathBuf::from("pages").join("A___B___C.md"));
+        assert_eq!(
+            page_id.to_workspace_path(),
+            PathBuf::from("pages").join("A___B___C.md")
+        );
         assert_eq!(
             PageId::from_workspace_path("pages/A___B___C.md").unwrap(),
             page_id
@@ -467,8 +474,13 @@ mod tests {
         );
         assert_ne!(journal.page_id, diary.page_id);
         assert_eq!(
-            journal.location.workspace_path_for_page_id(&journal.page_id).unwrap(),
-            PathBuf::from("streams").join("journal").join("2026-05-07.md")
+            journal
+                .location
+                .workspace_path_for_page_id(&journal.page_id)
+                .unwrap(),
+            PathBuf::from("streams")
+                .join("journal")
+                .join("2026-05-07.md")
         );
         assert_eq!(journal.location.parent_page_id(&journal.page_id), None);
         assert!(journal.page_id.is_stream_backed());
@@ -571,8 +583,10 @@ mod tests {
     #[test]
     fn ignores_markdown_outside_supported_roots() {
         assert!(supported_workspace_markdown_path("A.md").unwrap().is_none());
-        assert!(supported_workspace_markdown_path("archive/Old.md")
-            .unwrap()
-            .is_none());
+        assert!(
+            supported_workspace_markdown_path("archive/Old.md")
+                .unwrap()
+                .is_none()
+        );
     }
 }
