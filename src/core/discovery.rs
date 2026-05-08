@@ -198,15 +198,15 @@ mod tests {
     #[test]
     fn discovery_keeps_page_and_stream_with_same_segments_distinct() {
         let workspace = TestWorkspace::new("uniseq-discovery");
-        workspace.write_file("journal___2026-05-07.md", "");
-        workspace.write_file("streams/journal/2026-05-07.md", "");
+        workspace.write_file("journal___2026_05_07.md", "");
+        workspace.write_file("journal/2026_05_07.md", "");
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
         assert!(
             discovery
                 .cache
-                .page(&PageId::new(["journal", "2026-05-07"]).unwrap())
+                .page(&PageId::new(["journal", "2026_05_07"]).unwrap())
                 .is_some()
         );
         assert!(
@@ -215,7 +215,7 @@ mod tests {
                 .page(
                     &PageId::stream(
                         crate::PageName::new("journal").unwrap(),
-                        crate::PageName::new("2026-05-07").unwrap(),
+                        crate::PageName::new("2026_05_07").unwrap(),
                     )
                     .unwrap(),
                 )
@@ -231,21 +231,22 @@ mod tests {
     }
 
     #[test]
-    fn rejects_nested_markdown_files() {
+    fn rejects_invalid_pages_directory_shapes() {
         let workspace = TestWorkspace::new("uniseq-discovery");
-        workspace.write_file("notes/A.md", "");
+        workspace.write_raw_file("pages/nested/A.md", "");
 
-        let discovery = discover_workspace(&workspace.root).unwrap();
-        assert!(discovery.cache.pages().is_empty());
+        let error = discover_workspace(&workspace.root).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidWorkspaceStructure { .. }));
     }
 
     #[test]
     fn discovery_only_scans_supported_roots() {
         let workspace = TestWorkspace::new("uniseq-discovery");
         workspace.write_file("A.md", "");
-        workspace.write_file("streams/journal/2026-05-07.md", "");
+        workspace.write_file("journal/2026_05_07.md", "");
         workspace.write_raw_file("Loose.md", "");
         workspace.write_raw_file("archive/Old.md", "");
+        workspace.write_raw_file("misc/readme.txt", "");
 
         let discovery = discover_workspace(&workspace.root).unwrap();
 
@@ -256,7 +257,7 @@ mod tests {
                 .page(
                     &PageId::stream(
                         crate::PageName::new("journal").unwrap(),
-                        crate::PageName::new("2026-05-07").unwrap(),
+                        crate::PageName::new("2026_05_07").unwrap(),
                     )
                     .unwrap(),
                 )

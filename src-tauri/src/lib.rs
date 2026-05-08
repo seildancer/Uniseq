@@ -15,6 +15,7 @@ use uniseq_backend::{
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
+const STANDARD_WORKSPACE_FOLDERS: [&str; 5] = ["pages", "assets", "uniseq", "journals", "diary"];
 
 #[derive(Default)]
 struct AppState {
@@ -153,8 +154,9 @@ type CommandResult<T> = Result<T, ErrorDto>;
 
 impl WorkspaceController {
     fn open_workspace(&mut self, root_path: String) -> CommandResult<WorkspaceOpenDto> {
-        let mut session =
-            WorkspaceSession::open(PathBuf::from(&root_path)).map_err(ErrorDto::from)?;
+        let root_path_buf = PathBuf::from(&root_path);
+        ensure_standard_workspace_folders(&root_path_buf)?;
+        let mut session = WorkspaceSession::open(root_path_buf).map_err(ErrorDto::from)?;
         session.start_watching_default();
         let watcher_status = WatcherStatusDto::from_session(&session);
         self.session = Some(session);
@@ -182,7 +184,7 @@ impl WorkspaceController {
             return Err(ErrorDto::workspace_target_exists(&root_path));
         }
 
-        fs::create_dir_all(root_path.join("pages")).map_err(|error| ErrorDto::io(&root_path, &error))?;
+        ensure_standard_workspace_folders(&root_path)?;
         self.open_workspace(root_path.to_string_lossy().to_string())
     }
 
@@ -549,6 +551,11 @@ impl From<CoreError> for ErrorDto {
                 message: error.to_string(),
                 path: None,
             },
+            CoreError::InvalidWorkspaceStructure { path, message } => Self {
+                code: "invalid_workspace_structure",
+                message,
+                path: Some(workspace_path_to_string(&path)),
+            },
             CoreError::DuplicatePageIdentity { page_id } => Self {
                 code: "duplicate_page_identity",
                 message: format!("duplicate page identity detected for '{page_id}'"),
@@ -789,12 +796,51 @@ fn ensure_directory_exists(path: &Path) -> CommandResult<()> {
 }
 
 fn looks_like_workspace_root(path: &Path) -> bool {
-    path.join("pages").is_dir() || path.join("streams").is_dir()
+    path.join("pages").is_dir()
+}
+
+fn ensure_standard_workspace_folders(root: &Path) -> CommandResult<()> {
+    for folder_name in STANDARD_WORKSPACE_FOLDERS {
+        let folder_path = root.join(folder_name);
+        if folder_path.exists() {
+            if !folder_path.is_dir() {
+                return Err(ErrorDto {
+                    code: "invalid_workspace_structure",
+                    message: format!("{folder_name}/ must be a directory"),
+                    path: Some(workspace_path_to_string(&folder_path)),
+                });
+            }
+            continue;
+        }
+
+        fs::create_dir_all(&folder_path).map_err(|error| ErrorDto::io(&folder_path, &error))?;
+    }
+
+    Ok(())
 }
 
 fn parse_page_id_input(input: &str) -> CommandResult<PageId> {
     if let Some(page_path) = input.strip_prefix("pages:") {
         return PageId::new(page_path.split('/')).map_err(|_| ErrorDto::invalid_page_id(input));
+    }
+
+    if let Some(stream_path) = input.strip_prefix("stream:") {
+        let mut segments = stream_path.split('/');
+        let Some(stream_name) = segments.next() else {
+            return Err(ErrorDto::invalid_page_id(input));
+        };
+        let Some(date_name) = segments.next() else {
+            return Err(ErrorDto::invalid_page_id(input));
+        };
+        if segments.next().is_some() {
+            return Err(ErrorDto::invalid_page_id(input));
+        }
+
+        let stream_name =
+            PageName::new(stream_name).map_err(|_| ErrorDto::invalid_page_id(input))?;
+        let date_name = PageName::new(date_name).map_err(|_| ErrorDto::invalid_page_id(input))?;
+        return PageId::stream(stream_name, date_name)
+            .map_err(|_| ErrorDto::invalid_page_id(input));
     }
 
     if let Some(stream_path) = input.strip_prefix("streams/") {
@@ -899,7 +945,7 @@ mod tests {
         let page = PageId::new(["A", "B"]).unwrap();
         let stream = PageId::stream(
             PageName::new("journal").unwrap(),
-            PageName::new("2026-05-07").unwrap(),
+            PageName::new("2026_05_07").unwrap(),
         )
         .unwrap();
 
@@ -909,6 +955,10 @@ mod tests {
         );
         assert_eq!(
             parse_page_id_input(&page_id_to_string(&stream)).unwrap(),
+            stream
+        );
+        assert_eq!(
+            parse_page_id_input("streams/journal/2026_05_07").unwrap(),
             stream
         );
         assert!(parse_page_id_input("streams/journal").is_err());
@@ -935,6 +985,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(opened.root_path, root.to_string_lossy());
+        assert!(root.join("pages").is_dir());
+        assert!(root.join("assets").is_dir());
+        assert!(root.join("uniseq").is_dir());
+        assert!(root.join("journals").is_dir());
+        assert!(root.join("diary").is_dir());
         let pages = controller.all_pages().unwrap();
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].page_id, "pages:A");
@@ -988,6 +1043,10 @@ mod tests {
         let workspace_root = root.join("Notebook");
         assert_eq!(PathBuf::from(&opened.root_path), workspace_root);
         assert!(workspace_root.join("pages").is_dir());
+        assert!(workspace_root.join("assets").is_dir());
+        assert!(workspace_root.join("uniseq").is_dir());
+        assert!(workspace_root.join("journals").is_dir());
+        assert!(workspace_root.join("diary").is_dir());
         assert!(controller.all_pages().unwrap().is_empty());
 
         controller.close_workspace();
@@ -1006,6 +1065,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(PathBuf::from(&opened.root_path), root.join("Notebook"));
+        assert!(root.join("Notebook").join("journals").is_dir());
+        assert!(root.join("Notebook").join("diary").is_dir());
         assert_eq!(controller.all_pages().unwrap().len(), 1);
 
         controller.close_workspace();
@@ -1019,5 +1080,41 @@ mod tests {
 
         let error = validate_workspace_folder_name("bad/name").unwrap_err();
         assert_eq!(error.code, "invalid_workspace_name");
+    }
+
+    #[test]
+    fn open_workspace_rejects_default_stream_file_collisions() {
+        let root = unique_temp_dir("uniseq-desktop-open-invalid-stream-default");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        fs::write(root.join("journals"), "").unwrap();
+
+        let mut controller = WorkspaceController::default();
+        let error = controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap_err();
+
+        assert_eq!(error.code, "invalid_workspace_structure");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn open_workspace_backfills_assets_and_uniseq() {
+        let root = unique_temp_dir("uniseq-desktop-open-backfill");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        write_workspace_file(&root, "pages/A.md", "");
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        assert!(root.join("assets").is_dir());
+        assert!(root.join("uniseq").is_dir());
+        assert!(root.join("journals").is_dir());
+        assert!(root.join("diary").is_dir());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
     }
 }

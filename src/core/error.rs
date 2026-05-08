@@ -133,6 +133,7 @@ pub enum CoreError {
     InvalidPagePath(PagePathError),
     InvalidSpan(SpanError),
     InvalidParse(ParserError),
+    InvalidWorkspaceStructure { path: PathBuf, message: String },
     DuplicatePageIdentity { page_id: String },
     Io { path: PathBuf, kind: io::ErrorKind },
     StructuralConflict { path: PathBuf },
@@ -152,6 +153,9 @@ impl fmt::Display for CoreError {
             Self::InvalidPagePath(err) => write!(f, "{err}"),
             Self::InvalidSpan(err) => write!(f, "{err}"),
             Self::InvalidParse(err) => write!(f, "{err}"),
+            Self::InvalidWorkspaceStructure { path, message } => {
+                write!(f, "invalid workspace structure at '{}': {message}", path.display())
+            }
             Self::DuplicatePageIdentity { page_id } => {
                 write!(f, "duplicate page identity detected for '{page_id}'")
             }

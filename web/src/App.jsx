@@ -238,7 +238,8 @@ export default function App() {
 
             {pages.length === 0 ? (
               <p className="empty-state">
-                This workspace is ready. Add files under <code>pages/</code> to start building it.
+                This workspace is ready. Add files under <code>pages/</code> or in a top-level
+                stream folder like <code>journal/2026_05_08.md</code>.
               </p>
             ) : (
               <ul className="page-list">

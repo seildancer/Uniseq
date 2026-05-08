@@ -10,12 +10,13 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
     CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageBlocksSnapshot, PageDetail,
-    PageId, PageSummary, WorkspaceCache, WorkspaceReadApi, supported_workspace_markdown_path,
+    PageId, PageSummary, WorkspaceCache, WorkspaceReadApi,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
     page_and_fingerprint_from_text,
 };
+use crate::core::storage::is_supported_workspace_markdown_path;
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
@@ -1006,12 +1007,12 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
                 continue;
             }
 
-            match supported_workspace_markdown_path(&relative_path) {
-                Ok(Some(_)) => {
+            match is_supported_workspace_markdown_path(root, &relative_path) {
+                Ok(true) => {
                     event_markdown_path_count += 1;
                     markdown_paths.insert(relative_path);
                 }
-                Ok(None) => {}
+                Ok(false) => {}
                 Err(_) => return NativeEventAction::FallbackToSnapshot,
             }
         }
@@ -1649,7 +1650,7 @@ mod tests {
     fn workspace_snapshot_only_tracks_supported_roots() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
-        workspace.write_file("streams/journal/2026-05-07.md", "");
+        workspace.write_file("journal/2026_05_07.md", "");
         workspace.write_raw_file("Loose.md", "");
         workspace.write_raw_file("archive/Old.md", "");
 
@@ -1662,9 +1663,7 @@ mod tests {
         );
         assert!(
             snapshot.markdown_files.contains_key(
-                &PathBuf::from("streams")
-                    .join("journal")
-                    .join("2026-05-07.md")
+                &PathBuf::from("journal").join("2026_05_07.md")
             )
         );
         assert!(
@@ -1896,7 +1895,7 @@ mod tests {
         session
             .apply_stream_page_create(StreamPageCreate {
                 stream_name: PageName::new("journal").unwrap(),
-                date_name: PageName::new("2026-05-07").unwrap(),
+                date_name: PageName::new("2026_05_07").unwrap(),
             })
             .unwrap();
 
@@ -1906,7 +1905,7 @@ mod tests {
                 page_ids: vec![
                     PageId::stream(
                         PageName::new("journal").unwrap(),
-                        PageName::new("2026-05-07").unwrap(),
+                        PageName::new("2026_05_07").unwrap(),
                     )
                     .unwrap()
                 ],
@@ -1919,7 +1918,7 @@ mod tests {
             .unwrap()
             .apply_native_event_burst(&[Event {
                 kind: EventKind::Create(notify::event::CreateKind::Any),
-                paths: vec![workspace.root.join("streams").join("journal").join("2026-05-07.md")],
+                paths: vec![workspace.root.join("journal").join("2026_05_07.md")],
                 attrs: Default::default(),
             }])
             .unwrap();
@@ -1928,7 +1927,7 @@ mod tests {
         session
             .apply_stream_page_delete(StreamPageDelete {
                 stream_name: PageName::new("journal").unwrap(),
-                date_name: PageName::new("2026-05-07").unwrap(),
+                date_name: PageName::new("2026_05_07").unwrap(),
             })
             .unwrap();
 
@@ -1937,7 +1936,7 @@ mod tests {
             vec![WorkspaceEvent::PageRemoved {
                 page_id: PageId::stream(
                     PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
+                    PageName::new("2026_05_07").unwrap(),
                 )
                 .unwrap(),
             }]
@@ -1949,7 +1948,7 @@ mod tests {
             .unwrap()
             .apply_native_event_burst(&[Event {
                 kind: EventKind::Remove(notify::event::RemoveKind::Any),
-                paths: vec![workspace.root.join("streams").join("journal").join("2026-05-07.md")],
+                paths: vec![workspace.root.join("journal").join("2026_05_07.md")],
                 attrs: Default::default(),
             }])
             .unwrap();

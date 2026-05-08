@@ -839,18 +839,18 @@ mod tests {
             &mut cache,
             StreamPageCreate {
                 stream_name: PageName::new("journal").unwrap(),
-                date_name: PageName::new("2026-05-07").unwrap(),
+                date_name: PageName::new("2026_05_07").unwrap(),
             },
         )
         .unwrap();
 
-        assert!(workspace.file_exists("streams/journal/2026-05-07.md"));
+        assert!(workspace.file_exists("journal/2026_05_07.md"));
         assert!(
             cache
                 .page(
                     &PageId::stream(
                         PageName::new("journal").unwrap(),
-                        PageName::new("2026-05-07").unwrap(),
+                        PageName::new("2026_05_07").unwrap(),
                     )
                     .unwrap(),
                 )
@@ -862,18 +862,18 @@ mod tests {
             &mut cache,
             StreamPageDelete {
                 stream_name: PageName::new("journal").unwrap(),
-                date_name: PageName::new("2026-05-07").unwrap(),
+                date_name: PageName::new("2026_05_07").unwrap(),
             },
         )
         .unwrap();
 
-        assert!(!workspace.file_exists("streams/journal/2026-05-07.md"));
+        assert!(!workspace.file_exists("journal/2026_05_07.md"));
         assert!(
             cache
                 .page(
                     &PageId::stream(
                         PageName::new("journal").unwrap(),
-                        PageName::new("2026-05-07").unwrap(),
+                        PageName::new("2026_05_07").unwrap(),
                     )
                     .unwrap(),
                 )
@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn rename_and_move_reject_stream_pages() {
         let workspace = TestWorkspace::new("uniseq-structure");
-        workspace.write_file("streams/journal/2026-05-07.md", "- body\n");
+        workspace.write_file("journal/2026_05_07.md", "- body\n");
 
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
 
@@ -894,10 +894,10 @@ mod tests {
             PageRename {
                 source_page_id: PageId::stream(
                     PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
+                    PageName::new("2026_05_07").unwrap(),
                 )
                 .unwrap(),
-                new_leaf_name: PageName::new("2026-05-08").unwrap(),
+                new_leaf_name: PageName::new("2026_05_08").unwrap(),
             },
         )
         .unwrap_err();
@@ -914,7 +914,7 @@ mod tests {
             PageMove {
                 source_page_id: PageId::stream(
                     PageName::new("journal").unwrap(),
-                    PageName::new("2026-05-07").unwrap(),
+                    PageName::new("2026_05_07").unwrap(),
                 )
                 .unwrap(),
                 destination_parent_page_id: Some(PageId::new(["A"]).unwrap()),

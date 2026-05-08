@@ -146,7 +146,7 @@ mod tests {
         let page = Page::new_in_location(
             PageId::stream(
                 super::super::PageName::new("journal").unwrap(),
-                super::super::PageName::new("2026-05-07").unwrap(),
+                super::super::PageName::new("2026_05_07").unwrap(),
             )
             .unwrap(),
             PageLocation::Stream {
@@ -158,9 +158,7 @@ mod tests {
 
         assert_eq!(
             page.workspace_path,
-            PathBuf::from("streams")
-                .join("journal")
-                .join("2026-05-07.md")
+            PathBuf::from("journal").join("2026_05_07.md")
         );
         assert!(page.parent_page_id().is_none());
     }

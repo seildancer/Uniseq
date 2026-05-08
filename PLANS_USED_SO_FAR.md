@@ -18,7 +18,7 @@ blocks. Blocks have no durable identity.
 ## Page IDs, Names, And Paths
 
 - Enforce strict portable page-name segments: reject empty segments, ./.., path separators, reserved Windows filename characters, control characters, .md suffix inside a segment, and ___ inside a segment.
-- Map PageId(["A", "B", "C"]) to A___B___C.md; streams/journals use the same page/path rules as normal pages.
+- Map PageId(["A", "B", "C"]) to A___B___C.md; stream-backed pages live in top-level stream folders and use `yyyy_mm_dd.md` filenames.
 - Treat every markdown file as one page and every page as one markdown file.
 - Materialize missing parent pages as empty files when hierarchy requires it, e.g. A___B.md requires A.md.
 - Keep rename/move as future first-class operations over PageId and path mapping, enabling crash-safe file moves and reference rewrites without hidden database state.
@@ -850,7 +850,7 @@ Update BACKEND_ARCHITECTURE.md and backend guards so the contract is explicit an
 - Pages under pages/:
     - support create, delete-subtree, rename, move
     - parent materialization rules apply
-- Stream pages under streams/<stream-name>/:
+- Stream pages under top-level `<stream-name>/`:
     - support create and delete only
     - do not participate in page hierarchy
     - never trigger parent-page materialization
@@ -877,7 +877,7 @@ Recommended public shape:
 Required behavior:
 
 - StreamPageCreate
-    - creates streams/<stream-name>/<date>.md
+    - creates `<stream-name>/<yyyy_mm_dd>.md`
     - fails if the target file already exists
     - parses and inserts the new page into cache
     - does not create any parent page

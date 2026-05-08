@@ -13,7 +13,9 @@
 
 - Every supported markdown file is a page.
 - Normal pages live under `pages/` and use `A___B.md` filename hierarchy encoding.
-- Stream pages live under `streams/<stream-name>/`.
+- Stream pages live in top-level stream folders such as `journals/` or `diary/`, with files named `yyyy_mm_dd.md`.
+- `assets/` is reserved for binaries such as images, PDFs, and attachments.
+- `uniseq/` is reserved for persisted app metadata, caches, and config.
 - Page bodies are modeled into blocks.
 - All references are `block -> page`.
 - Supported page reference syntax is `[[Page]]` and `#Page`, and both resolve to page-backed pages only.
@@ -75,8 +77,12 @@
   - `pages/<page-file>.md`
   - hierarchy encoded through `___`
 - Stream pages:
-  - `streams/<stream-name>/<date>.md`
-- Unsupported markdown files outside supported roots are ignored during discovery/watch.
+  - `<stream-name>/<yyyy_mm_dd>.md`
+- Supported discovery roots are inferred:
+  - `pages/` is mandatory and may contain only flat markdown files
+  - any other non-reserved top-level folder is treated as a stream only when it is empty or contains only `yyyy_mm_dd.md` files
+- `assets/` and `uniseq/` are ignored by discovery/watch.
+- Other folders are ignored during discovery/watch.
 - Stream folders are storage buckets only and do not participate in page hierarchy.
 
 ## Non-Goals

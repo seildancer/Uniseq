@@ -2,7 +2,9 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use super::storage::{PAGES_ROOT, STREAMS_ROOT};
+use super::storage::{
+    PAGES_ROOT, is_reserved_root_name, is_stream_date_markdown_name, is_stream_date_name,
+};
 use super::{NameError, PagePathError};
 
 const HIERARCHY_DELIMITER: &str = "___";
@@ -113,7 +115,10 @@ impl PageId {
         }
 
         if let PageLocation::Stream { stream_name } = &location {
-            if segments.len() != 2 || segments.first() != Some(stream_name) {
+            if segments.len() != 2
+                || segments.first() != Some(stream_name)
+                || !is_stream_date_name(segments[1].as_str())
+            {
                 return Err(PagePathError::NestedPath);
             }
         }
@@ -201,11 +206,7 @@ impl PageId {
         match &self.location {
             PageLocation::Pages => format!("pages:{}", self.hierarchy_display()),
             PageLocation::Stream { stream_name } => {
-                format!(
-                    "streams/{}/{}",
-                    stream_name.as_str(),
-                    self.leaf_name().as_str()
-                )
+                format!("stream:{}/{}", stream_name.as_str(), self.leaf_name().as_str())
             }
         }
     }
@@ -219,8 +220,7 @@ impl PageLocation {
 
         match self {
             Self::Pages => Ok(PathBuf::from(PAGES_ROOT).join(flat_page_file_name(page_id))),
-            Self::Stream { stream_name } => Ok(PathBuf::from(STREAMS_ROOT)
-                .join(stream_name.as_str())
+            Self::Stream { stream_name } => Ok(PathBuf::from(stream_name.as_str())
                 .join(markdown_file_name(page_id.leaf_name()))),
         }
     }
@@ -260,7 +260,7 @@ pub fn resolve_workspace_path(
 
     match components[0].as_str() {
         PAGES_ROOT => resolve_page_backed_workspace_path(&components),
-        STREAMS_ROOT => resolve_stream_workspace_path(&components),
+        root_name if !is_reserved_root_name(root_name) => resolve_stream_workspace_path(&components),
         _ => Err(PagePathError::NestedPath),
     }
 }
@@ -275,7 +275,14 @@ pub fn supported_workspace_markdown_path(
     }
 
     match components[0].as_str() {
-        PAGES_ROOT | STREAMS_ROOT => resolve_workspace_path(path).map(Some),
+        PAGES_ROOT => resolve_workspace_path(path).map(Some),
+        root_name if !is_reserved_root_name(root_name) => {
+            if components.len() == 2 && is_stream_date_markdown_name(&components[1]) {
+                resolve_workspace_path(path).map(Some)
+            } else {
+                Ok(None)
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -367,12 +374,12 @@ fn resolve_page_backed_workspace_path(
 fn resolve_stream_workspace_path(
     components: &[String],
 ) -> Result<ResolvedWorkspacePath, PagePathError> {
-    if components.len() != 3 {
+    if components.len() != 2 {
         return Err(PagePathError::NestedPath);
     }
 
-    let stream_name = PageName::new(components[1].clone()).map_err(PagePathError::from)?;
-    let date_name = parse_single_page_name_file_name(&components[2])?;
+    let stream_name = PageName::new(components[0].clone()).map_err(PagePathError::from)?;
+    let date_name = parse_stream_date_file_name(&components[1])?;
     let location = PageLocation::Stream {
         stream_name: stream_name.clone(),
     };
@@ -395,6 +402,13 @@ fn parse_single_page_name_file_name(file_name: &str) -> Result<PageName, PagePat
     let stem =
         strip_markdown_extension(file_name).ok_or(PagePathError::MissingMarkdownExtension)?;
     PageName::new(stem).map_err(PagePathError::from)
+}
+
+fn parse_stream_date_file_name(file_name: &str) -> Result<PageName, PagePathError> {
+    if !is_stream_date_markdown_name(file_name) {
+        return Err(PagePathError::NestedPath);
+    }
+    parse_single_page_name_file_name(file_name)
 }
 
 fn flat_page_file_name(page_id: &PageId) -> String {
@@ -461,16 +475,16 @@ mod tests {
 
     #[test]
     fn stream_paths_resolve_to_distinct_page_ids_and_locations() {
-        let journal = resolve_workspace_path("streams/journal/2026-05-07.md").unwrap();
-        let diary = resolve_workspace_path("streams/diary/2026-05-07.md").unwrap();
+        let journal = resolve_workspace_path("journal/2026_05_07.md").unwrap();
+        let diary = resolve_workspace_path("diary/2026_05_07.md").unwrap();
 
         assert_eq!(
             journal.page_id.canonical_identity_display(),
-            "streams/journal/2026-05-07"
+            "stream:journal/2026_05_07"
         );
         assert_eq!(
             diary.page_id.canonical_identity_display(),
-            "streams/diary/2026-05-07"
+            "stream:diary/2026_05_07"
         );
         assert_ne!(journal.page_id, diary.page_id);
         assert_eq!(
@@ -478,9 +492,7 @@ mod tests {
                 .location
                 .workspace_path_for_page_id(&journal.page_id)
                 .unwrap(),
-            PathBuf::from("streams")
-                .join("journal")
-                .join("2026-05-07.md")
+            PathBuf::from("journal").join("2026_05_07.md")
         );
         assert_eq!(journal.location.parent_page_id(&journal.page_id), None);
         assert!(journal.page_id.is_stream_backed());
@@ -488,13 +500,13 @@ mod tests {
 
     #[test]
     fn page_and_stream_with_same_segments_are_distinct() {
-        let page = PageId::new(["journal", "2026-05-07"]).unwrap();
-        let stream = resolve_workspace_path("streams/journal/2026-05-07.md")
+        let page = PageId::new(["journal", "2026_05_07"]).unwrap();
+        let stream = resolve_workspace_path("journal/2026_05_07.md")
             .unwrap()
             .page_id;
 
         assert_ne!(page, stream);
-        assert_eq!(page.hierarchy_display(), "journal/2026-05-07");
+        assert_eq!(page.hierarchy_display(), "journal/2026_05_07");
         assert_eq!(stream.page_hierarchy_display(), None);
     }
 
@@ -515,7 +527,7 @@ mod tests {
 
     #[test]
     fn stream_pages_have_no_hierarchy_relationships() {
-        let page_id = resolve_workspace_path("streams/journal/2026-05-07.md")
+        let page_id = resolve_workspace_path("journal/2026_05_07.md")
             .unwrap()
             .page_id;
 
@@ -587,6 +599,11 @@ mod tests {
             supported_workspace_markdown_path("archive/Old.md")
                 .unwrap()
                 .is_none()
+        );
+        assert!(
+            supported_workspace_markdown_path("archive/2026_05_07.md")
+                .unwrap()
+                .is_some()
         );
     }
 }

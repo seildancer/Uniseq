@@ -84,6 +84,9 @@ impl TestWorkspace {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("{prefix}-{unique}"));
         fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(root.join("pages")).unwrap();
+        fs::create_dir_all(root.join("assets")).unwrap();
+        fs::create_dir_all(root.join("uniseq")).unwrap();
         Self { root }
     }
 
