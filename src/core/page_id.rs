@@ -331,10 +331,6 @@ fn validate_page_name(value: &str) -> Result<(), NameError> {
             return Err(NameError::ContainsPathSeparator);
         }
 
-        if matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*') {
-            return Err(NameError::ContainsReservedCharacter(ch));
-        }
-
         if ch.is_control() {
             return Err(NameError::ContainsControlCharacter(ch));
         }
@@ -345,6 +341,58 @@ fn validate_page_name(value: &str) -> Result<(), NameError> {
     }
 
     Ok(())
+}
+
+fn encode_page_segment(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            '<' => out.push_str("%3C"),
+            '>' => out.push_str("%3E"),
+            ':' => out.push_str("%3A"),
+            '"' => out.push_str("%22"),
+            '|' => out.push_str("%7C"),
+            '?' => out.push_str("%3F"),
+            '*' => out.push_str("%2A"),
+            '%' => out.push_str("%25"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn decode_page_segment(encoded: &str) -> String {
+    let bytes = encoded.as_bytes();
+    let mut out = String::with_capacity(encoded.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_ascii_uppercase();
+            let lo = (bytes[i + 2] as char).to_ascii_uppercase();
+            let decoded = match (hi, lo) {
+                ('3', 'C') => Some('<'),
+                ('3', 'E') => Some('>'),
+                ('3', 'A') => Some(':'),
+                ('2', '2') => Some('"'),
+                ('7', 'C') => Some('|'),
+                ('3', 'F') => Some('?'),
+                ('2', 'A') => Some('*'),
+                ('2', '5') => Some('%'),
+                _ => None,
+            };
+            if let Some(ch) = decoded {
+                out.push(ch);
+                i += 3;
+                continue;
+            }
+        }
+        // Advance one full Unicode char, not one byte, to correctly handle
+        // multi-byte UTF-8 sequences (accented chars, CJK, emoji, etc.).
+        let ch = encoded[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 fn normalized_components(path: &Path) -> Result<Vec<String>, PagePathError> {
@@ -403,7 +451,8 @@ fn parse_page_file_name(file_name: &str) -> Result<PageId, PagePathError> {
         return Err(PagePathError::EmptyHierarchySegment);
     }
 
-    PageId::new(stem.split(HIERARCHY_DELIMITER))
+    let decoded: Vec<String> = stem.split(HIERARCHY_DELIMITER).map(decode_page_segment).collect();
+    PageId::new(decoded.iter().map(String::as_str))
 }
 
 fn parse_single_page_name_file_name(file_name: &str) -> Result<PageName, PagePathError> {
@@ -423,7 +472,7 @@ fn flat_page_file_name(page_id: &PageId) -> String {
     let file_stem = page_id
         .segments
         .iter()
-        .map(PageName::as_str)
+        .map(|seg| encode_page_segment(seg.as_str()))
         .collect::<Vec<_>>()
         .join(HIERARCHY_DELIMITER);
 
@@ -561,10 +610,6 @@ mod tests {
             NameError::ContainsPathSeparator
         );
         assert_eq!(
-            PageName::new("A:B").unwrap_err(),
-            NameError::ContainsReservedCharacter(':')
-        );
-        assert_eq!(
             PageName::new("CON").unwrap_err(),
             NameError::ReservedWindowsDeviceName
         );
@@ -598,6 +643,49 @@ mod tests {
                 .hierarchy_display(),
             "A/B"
         );
+    }
+
+    #[test]
+    fn accepts_previously_reserved_characters_in_page_names() {
+        assert!(PageName::new("Meeting: Notes").is_ok());
+        assert!(PageName::new("A?B").is_ok());
+        assert!(PageName::new("50% Done").is_ok());
+        assert!(PageName::new("A < B").is_ok());
+        assert!(PageName::new("A > B").is_ok());
+        assert!(PageName::new("\"Quoted\"").is_ok());
+        assert!(PageName::new("A|B").is_ok());
+        assert!(PageName::new("A*B").is_ok());
+    }
+
+    #[test]
+    fn special_chars_encode_in_filename_and_decode_back() {
+        let page_id = PageId::new(["Meeting: Notes", "Sub?Page"]).unwrap();
+        let path = page_id.to_workspace_path();
+        assert_eq!(path, PathBuf::from("pages").join("Meeting%3A Notes___Sub%3FPage.md"));
+        assert_eq!(PageId::from_workspace_path(path.to_str().unwrap()).unwrap(), page_id);
+    }
+
+    #[test]
+    fn percent_sign_in_name_encodes_for_round_trip_safety() {
+        let page_id = PageId::new(["50% Done"]).unwrap();
+        let path = page_id.to_workspace_path();
+        assert_eq!(path, PathBuf::from("pages").join("50%25 Done.md"));
+        assert_eq!(PageId::from_workspace_path(path.to_str().unwrap()).unwrap(), page_id);
+    }
+
+    #[test]
+    fn multibyte_utf8_page_names_round_trip_without_corruption() {
+        // Continuation bytes of UTF-8 sequences (0x80–0xBF) must not be
+        // misread as C1 control characters during decode.
+        for name in ["日本語", "café", "résumé", "naïve", "🦀"] {
+            let page_id = PageId::new([name]).unwrap();
+            let path = page_id.to_workspace_path();
+            assert_eq!(
+                PageId::from_workspace_path(path.to_str().unwrap()).unwrap(),
+                page_id,
+                "round-trip failed for '{name}'"
+            );
+        }
     }
 
     #[test]

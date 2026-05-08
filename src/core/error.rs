@@ -9,7 +9,6 @@ pub enum NameError {
     ContainsHierarchyDelimiter,
     ContainsMarkdownExtension,
     ContainsPathSeparator,
-    ContainsReservedCharacter(char),
     ContainsControlCharacter(char),
     ReservedWindowsDeviceName,
 }
@@ -27,9 +26,6 @@ impl fmt::Display for NameError {
             }
             Self::ContainsPathSeparator => {
                 write!(f, "page name segment cannot contain path separators")
-            }
-            Self::ContainsReservedCharacter(ch) => {
-                write!(f, "page name segment contains reserved character '{ch}'")
             }
             Self::ContainsControlCharacter(ch) => {
                 write!(
