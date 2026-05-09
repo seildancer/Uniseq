@@ -700,6 +700,11 @@ fn stop_watching(state: State<'_, AppState>) -> CommandResult<bool> {
     state.controller.lock().unwrap().stop_watching()
 }
 
+#[tauri::command]
+fn write_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -720,7 +725,8 @@ pub fn run() {
             drain_workspace_events,
             take_last_watch_error,
             start_watching,
-            stop_watching
+            stop_watching,
+            write_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

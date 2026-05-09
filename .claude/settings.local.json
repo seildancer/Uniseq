@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo test *)"
+      "Bash(cargo test *)",
+      "Bash(npm install *)",
+      "Bash(cargo build *)",
+      "Bash(npm run *)"
     ]
   }
 }

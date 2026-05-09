@@ -343,9 +343,27 @@ fn validate_page_name(value: &str) -> Result<(), NameError> {
     Ok(())
 }
 
+fn is_hex(b: u8) -> bool {
+    matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F')
+}
+
 fn encode_page_segment(name: &str) -> String {
+    let input = name.as_bytes();
     let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
+    let mut i = 0;
+    while i < input.len() {
+        // If this is already a valid %XX sequence, pass it through unchanged.
+        // This prevents double-encoding of segments that came from filenames
+        // with external percent-encoding (e.g. %2Ebashrc stays %2Ebashrc).
+        if input[i] == b'%' && i + 2 < input.len() && is_hex(input[i + 1]) && is_hex(input[i + 2])
+        {
+            out.push('%');
+            out.push(input[i + 1] as char);
+            out.push(input[i + 2] as char);
+            i += 3;
+            continue;
+        }
+        let ch = name[i..].chars().next().unwrap();
         match ch {
             '<' => out.push_str("%3C"),
             '>' => out.push_str("%3E"),
@@ -357,6 +375,7 @@ fn encode_page_segment(name: &str) -> String {
             '%' => out.push_str("%25"),
             c => out.push(c),
         }
+        i += ch.len_utf8();
     }
     out
 }

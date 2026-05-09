@@ -534,10 +534,10 @@ h2 {
 
 .editor-surface {
   overflow: auto;
-  padding: 18px;
+  padding: 12px 16px;
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 2px;
 }
 
 .editor-empty {
@@ -546,23 +546,68 @@ h2 {
   align-content: center;
 }
 
-.editor-row {
-  min-height: 38px;
-  padding-top: 8px;
-  padding-right: 12px;
-  padding-bottom: 8px;
-  border-radius: 10px;
+.block-row {
   display: grid;
-  gap: 4px;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  padding: 3px 8px;
+  padding-left: calc(8px + var(--block-depth, 0) * 22px);
+  border-radius: 6px;
+  cursor: text;
+  min-height: 28px;
 }
 
-.editor-row-kind {
-  color: #8a6542;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 11px;
-  font-weight: 700;
+.block-row:hover { background: rgba(17, 17, 17, 0.03); }
+.block-row--editing { background: rgba(17, 17, 17, 0.04); }
+.block-row--plaintext { grid-template-columns: 1fr; }
+
+.block-bullet {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  user-select: none;
 }
+
+.block-content {
+  min-width: 0;
+  line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+.block-content p { margin: 0; }
+
+.block-content code {
+  background: rgba(17, 17, 17, 0.06);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.block-textarea {
+  width: 100%;
+  border: none;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink);
+  padding: 0;
+  resize: none;
+  overflow: hidden;
+  min-height: 24px;
+  display: block;
+}
+
+.editor-empty-prompt {
+  padding: 12px 16px;
+  color: var(--muted);
+  cursor: text;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.editor-empty-prompt:hover { background: rgba(17, 17, 17, 0.03); }
 
 .empty-state {
   margin: 18px 0 0;

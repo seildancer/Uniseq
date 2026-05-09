@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import Editor from "./Editor.jsx";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -105,17 +106,6 @@ function readStreamName(location) {
   return null;
 }
 
-function flattenBlocks(blocks, depth = 0) {
-  return blocks.flatMap((block) => [
-    {
-      depth,
-      kind: block.kind,
-      content: block.content,
-    },
-    ...flattenBlocks(block.children ?? [], depth + 1),
-  ]);
-}
-
 function PageTree({
   nodes,
   depth = 0,
@@ -207,7 +197,10 @@ export default function App() {
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages);
   const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
-  const editorRows = selectedPageBlocks ? flattenBlocks(selectedPageBlocks.blocks ?? []) : [];
+  const selectedBlocks = useMemo(
+    () => selectedPageBlocks?.blocks ?? [],
+    [selectedPageBlocks],
+  );
   const createDisabled =
     busyAction === "create" ||
     !createState.parentPath ||
@@ -222,14 +215,19 @@ export default function App() {
     setStreamNames(allStreamNames);
   }
 
+  const loadPageBlocksSeqRef = useRef(0);
+
   async function loadPageBlocks(pageId) {
     if (!pageId) {
       setSelectedPageBlocks(null);
       return;
     }
 
+    const seq = ++loadPageBlocksSeqRef.current;
     const blocks = await invoke("page_blocks", { pageId });
-    setSelectedPageBlocks(blocks);
+    if (seq === loadPageBlocksSeqRef.current) {
+      setSelectedPageBlocks(blocks);
+    }
   }
 
   async function openWorkspaceRoot(rootPath) {
@@ -321,15 +319,9 @@ export default function App() {
     setMode("onboarding");
   }
 
-  async function handleSelectPage(pageId) {
+  function handleSelectPage(pageId) {
     setSelectedPageId(pageId);
     setActionError(null);
-
-    try {
-      await loadPageBlocks(pageId);
-    } catch (error) {
-      setActionError(normalizeError(error));
-    }
   }
 
   function handleTogglePageTree(pageId) {
@@ -417,6 +409,8 @@ export default function App() {
     };
   }, []);
 
+  // Auto-select the first page when the page list changes.
+  // Depends on `pages` (state, stable reference), not `regularPages` (computed, new ref every render).
   useEffect(() => {
     if (mode !== "workspace") {
       return;
@@ -428,18 +422,22 @@ export default function App() {
       return;
     }
 
-    const nextPageId = regularPages.some((page) => page.page_id === selectedPageId)
-      ? selectedPageId
-      : regularPages[0].page_id;
+    if (!regularPages.some((page) => page.page_id === selectedPageId)) {
+      setSelectedPageId(regularPages[0].page_id);
+    }
+  }, [mode, pages]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    if (nextPageId !== selectedPageId) {
-      setSelectedPageId(nextPageId);
+  // Load blocks when the selected page changes.
+  // `selectedPageId` is a string — React compares it by value, so this fires exactly once per navigation.
+  useEffect(() => {
+    if (mode !== "workspace" || !selectedPageId) {
+      return;
     }
 
-    loadPageBlocks(nextPageId).catch((error) => {
+    loadPageBlocks(selectedPageId).catch((error) => {
       setActionError(normalizeError(error));
     });
-  }, [mode, regularPages, selectedPageId]);
+  }, [mode, selectedPageId]);
 
   useEffect(() => {
     if (!selectedPageId) {
@@ -465,7 +463,7 @@ export default function App() {
 
       return changed ? next : current;
     });
-  }, [selectedPageId, regularPages]);
+  }, [selectedPageId, pages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleError =
     startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
@@ -598,25 +596,12 @@ export default function App() {
                       <p className="body-copy">{selectedPage.workspace_path}</p>
                     </div>
                   </div>
-
-                  {editorRows.length === 0 ? (
-                    <div className="editor-empty">
-                      <p className="empty-state">This page is empty. Editor surface comes next.</p>
-                    </div>
-                  ) : (
-                    <div className="editor-surface">
-                      {editorRows.map((row, index) => (
-                        <div
-                          key={`${row.kind}-${row.content}-${index}`}
-                          className="editor-row"
-                          style={{ paddingLeft: `${16 + row.depth * 18}px` }}
-                        >
-                          <span className="editor-row-kind">{row.kind}</span>
-                          <span>{row.content || "Untitled block"}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <Editor
+                    pageId={selectedPageId}
+                    blocks={selectedBlocks}
+                    workspace={workspace}
+                    page={selectedPage}
+                  />
                 </>
               ) : (
                 <div className="editor-empty">
