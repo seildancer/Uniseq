@@ -188,6 +188,7 @@ export default function App() {
   const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedPageBlocks, setSelectedPageBlocks] = useState(null);
+  const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [busyAction, setBusyAction] = useState("");
@@ -197,6 +198,7 @@ export default function App() {
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages);
   const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
+  const loadedPage = regularPages.find((page) => page.page_id === loadedPageId) ?? null;
   const selectedBlocks = useMemo(
     () => selectedPageBlocks?.blocks ?? [],
     [selectedPageBlocks],
@@ -227,6 +229,7 @@ export default function App() {
     const blocks = await invoke("page_blocks", { pageId });
     if (seq === loadPageBlocksSeqRef.current) {
       setSelectedPageBlocks(blocks);
+      setLoadedPageId(pageId);
     }
   }
 
@@ -587,30 +590,22 @@ export default function App() {
             </aside>
 
             <section className="editor-panel">
-              {selectedPage ? (
+              {loadedPage && (
                 <>
                   <div className="editor-header">
                     <div>
                       <p className="eyebrow">Editor</p>
-                      <h1>{selectedPage.title || selectedPage.page_id}</h1>
-                      <p className="body-copy">{selectedPage.workspace_path}</p>
+                      <h1>{loadedPage.title || loadedPage.page_id}</h1>
+                      <p className="body-copy">{loadedPage.workspace_path}</p>
                     </div>
                   </div>
                   <Editor
-                    pageId={selectedPageId}
+                    pageId={loadedPageId}
                     blocks={selectedBlocks}
                     workspace={workspace}
-                    page={selectedPage}
+                    page={loadedPage}
                   />
                 </>
-              ) : (
-                <div className="editor-empty">
-                  <h1>Workspace ready</h1>
-                  <p className="body-copy">
-                    Add files under <code>pages/</code> or in a stream folder like{" "}
-                    <code>journal/2026_05_08.md</code>.
-                  </p>
-                </div>
               )}
             </section>
           </div>

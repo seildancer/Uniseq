@@ -302,23 +302,6 @@ export default function Editor({ pageId, blocks, workspace, page }) {
     }
   }
 
-  function handleEmptyPageClick() {
-    const newText = "◦ \n";
-    setText(newText);
-    textRef.current = newText;
-    setFocusedIdx(0);
-  }
-
-  if (parsedBlocks.length === 0) {
-    return (
-      <div className="editor-surface">
-        <div className="editor-empty-prompt" onClick={handleEmptyPageClick}>
-          Start writing…
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="editor-surface">
       {parsedBlocks.map((block, idx) => (
