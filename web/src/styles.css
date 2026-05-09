@@ -335,6 +335,7 @@ h2 {
   min-height: 0;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: 1fr;
 }
 
 .workspace-sidebar,
@@ -510,40 +511,11 @@ h2 {
 }
 
 .editor-panel {
-  padding: 24px;
-  background: #fcfcf9;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 20px;
-}
-
-.editor-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.editor-surface,
-.editor-empty {
-  min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: var(--panel);
-}
-
-.editor-surface {
-  overflow: auto;
   padding: 12px 16px;
-  display: grid;
-  align-content: start;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   gap: 2px;
-}
-
-.editor-empty {
-  padding: 24px;
-  display: grid;
-  align-content: center;
 }
 
 .block-row {

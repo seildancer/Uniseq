@@ -592,13 +592,9 @@ export default function App() {
             <section className="editor-panel">
               {loadedPage && (
                 <>
-                  <div className="editor-header">
-                    <div>
-                      <p className="eyebrow">Editor</p>
-                      <h1>{loadedPage.title || loadedPage.page_id}</h1>
-                      <p className="body-copy">{loadedPage.workspace_path}</p>
-                    </div>
-                  </div>
+                  <p className="eyebrow">Editor</p>
+                  <h1>{loadedPage.title || loadedPage.page_id}</h1>
+                  <p className="body-copy">{loadedPage.workspace_path}</p>
                   <Editor
                     pageId={loadedPageId}
                     blocks={selectedBlocks}

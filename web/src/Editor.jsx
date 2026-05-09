@@ -6,29 +6,49 @@ const WRITE_DEBOUNCE_MS = 300;
 
 // ── Block parser ───────────────────────────────────────────────────────────
 
-function consumeContinuation(text, i, len) {
+const TAB_WIDTH = 4;
+
+function measureIndent(text, i, len) {
+  let width = 0;
+  let j = i;
+  while (j < len) {
+    if (text[j] === " ") {
+      width++;
+      j++;
+    } else if (text[j] === "\t") {
+      width += TAB_WIDTH;
+      j++;
+    } else {
+      break;
+    }
+  }
+  return { width, end: j };
+}
+
+function consumeContinuation(text, i, len, contentColumn) {
   while (i < len) {
-    const lineStart = i;
-    let j = i;
-    while (j < len && text[j] === "\t") j++;
-    if (text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
-    if (j === lineStart && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
+    const { width: indentWidth, end: j } = measureIndent(text, i, len);
+
+    if (j < len && text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
+    if (indentWidth === 0 && j < len && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
+
+    if (contentColumn !== undefined && indentWidth < contentColumn) break;
+
     while (i < len && text[i] !== "\n") i++;
     if (i < len) i++;
   }
   return i;
 }
 
-// Like consumeContinuation but also breaks on non-indented lines — outliner
-// continuation requires at least one leading tab (content_column > 0).
-function consumeOutlinerContinuation(text, i, len) {
+function consumeOutlinerContinuation(text, i, len, contentColumn) {
   while (i < len) {
-    const lineStart = i;
-    let j = i;
-    while (j < len && text[j] === "\t") j++;
-    if (text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
-    if (j === lineStart && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
-    if (j === lineStart) break;
+    const { width: indentWidth, end: j } = measureIndent(text, i, len);
+
+    if (j < len && text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
+    if (indentWidth === 0 && j < len && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
+
+    if (indentWidth < contentColumn) break;
+
     while (i < len && text[i] !== "\n") i++;
     if (i < len) i++;
   }
@@ -42,28 +62,29 @@ function parseBlocks(text) {
 
   while (i < len) {
     const blockStart = i;
-    let depth = 0;
-    while (i < len && text[i] === "\t") { depth++; i++; }
+    const { width: indentWidth, end: markerStart } = measureIndent(text, i, len);
 
-    if (i < len && text[i] === "-" && i + 1 < len && text[i + 1] === " ") {
-      const contentStart = i + 2;
+    if (markerStart < len && text[markerStart] === "-" && markerStart + 1 < len && text[markerStart + 1] === " ") {
+      const contentStart = markerStart + 2;
+      const contentColumn = indentWidth + 2;
       i = contentStart;
       while (i < len && text[i] !== "\n") i++;
       if (i < len) i++;
-      i = consumeOutlinerContinuation(text, i, len);
-      blocks.push({ start: blockStart, end: i, depth, kind: "outliner", contentStart });
-    } else if (depth === 0 && i < len && text[i] === "◦" && i + 1 < len && text[i + 1] === " ") {
-      const contentStart = i + 2;
+      i = consumeOutlinerContinuation(text, i, len, contentColumn);
+      blocks.push({ start: blockStart, end: i, depth: Math.floor(indentWidth / TAB_WIDTH), kind: "outliner", contentStart });
+    } else if (indentWidth === 0 && markerStart < len && text[markerStart] === "◦" && markerStart + 1 < len && text[markerStart + 1] === " ") {
+      const contentStart = markerStart + 2;
+      const contentColumn = indentWidth + 2;
       i = contentStart;
       while (i < len && text[i] !== "\n") i++;
       if (i < len) i++;
-      i = consumeContinuation(text, i, len);
+      i = consumeContinuation(text, i, len, contentColumn);
       blocks.push({ start: blockStart, end: i, depth: 0, kind: "explicit_plaintext", contentStart });
     } else {
       i = blockStart;
       while (i < len && text[i] !== "\n") i++;
       if (i < len) i++;
-      i = consumeContinuation(text, i, len);
+      i = consumeContinuation(text, i, len, 0);
       blocks.push({ start: blockStart, end: i, depth: 0, kind: "implicit_plaintext", contentStart: blockStart });
     }
   }
@@ -303,7 +324,7 @@ export default function Editor({ pageId, blocks, workspace, page }) {
   }
 
   return (
-    <div className="editor-surface">
+    <>
       {parsedBlocks.map((block, idx) => (
         <BlockRow
           key={idx}
@@ -316,6 +337,6 @@ export default function Editor({ pageId, blocks, workspace, page }) {
           onKeyDown={handleKeyDown}
         />
       ))}
-    </div>
+    </>
   );
 }
