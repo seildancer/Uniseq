@@ -1,9 +1,19 @@
 use std::path::PathBuf;
 
-use super::{
-    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan,
-    WorkspaceCache,
-};
+use super::{Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan, WorkspaceCache};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlatBlockSnapshot {
+    pub kind: BlockKind,
+    pub depth: u32,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageContentSnapshot {
+    pub revision: FileFingerprint,
+    pub blocks: Vec<FlatBlockSnapshot>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageSummary {
@@ -25,23 +35,6 @@ pub struct PageDetail {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BlockSnapshot {
-    pub kind: BlockSnapshotKind,
-    pub block_span: SourceSpan,
-    pub content_span: SourceSpan,
-    pub content: String,
-    pub children: Vec<BlockSnapshot>,
-    pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PageBlocksSnapshot {
-    pub page_id: PageId,
-    pub revision: FileFingerprint,
-    pub blocks: Vec<BlockSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncomingPageRefSnapshot {
     pub target_page_id: PageId,
     pub source_page_id: PageId,
@@ -55,12 +48,6 @@ pub struct OutgoingPageRefSnapshot {
     pub target_page_id: PageId,
     pub ref_span: SourceSpan,
     pub target_exists: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockSnapshotKind {
-    Outliner,
-    Plaintext,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -105,16 +92,11 @@ impl<'a> WorkspaceReadApi<'a> {
             .collect()
     }
 
-    pub fn page_blocks(&self, page_id: &PageId) -> Result<PageBlocksSnapshot, CoreError> {
+    pub fn page_content(&self, page_id: &PageId) -> Result<PageContentSnapshot, CoreError> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
-        Ok(PageBlocksSnapshot {
-            page_id: page.page_id.clone(),
+        Ok(PageContentSnapshot {
             revision: page.fingerprint,
-            blocks: page
-                .blocks
-                .iter()
-                .map(|block| block_snapshot(self.cache, page, block))
-                .collect::<Result<_, _>>()?,
+            blocks: flat_blocks(page)?,
         })
     }
 
@@ -159,6 +141,31 @@ impl<'a> WorkspaceReadApi<'a> {
     }
 }
 
+fn flat_blocks(page: &Page) -> Result<Vec<FlatBlockSnapshot>, CoreError> {
+    let mut result = Vec::new();
+    for block in &page.blocks {
+        collect_flat(page, block, 0, &mut result)?;
+    }
+    Ok(result)
+}
+
+fn collect_flat(
+    page: &Page,
+    block: &Block,
+    depth: u32,
+    result: &mut Vec<FlatBlockSnapshot>,
+) -> Result<(), CoreError> {
+    result.push(FlatBlockSnapshot {
+        kind: block.kind,
+        depth,
+        content: resolved_block_content(page, block)?,
+    });
+    for child in &block.children {
+        collect_flat(page, child, depth + 1, result)?;
+    }
+    Ok(())
+}
+
 fn incoming_ref_snapshots(
     cache: &WorkspaceCache,
     target_page_id: &PageId,
@@ -201,40 +208,6 @@ fn outgoing_ref_snapshots(
             target_exists: cache.page(&outgoing_ref.target_page_id).is_some(),
         })
         .collect()
-}
-
-fn block_snapshot(
-    cache: &WorkspaceCache,
-    source_page: &Page,
-    block: &Block,
-) -> Result<BlockSnapshot, CoreError> {
-    Ok(BlockSnapshot {
-        kind: block_snapshot_kind(block.kind),
-        block_span: block.block_span,
-        content_span: block.content_span,
-        content: resolved_block_content(source_page, block)?,
-        children: block
-            .children
-            .iter()
-            .map(|child| block_snapshot(cache, source_page, child))
-            .collect::<Result<_, _>>()?,
-        outgoing_refs: block
-            .outgoing_refs
-            .iter()
-            .map(|outgoing_ref| OutgoingPageRefSnapshot {
-                target_page_id: outgoing_ref.target_page_id.clone(),
-                ref_span: outgoing_ref.ref_span,
-                target_exists: cache.page(&outgoing_ref.target_page_id).is_some(),
-            })
-            .collect(),
-    })
-}
-
-fn block_snapshot_kind(kind: BlockKind) -> BlockSnapshotKind {
-    match kind {
-        BlockKind::Outliner => BlockSnapshotKind::Outliner,
-        BlockKind::Plaintext => BlockSnapshotKind::Plaintext,
-    }
 }
 
 fn resolved_block_content(source_page: &Page, block: &Block) -> Result<String, CoreError> {
@@ -313,42 +286,6 @@ mod tests {
         assert!(detail.incoming_refs.is_empty());
         assert_eq!(detail.outgoing_ref_count, 2);
         assert_eq!(detail.outgoing_refs.len(), 2);
-    }
-
-    #[test]
-    fn page_blocks_keep_unresolved_outgoing_refs_visible() {
-        let text = "- [[Missing]]\n";
-        let cache = WorkspaceCache::from_pages([parsed_page(&["A"], text)]);
-        let read_api = WorkspaceReadApi::new(&cache);
-
-        let blocks = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
-
-        assert_eq!(blocks.blocks[0].outgoing_refs.len(), 1);
-        assert_eq!(
-            blocks.blocks[0].outgoing_refs[0],
-            OutgoingPageRefSnapshot {
-                target_page_id: PageId::new(["Missing"]).unwrap(),
-                ref_span: SourceSpan::unchecked(2, 13),
-                target_exists: false,
-            }
-        );
-    }
-
-    #[test]
-    fn page_blocks_expose_source_spans_without_revision_handles() {
-        let text = "- current\n\t- child\n";
-        let cache = WorkspaceCache::from_pages([parsed_page(&["A"], text)]);
-        let read_api = WorkspaceReadApi::new(&cache);
-        let blocks = read_api.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
-
-        assert_eq!(blocks.page_id, PageId::new(["A"]).unwrap());
-        assert_eq!(blocks.revision, FileFingerprint::from_text(text));
-        assert_eq!(
-            blocks.blocks[0].block_span,
-            SourceSpan::unchecked(0, text.len())
-        );
-        assert_eq!(blocks.blocks[0].content_span, SourceSpan::unchecked(2, 10));
-        assert_eq!(blocks.blocks[0].children[0].content, "child");
     }
 
     #[test]

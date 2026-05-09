@@ -9,12 +9,12 @@ use std::time::{Duration, Instant, SystemTime};
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
-    CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageBlocksSnapshot, PageDetail,
+    CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail,
     PageId, PageSummary, WorkspaceCache, WorkspaceReadApi,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
-    page_and_fingerprint_from_text,
+    page_and_fingerprint_from_text, page_from_markdown_in_location,
 };
 use crate::core::storage::{all_stream_names, is_supported_workspace_markdown_path};
 use crate::core::structure::{
@@ -195,11 +195,19 @@ impl WorkspaceSession {
             .with_read_api(|read_api| read_api.page_detail(page_id))
     }
 
-    pub fn page_blocks(&self, page_id: &PageId) -> Result<PageBlocksSnapshot, CoreError> {
+    pub fn page_content(&self, page_id: &PageId) -> Result<PageContentSnapshot, CoreError> {
         self.state
             .read()
             .unwrap()
-            .with_read_api(|read_api| read_api.page_blocks(page_id))
+            .with_read_api(|read_api| read_api.page_content(page_id))
+    }
+
+    pub fn write_and_reparse(
+        &self,
+        page_id: &PageId,
+        text: String,
+    ) -> Result<PageContentSnapshot, CoreError> {
+        self.state.write().unwrap().write_and_reparse_inner(page_id, text)
     }
 
     pub fn page_incoming_refs(
@@ -362,6 +370,23 @@ impl Drop for WorkspaceSession {
 impl WorkspaceSessionState {
     fn with_read_api<R>(&self, f: impl FnOnce(WorkspaceReadApi<'_>) -> R) -> R {
         f(WorkspaceReadApi::new(&self.cache))
+    }
+
+    fn write_and_reparse_inner(
+        &mut self,
+        page_id: &PageId,
+        text: String,
+    ) -> Result<PageContentSnapshot, CoreError> {
+        let (location, workspace_path) = {
+            let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
+            (page.location.clone(), page.workspace_path.clone())
+        };
+        let absolute_path = self.root.join(&workspace_path);
+        fs::write(&absolute_path, &text)
+            .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
+        let new_page = page_from_markdown_in_location(page_id.clone(), location, text)?;
+        self.cache.refresh_page_content(new_page);
+        self.with_read_api(|api| api.page_content(page_id))
     }
 
     fn drain_events(&mut self) -> Vec<WorkspaceEvent> {

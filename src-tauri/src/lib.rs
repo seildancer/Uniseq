@@ -11,10 +11,10 @@ use uniseq_backend::PageName;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
-    BlockSnapshot, BlockSnapshotKind, CoreError, FileFingerprint, IncomingPageRefSnapshot,
-    OutgoingPageRefSnapshot, PageBlocksSnapshot, PageId, PageLocation, PageName, PageSummary,
-    SourceSpan, WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession,
-    create_workspace_root, prepare_workspace_root,
+    CoreError, FileFingerprint, FlatBlockSnapshot, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
+    PageContentSnapshot, PageId, PageLocation, PageName, PageSummary, SourceSpan,
+    WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession, create_workspace_root,
+    prepare_workspace_root,
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -60,20 +60,16 @@ struct PageDetailDto {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct PageBlocksDto {
-    page_id: String,
-    revision: FileFingerprintDto,
-    blocks: Vec<BlockSnapshotDto>,
+struct FlatBlockDto {
+    kind: String,
+    depth: u32,
+    content: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct BlockSnapshotDto {
-    kind: BlockSnapshotKindDto,
-    block_span: SourceSpanDto,
-    content_span: SourceSpanDto,
-    content: String,
-    children: Vec<BlockSnapshotDto>,
-    outgoing_refs: Vec<OutgoingPageRefDto>,
+struct PageContentDto {
+    revision: FileFingerprintDto,
+    blocks: Vec<FlatBlockDto>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -124,13 +120,6 @@ enum WatcherFallbackReasonDto {
     NativeWatcherSetupFailed { message: String },
     NativeWatcherRuntimeFailed { message: String },
     ControlChannelDisconnected,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum BlockSnapshotKindDto {
-    Outliner,
-    Plaintext,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -211,12 +200,21 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
-    fn page_blocks(&self, page_id: String) -> CommandResult<PageBlocksDto> {
+    fn page_content(&self, page_id: String) -> CommandResult<PageContentDto> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
-            .page_blocks(&page_id)
-            .map(PageBlocksDto::from)
+            .page_content(&page_id)
+            .map(PageContentDto::from)
+            .map_err(ErrorDto::from)
+    }
+
+    fn write_page_content(&self, page_id: String, text: String) -> CommandResult<PageContentDto> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        self.session()?
+            .write_and_reparse(&page_id, text)
+            .map(PageContentDto::from)
             .map_err(ErrorDto::from)
     }
 
@@ -320,37 +318,24 @@ impl From<uniseq_backend::PageDetail> for PageDetailDto {
     }
 }
 
-impl From<PageBlocksSnapshot> for PageBlocksDto {
-    fn from(value: PageBlocksSnapshot) -> Self {
+impl From<PageContentSnapshot> for PageContentDto {
+    fn from(value: PageContentSnapshot) -> Self {
         Self {
-            page_id: page_id_to_string(&value.page_id),
             revision: FileFingerprintDto::from(value.revision),
-            blocks: value
-                .blocks
-                .into_iter()
-                .map(BlockSnapshotDto::from)
-                .collect(),
+            blocks: value.blocks.into_iter().map(FlatBlockDto::from).collect(),
         }
     }
 }
 
-impl From<BlockSnapshot> for BlockSnapshotDto {
-    fn from(value: BlockSnapshot) -> Self {
+impl From<FlatBlockSnapshot> for FlatBlockDto {
+    fn from(value: FlatBlockSnapshot) -> Self {
         Self {
-            kind: BlockSnapshotKindDto::from(value.kind),
-            block_span: SourceSpanDto::from(value.block_span),
-            content_span: SourceSpanDto::from(value.content_span),
+            kind: match value.kind {
+                uniseq_backend::BlockKind::Outliner => "outliner".to_owned(),
+                uniseq_backend::BlockKind::Plaintext => "plaintext".to_owned(),
+            },
+            depth: value.depth,
             content: value.content,
-            children: value
-                .children
-                .into_iter()
-                .map(BlockSnapshotDto::from)
-                .collect(),
-            outgoing_refs: value
-                .outgoing_refs
-                .into_iter()
-                .map(OutgoingPageRefDto::from)
-                .collect(),
         }
     }
 }
@@ -425,15 +410,6 @@ impl From<WatcherFallbackReason> for WatcherFallbackReasonDto {
                 Self::NativeWatcherRuntimeFailed { message }
             }
             WatcherFallbackReason::ControlChannelDisconnected => Self::ControlChannelDisconnected,
-        }
-    }
-}
-
-impl From<BlockSnapshotKind> for BlockSnapshotKindDto {
-    fn from(value: BlockSnapshotKind) -> Self {
-        match value {
-            BlockSnapshotKind::Outliner => Self::Outliner,
-            BlockSnapshotKind::Plaintext => Self::Plaintext,
         }
     }
 }
@@ -658,8 +634,17 @@ fn page_detail(state: State<'_, AppState>, page_id: String) -> CommandResult<Pag
 }
 
 #[tauri::command]
-fn page_blocks(state: State<'_, AppState>, page_id: String) -> CommandResult<PageBlocksDto> {
-    state.controller.lock().unwrap().page_blocks(page_id)
+fn page_content(state: State<'_, AppState>, page_id: String) -> CommandResult<PageContentDto> {
+    state.controller.lock().unwrap().page_content(page_id)
+}
+
+#[tauri::command]
+fn write_page_content(
+    state: State<'_, AppState>,
+    page_id: String,
+    text: String,
+) -> CommandResult<PageContentDto> {
+    state.controller.lock().unwrap().write_page_content(page_id, text)
 }
 
 #[tauri::command]
@@ -698,11 +683,6 @@ fn stop_watching(state: State<'_, AppState>) -> CommandResult<bool> {
     state.controller.lock().unwrap().stop_watching()
 }
 
-#[tauri::command]
-fn write_file(path: String, content: String) -> Result<(), String> {
-    std::fs::write(&path, content).map_err(|e| e.to_string())
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -717,14 +697,14 @@ pub fn run() {
             all_streams,
             page_summary,
             page_detail,
-            page_blocks,
+            page_content,
+            write_page_content,
             page_incoming_refs,
             page_outgoing_refs,
             drain_workspace_events,
             take_last_watch_error,
             start_watching,
-            stop_watching,
-            write_file
+            stop_watching
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");

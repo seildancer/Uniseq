@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Editor from "./Editor.jsx";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -187,7 +187,7 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
-  const [selectedPageBlocks, setSelectedPageBlocks] = useState(null);
+  const [selectedPageBlocks, setSelectedPageBlocks] = useState([]);
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -199,10 +199,6 @@ export default function App() {
   const pageTree = buildPageTree(regularPages);
   const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
   const loadedPage = regularPages.find((page) => page.page_id === loadedPageId) ?? null;
-  const selectedBlocks = useMemo(
-    () => selectedPageBlocks?.blocks ?? [],
-    [selectedPageBlocks],
-  );
   const createDisabled =
     busyAction === "create" ||
     !createState.parentPath ||
@@ -217,17 +213,17 @@ export default function App() {
     setStreamNames(allStreamNames);
   }
 
-  const loadPageBlocksSeqRef = useRef(0);
+  const loadPageContentSeqRef = useRef(0);
 
-  async function loadPageBlocks(pageId) {
+  async function loadPageContent(pageId) {
     if (!pageId) {
-      setSelectedPageBlocks(null);
+      setSelectedPageBlocks([]);
       return;
     }
 
-    const seq = ++loadPageBlocksSeqRef.current;
-    const blocks = await invoke("page_blocks", { pageId });
-    if (seq === loadPageBlocksSeqRef.current) {
+    const seq = ++loadPageContentSeqRef.current;
+    const { blocks } = await invoke("page_content", { pageId });
+    if (seq === loadPageContentSeqRef.current) {
       setSelectedPageBlocks(blocks);
       setLoadedPageId(pageId);
     }
@@ -315,7 +311,7 @@ export default function App() {
     setPages([]);
     setStreamNames([]);
     setSelectedPageId("");
-    setSelectedPageBlocks(null);
+    setSelectedPageBlocks([]);
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -421,7 +417,7 @@ export default function App() {
 
     if (regularPages.length === 0) {
       setSelectedPageId("");
-      setSelectedPageBlocks(null);
+      setSelectedPageBlocks([]);
       return;
     }
 
@@ -437,10 +433,38 @@ export default function App() {
       return;
     }
 
-    loadPageBlocks(selectedPageId).catch((error) => {
+    loadPageContent(selectedPageId).catch((error) => {
       setActionError(normalizeError(error));
     });
   }, [mode, selectedPageId]);
+
+  // Poll watcher events to detect external file changes.
+  useEffect(() => {
+    if (mode !== "workspace") return;
+
+    const id = setInterval(async () => {
+      const events = await invoke("drain_workspace_events").catch(() => []);
+      for (const event of events) {
+        if (event.type === "workspace_reloaded") {
+          await loadWorkspaceLists().catch(() => {});
+        } else if (event.type === "pages_changed") {
+          await loadWorkspaceLists().catch(() => {});
+          if (loadedPageId && event.page_ids.includes(loadedPageId)) {
+            await loadPageContent(loadedPageId).catch(() => {});
+          }
+        } else if (event.type === "page_removed") {
+          await loadWorkspaceLists().catch(() => {});
+          if (event.page_id === loadedPageId) {
+            setSelectedPageBlocks([]);
+            setLoadedPageId(null);
+            setSelectedPageId("");
+          }
+        }
+      }
+    }, 250);
+
+    return () => clearInterval(id);
+  }, [mode, loadedPageId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedPageId) {
@@ -597,9 +621,8 @@ export default function App() {
                   <p className="body-copy">{loadedPage.workspace_path}</p>
                   <Editor
                     pageId={loadedPageId}
-                    blocks={selectedBlocks}
-                    workspace={workspace}
-                    page={loadedPage}
+                    blocks={selectedPageBlocks}
+                    key={loadedPageId}
                   />
                 </>
               )}

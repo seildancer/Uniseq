@@ -1,96 +1,15 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 
 const WRITE_DEBOUNCE_MS = 300;
 
-// ── Block parser ───────────────────────────────────────────────────────────
-
-const TAB_WIDTH = 4;
-
-function measureIndent(text, i, len) {
-  let width = 0;
-  let j = i;
-  while (j < len) {
-    if (text[j] === " ") {
-      width++;
-      j++;
-    } else if (text[j] === "\t") {
-      width += TAB_WIDTH;
-      j++;
-    } else {
-      break;
-    }
-  }
-  return { width, end: j };
-}
-
-function consumeContinuation(text, i, len, contentColumn) {
-  while (i < len) {
-    const { width: indentWidth, end: j } = measureIndent(text, i, len);
-    if (j < len && text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
-    if (indentWidth < contentColumn) break;
-    while (i < len && text[i] !== "\n") i++;
-    if (i < len) i++;
-  }
-  return i;
-}
-
-function parseBlocks(text) {
-  const blocks = [];
-  let i = 0;
-  const len = text.length;
-
-  while (i < len) {
-    const blockStart = i;
-    const { width: indentWidth, end: markerStart } = measureIndent(text, i, len);
-
-    if (markerStart < len && text[markerStart] === "-" && markerStart + 1 < len && text[markerStart + 1] === " ") {
-      const contentStart = markerStart + 2;
-      const contentColumn = indentWidth + 2;
-      i = contentStart;
-      while (i < len && text[i] !== "\n") i++;
-      if (i < len) i++;
-      i = consumeContinuation(text, i, len, contentColumn);
-      blocks.push({ start: blockStart, end: i, depth: Math.floor(indentWidth / TAB_WIDTH), kind: "outliner", contentStart });
-    } else {
-      i = blockStart;
-      while (i < len && text[i] !== "\n") i++;
-      if (i < len) i++;
-      i = consumeContinuation(text, i, len, 0);
-      blocks.push({ start: blockStart, end: i, depth: 0, kind: "plaintext", contentStart: blockStart });
-    }
-  }
-
-  return blocks;
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function blockPrefix(depth, kind) {
-  if (kind === "outliner") return "\t".repeat(depth) + "- ";
-  return "";
-}
-
-function spliceText(text, start, end, replacement) {
-  return text.slice(0, start) + replacement + text.slice(end);
-}
-
-function blocksToText(blocks, depth = 0) {
-  if (!blocks?.length) return "";
+function blocksToText(blocks) {
   return blocks
-    .map((b) => {
-      const prefix = blockPrefix(depth, b.kind);
-      const own = prefix + (b.content ?? "") + "\n";
-      const children = b.children?.length ? blocksToText(b.children, depth + 1) : "";
-      return own + children;
-    })
+    .map((b) => (b.kind === "outliner" ? "\t".repeat(b.depth) + "- " : "") + b.content + "\n")
     .join("");
-}
-
-function getAbsolutePath(workspace, page) {
-  if (!workspace || !page) return null;
-  return workspace.root_path.replace(/\\/g, "/") + "/" + page.workspace_path;
 }
 
 function adjustHeight(el) {
@@ -98,17 +17,11 @@ function adjustHeight(el) {
   el.style.height = el.scrollHeight + "px";
 }
 
-function blockContent(text, block) {
-  const raw = text.slice(block.contentStart, block.end);
-  return raw.endsWith("\n") ? raw.slice(0, -1) : raw;
-}
-
 // ── BlockRow ───────────────────────────────────────────────────────────────
 
-function BlockRow({ text, block, idx, isFocused, onFocus, onContentChange, onKeyDown }) {
+function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown }) {
   const textareaRef = useRef(null);
   const isOutliner = block.kind === "outliner";
-  const content = blockContent(text, block);
 
   useEffect(() => {
     if (isFocused && textareaRef.current) {
@@ -141,7 +54,7 @@ function BlockRow({ text, block, idx, isFocused, onFocus, onContentChange, onKey
           </span>
         )}
         <div className="block-content">
-          <ReactMarkdown>{content || " "}</ReactMarkdown>
+          <ReactMarkdown>{block.content || " "}</ReactMarkdown>
         </div>
       </div>
     );
@@ -157,12 +70,12 @@ function BlockRow({ text, block, idx, isFocused, onFocus, onContentChange, onKey
       <textarea
         ref={textareaRef}
         className="block-textarea"
-        value={content}
+        value={block.content}
         onChange={(e) => {
-          onContentChange(idx, block, e.target.value);
+          onContentChange(idx, e.target.value);
           adjustHeight(e.target);
         }}
-        onKeyDown={(e) => onKeyDown(e, idx, block, content)}
+        onKeyDown={(e) => onKeyDown(e, idx)}
         onBlur={() => onFocus(null)}
       />
     </div>
@@ -171,73 +84,73 @@ function BlockRow({ text, block, idx, isFocused, onFocus, onContentChange, onKey
 
 // ── Editor ─────────────────────────────────────────────────────────────────
 
-export default function Editor({ pageId, blocks, workspace, page }) {
-  const [text, setText] = useState(() => blocksToText(blocks));
+export default function Editor({ pageId, blocks }) {
+  const [localBlocks, setLocalBlocks] = useState(blocks);
   const [focusedIdx, setFocusedIdx] = useState(null);
   const debounceRef = useRef(null);
-  const textRef = useRef(text);
-  const pathRef = useRef(getAbsolutePath(workspace, page));
-
-  const parsedBlocks = useMemo(() => parseBlocks(text), [text]);
+  const localBlocksRef = useRef(blocks);
 
   useEffect(() => {
-    textRef.current = text;
-  }, [text]);
+    localBlocksRef.current = localBlocks;
+  }, [localBlocks]);
 
-  // Reset when page's blocks arrive. Also updates pathRef here — not earlier — so
-  // pathRef and textRef are always in sync. Any flush before this point still uses
-  // the previous page's path, which is correct.
+  // Reset when the incoming block array changes (page switch or external file change).
   useEffect(() => {
     clearTimeout(debounceRef.current);
-    pathRef.current = getAbsolutePath(workspace, page);
-    const newText = blocksToText(blocks);
-    setText(newText);
-    textRef.current = newText;
+    setLocalBlocks(blocks);
+    localBlocksRef.current = blocks;
     setFocusedIdx(null);
   }, [blocks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Flush on unmount (app close / workspace close)
+  // Flush on unmount (app close / workspace close).
   useEffect(() => {
     return () => {
       clearTimeout(debounceRef.current);
-      if (pathRef.current) {
-        invoke("write_file", { path: pathRef.current, content: textRef.current }).catch(() => {});
+      if (pageId) {
+        invoke("write_page_content", {
+          pageId,
+          text: blocksToText(localBlocksRef.current),
+        }).catch(() => {});
       }
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function scheduleWrite(newText) {
-    const path = pathRef.current;
-    if (!path) return;
+  function scheduleWrite(newBlocks) {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      invoke("write_file", { path, content: newText }).catch(() => {});
+      invoke("write_page_content", {
+        pageId,
+        text: blocksToText(newBlocks),
+      }).catch(() => {});
     }, WRITE_DEBOUNCE_MS);
   }
 
-  function flushWrite(newText) {
-    const path = pathRef.current;
-    if (!path) return;
+  function flushWrite(newBlocks) {
     clearTimeout(debounceRef.current);
-    invoke("write_file", { path, content: newText }).catch(() => {});
+    invoke("write_page_content", {
+      pageId,
+      text: blocksToText(newBlocks),
+    }).catch(() => {});
   }
 
   function handleFocus(idx) {
     if (idx === null && focusedIdx !== null) {
-      flushWrite(textRef.current);
+      flushWrite(localBlocksRef.current);
     }
     setFocusedIdx(idx);
   }
 
-  function handleContentChange(idx, block, newContent) {
-    const newBlockText = blockPrefix(block.depth, block.kind) + newContent + "\n";
-    const newText = spliceText(text, block.start, block.end, newBlockText);
-    setText(newText);
-    textRef.current = newText;
-    scheduleWrite(newText);
+  function handleContentChange(idx, newContent) {
+    const newBlocks = localBlocks.map((b, i) =>
+      i === idx ? { ...b, content: newContent } : b,
+    );
+    setLocalBlocks(newBlocks);
+    localBlocksRef.current = newBlocks;
+    scheduleWrite(newBlocks);
   }
 
-  function handleKeyDown(e, idx, block, currentContent) {
+  function handleKeyDown(e, idx) {
+    const block = localBlocks[idx];
     const isOutliner = block.kind === "outliner";
 
     if (e.key === "Tab") {
@@ -248,59 +161,56 @@ export default function Editor({ pageId, blocks, workspace, page }) {
       if (e.shiftKey) {
         newDepth = Math.max(0, block.depth - 1);
       } else {
-        const prevBlock = parsedBlocks[idx - 1];
-        const maxDepth = prevBlock ? prevBlock.depth + 1 : 0;
+        const prev = localBlocks[idx - 1];
+        const maxDepth = prev ? prev.depth + 1 : 0;
         newDepth = Math.min(block.depth + 1, maxDepth);
       }
       if (newDepth === block.depth) return;
 
-      const newText = spliceText(
-        text,
-        block.start,
-        block.end,
-        blockPrefix(newDepth, block.kind) + currentContent + "\n",
+      const newBlocks = localBlocks.map((b, i) =>
+        i === idx ? { ...b, depth: newDepth } : b,
       );
-      setText(newText);
-      textRef.current = newText;
-      scheduleWrite(newText);
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      scheduleWrite(newBlocks);
     } else if (e.key === "Enter" && isOutliner) {
       e.preventDefault();
-      if (currentContent.trim() === "") {
-        const newText = spliceText(text, block.start, block.end, "\n");
-        setText(newText);
-        textRef.current = newText;
-        scheduleWrite(newText);
+      let newBlocks;
+      if (block.content.trim() === "") {
+        newBlocks = localBlocks.map((b, i) =>
+          i === idx ? { kind: "plaintext", depth: 0, content: "" } : b,
+        );
       } else {
         const cursor = e.target.selectionStart;
-        const before = currentContent.slice(0, cursor);
-        const after = currentContent.slice(cursor);
-        const newText = spliceText(
-          text,
-          block.start,
-          block.end,
-          blockPrefix(block.depth, block.kind) + before + "\n" +
-            blockPrefix(block.depth, block.kind) + after + "\n",
-        );
-        setText(newText);
-        textRef.current = newText;
-        scheduleWrite(newText);
+        const before = block.content.slice(0, cursor);
+        const after = block.content.slice(cursor);
+        newBlocks = [
+          ...localBlocks.slice(0, idx),
+          { ...block, content: before },
+          { kind: block.kind, depth: block.depth, content: after },
+          ...localBlocks.slice(idx + 1),
+        ];
         setFocusedIdx(idx + 1);
       }
-    } else if (e.key === "Backspace" && isOutliner && currentContent === "") {
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      scheduleWrite(newBlocks);
+    } else if (e.key === "Backspace" && isOutliner && block.content === "") {
       e.preventDefault();
-      const newText = spliceText(text, block.start, block.end, "\n");
-      setText(newText);
-      textRef.current = newText;
-      scheduleWrite(newText);
+      const newBlocks = localBlocks.map((b, i) =>
+        i === idx ? { kind: "plaintext", depth: 0, content: "" } : b,
+      );
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      scheduleWrite(newBlocks);
     }
   }
 
   return (
     <>
-      {parsedBlocks.map((block, idx) => (
+      {localBlocks.map((block, idx) => (
         <BlockRow
           key={idx}
-          text={text}
           block={block}
           idx={idx}
           isFocused={idx === focusedIdx}
