@@ -527,6 +527,7 @@ h2 {
   border-radius: 6px;
   cursor: text;
   min-height: 28px;
+  flex-shrink: 0;
 }
 
 .block-row:hover { background: rgba(17, 17, 17, 0.03); }
