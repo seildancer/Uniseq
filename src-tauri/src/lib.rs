@@ -130,8 +130,7 @@ enum WatcherFallbackReasonDto {
 #[serde(rename_all = "snake_case")]
 enum BlockSnapshotKindDto {
     Outliner,
-    ExplicitPlaintext,
-    ImplicitPlaintext,
+    Plaintext,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -434,8 +433,7 @@ impl From<BlockSnapshotKind> for BlockSnapshotKindDto {
     fn from(value: BlockSnapshotKind) -> Self {
         match value {
             BlockSnapshotKind::Outliner => Self::Outliner,
-            BlockSnapshotKind::ExplicitPlaintext => Self::ExplicitPlaintext,
-            BlockSnapshotKind::ImplicitPlaintext => Self::ImplicitPlaintext,
+            BlockSnapshotKind::Plaintext => Self::Plaintext,
         }
     }
 }

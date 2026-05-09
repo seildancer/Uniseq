@@ -12,7 +12,7 @@ mod storage;
 mod structure;
 mod workspace;
 
-pub use block::{Block, BlockKind, IncomingRef, PageRefOccurrence, PlaintextKind};
+pub use block::{Block, BlockKind, IncomingRef, PageRefOccurrence};
 pub use discovery::{WorkspaceDiscovery, discover_workspace, materialize_parent_pages};
 pub use error::{CoreError, NameError, PagePathError, ParserError, SpanError};
 pub use page::{FileFingerprint, Page};

@@ -289,7 +289,7 @@ fn target_page_ids_from_page(page: &Page) -> BTreeSet<PageId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BlockKind, PageRefOccurrence, PlaintextKind, SourceSpan, parse_blocks};
+    use crate::{BlockKind, PageRefOccurrence, SourceSpan, parse_blocks};
 
     fn page(id: &[&str], text: &str, blocks: Vec<Block>) -> Page {
         Page::new(PageId::new(id.iter().copied()).unwrap(), text).with_blocks(blocks)
@@ -481,7 +481,7 @@ mod tests {
         let source_page_id = PageId::new(["A"]).unwrap();
         cache.upsert_page(
             Page::new(source_page_id.clone(), "- old\n").with_blocks(vec![Block::leaf(
-                BlockKind::Plaintext(PlaintextKind::Implicit),
+                BlockKind::Plaintext,
                 SourceSpan::unchecked(0, 6),
                 SourceSpan::unchecked(2, 5),
             )]),

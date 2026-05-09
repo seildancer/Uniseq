@@ -1,27 +1,19 @@
 use std::str::FromStr;
 
-use super::{Block, BlockKind, CoreError, PageId, PageRefOccurrence, PlaintextKind, SourceSpan};
+use super::{Block, BlockKind, CoreError, PageId, PageRefOccurrence, SourceSpan};
 
 const TAB_WIDTH: usize = 4;
 // Reference suppression intentionally only treats fenced sections as code
 // blocks. Indentation-only Markdown code blocks remain part of normal block
 // content and still participate in page-ref extraction.
 const FENCE_MARKER: &str = "```";
-const PLAINTEXT_MARKER: char = '\u{25E6}';
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MarkerKind {
-    Outliner,
-    ExplicitPlaintext,
-}
 
 #[derive(Debug, Clone, Copy)]
-struct LineInfo<'a> {
-    _raw: &'a str,
+struct LineInfo {
     start: usize,
     end: usize,
     indent_width: usize,
-    marker: Option<MarkerKind>,
+    is_outliner: bool,
     content_start: usize,
     is_fence_line: bool,
 }
@@ -45,13 +37,11 @@ pub fn parse_blocks(text: &str) -> Result<Vec<Block>, CoreError> {
     for line in iter_lines(text) {
         let line = analyze_line(text, line.start(), line.end(), in_fence)?;
 
-        let marker = normalize_marker_for_context(&stack, line.marker, line.indent_width);
-
-        if let Some(marker) = marker {
-            close_for_explicit_marker(&mut stack, &mut roots, marker, line.indent_width)?;
-            stack.push(start_explicit_block(marker, line));
+        if line.is_outliner {
+            close_for_outliner_marker(&mut stack, &mut roots, line.indent_width)?;
+            stack.push(start_outliner_block(line));
         } else if !continue_existing_block(&mut stack, &mut roots, line.indent_width, line.end)? {
-            stack.push(start_implicit_plaintext_block(line));
+            stack.push(start_plaintext_block(line));
         }
 
         if line.is_fence_line {
@@ -86,12 +76,12 @@ fn iter_lines(text: &str) -> impl Iterator<Item = SourceSpan> + '_ {
     })
 }
 
-fn analyze_line<'a>(
-    text: &'a str,
+fn analyze_line(
+    text: &str,
     start: usize,
     end: usize,
     in_fence: bool,
-) -> Result<LineInfo<'a>, CoreError> {
+) -> Result<LineInfo, CoreError> {
     let raw = &text[start..end];
     let line_without_newline = raw.strip_suffix('\n').unwrap_or(raw);
 
@@ -114,53 +104,33 @@ fn analyze_line<'a>(
     let trimmed = &line_without_newline[indent_bytes..];
     let is_fence_line = trimmed.starts_with(FENCE_MARKER);
 
-    let mut marker = None;
+    let mut is_outliner = false;
     let mut content_start = start;
 
-    if !in_fence {
-        if let Some((kind, marker_len)) = explicit_marker(trimmed) {
-            marker = Some(kind);
-            let after_marker = start + indent_bytes + marker_len;
-            let after_space = line_without_newline[after_marker - start..]
-                .chars()
-                .next()
-                .filter(|ch| matches!(ch, ' ' | '\t'))
-                .map(|ch| after_marker + ch.len_utf8())
-                .unwrap_or(after_marker);
-            content_start = after_space;
-        }
+    if !in_fence && outliner_marker(trimmed) {
+        is_outliner = true;
+        let after_marker = start + indent_bytes + 1;
+        let after_space = line_without_newline[after_marker - start..]
+            .chars()
+            .next()
+            .filter(|ch| matches!(ch, ' ' | '\t'))
+            .map(|ch| after_marker + ch.len_utf8())
+            .unwrap_or(after_marker);
+        content_start = after_space;
     }
 
     Ok(LineInfo {
-        _raw: raw,
         start,
         end,
         indent_width,
-        marker,
+        is_outliner,
         content_start,
         is_fence_line,
     })
 }
 
-fn explicit_marker(trimmed: &str) -> Option<(MarkerKind, usize)> {
-    match trimmed.chars().next()? {
-        '-' if marker_is_terminated(trimmed, '-'.len_utf8()) => Some((MarkerKind::Outliner, 1)),
-        PLAINTEXT_MARKER if marker_is_terminated(trimmed, PLAINTEXT_MARKER.len_utf8()) => {
-            Some((MarkerKind::ExplicitPlaintext, PLAINTEXT_MARKER.len_utf8()))
-        }
-        _ => None,
-    }
-}
-
-fn normalize_marker_for_context(
-    stack: &[OpenBlock],
-    marker: Option<MarkerKind>,
-    line_indent: usize,
-) -> Option<MarkerKind> {
-    match marker {
-        Some(MarkerKind::ExplicitPlaintext) if !stack.is_empty() && line_indent > 0 => None,
-        _ => marker,
-    }
+fn outliner_marker(trimmed: &str) -> bool {
+    trimmed.starts_with('-') && marker_is_terminated(trimmed, 1)
 }
 
 fn marker_is_terminated(text: &str, marker_len: usize) -> bool {
@@ -170,16 +140,12 @@ fn marker_is_terminated(text: &str, marker_len: usize) -> bool {
         .is_none_or(|ch| matches!(ch, ' ' | '\t'))
 }
 
-fn close_for_explicit_marker(
+fn close_for_outliner_marker(
     stack: &mut Vec<OpenBlock>,
     roots: &mut Vec<Block>,
-    marker: MarkerKind,
     line_indent: usize,
 ) -> Result<(), CoreError> {
-    while stack.last().is_some_and(|block| match marker {
-        MarkerKind::Outliner => line_indent <= block.indent_width,
-        MarkerKind::ExplicitPlaintext => true,
-    }) {
+    while stack.last().is_some_and(|block| line_indent <= block.indent_width) {
         close_top_block(stack, roots)?;
     }
 
@@ -206,14 +172,9 @@ fn continue_existing_block(
     Ok(false)
 }
 
-fn start_explicit_block(marker: MarkerKind, line: LineInfo<'_>) -> OpenBlock {
-    let kind = match marker {
-        MarkerKind::Outliner => BlockKind::Outliner,
-        MarkerKind::ExplicitPlaintext => BlockKind::Plaintext(PlaintextKind::Explicit),
-    };
-
+fn start_outliner_block(line: LineInfo) -> OpenBlock {
     OpenBlock {
-        kind,
+        kind: BlockKind::Outliner,
         indent_width: line.indent_width,
         content_column: line.indent_width + 2,
         block_start: line.start,
@@ -223,9 +184,9 @@ fn start_explicit_block(marker: MarkerKind, line: LineInfo<'_>) -> OpenBlock {
     }
 }
 
-fn start_implicit_plaintext_block(line: LineInfo<'_>) -> OpenBlock {
+fn start_plaintext_block(line: LineInfo) -> OpenBlock {
     OpenBlock {
-        kind: BlockKind::Plaintext(PlaintextKind::Implicit),
+        kind: BlockKind::Plaintext,
         indent_width: line.indent_width,
         content_column: line.indent_width,
         block_start: line.start,
@@ -478,21 +439,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_single_explicit_plaintext_block() {
-        let text = "\u{25E6} hello\n";
-        let blocks = parse_blocks(text).unwrap();
-
-        assert_eq!(
-            spans(&blocks),
-            vec![(
-                BlockKind::Plaintext(PlaintextKind::Explicit),
-                SourceSpan::unchecked(0, text.len()),
-                SourceSpan::unchecked("\u{25E6} ".len(), text.len()),
-            )]
-        );
-    }
-
-    #[test]
     fn parses_non_uniseq_markdown_as_implicit_plaintext() {
         let text = "hello\nworld\n";
         let blocks = parse_blocks(text).unwrap();
@@ -500,7 +446,7 @@ mod tests {
         assert_eq!(
             spans(&blocks),
             vec![(
-                BlockKind::Plaintext(PlaintextKind::Implicit),
+                BlockKind::Plaintext,
                 SourceSpan::unchecked(0, text.len()),
                 SourceSpan::unchecked(0, text.len()),
             )]
@@ -509,7 +455,7 @@ mod tests {
 
     #[test]
     fn parses_nested_mixed_blocks() {
-        let text = "- parent\n\t\u{25E6} child text\n\t- child bullet\n";
+        let text = "- parent\n  child text\n\t- child bullet\n";
         let blocks = parse_blocks(text).unwrap();
 
         assert_eq!(blocks.len(), 1);
@@ -517,7 +463,7 @@ mod tests {
         assert_eq!(parent.kind, BlockKind::Outliner);
         assert_eq!(
             parent.content_span.slice(text).unwrap(),
-            "parent\n\t\u{25E6} child text\n"
+            "parent\n  child text\n"
         );
         assert_eq!(parent.children.len(), 1);
         assert_eq!(parent.children[0].kind, BlockKind::Outliner);
@@ -532,7 +478,7 @@ mod tests {
             blocks.iter().map(|block| block.kind).collect::<Vec<_>>(),
             vec![
                 BlockKind::Outliner,
-                BlockKind::Plaintext(PlaintextKind::Implicit),
+                BlockKind::Plaintext,
                 BlockKind::Outliner,
             ]
         );
@@ -562,22 +508,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_plaintext_block_can_continue_onto_an_indented_next_line() {
-        let text = "\u{25E6} first line\n  second line\n";
-        let blocks = parse_blocks(text).unwrap();
-
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(
-            blocks[0].kind,
-            BlockKind::Plaintext(PlaintextKind::Explicit)
-        );
-        assert_eq!(
-            blocks[0].content_span.slice(text).unwrap(),
-            "first line\n  second line\n"
-        );
-    }
-
-    #[test]
     fn less_indented_text_becomes_a_separate_plaintext_block() {
         let text = "\t- one\n text\n";
         let blocks = parse_blocks(text).unwrap();
@@ -586,21 +516,18 @@ mod tests {
             blocks.iter().map(|block| block.kind).collect::<Vec<_>>(),
             vec![
                 BlockKind::Outliner,
-                BlockKind::Plaintext(PlaintextKind::Implicit),
+                BlockKind::Plaintext,
             ]
         );
     }
 
     #[test]
     fn fenced_code_is_opaque_for_block_start_detection() {
-        let text = "\u{25E6} code\n  ```rust\n  - not a block\n  ```\n- next\n";
+        let text = "- code\n  ```rust\n  - not a block\n  ```\n- next\n";
         let blocks = parse_blocks(text).unwrap();
 
         assert_eq!(blocks.len(), 2);
-        assert_eq!(
-            blocks[0].kind,
-            BlockKind::Plaintext(PlaintextKind::Explicit)
-        );
+        assert_eq!(blocks[0].kind, BlockKind::Outliner);
         assert!(blocks[0].children.is_empty());
         assert_eq!(blocks[1].kind, BlockKind::Outliner);
     }
@@ -632,10 +559,7 @@ mod tests {
             blocks[0].children[0].content_span.slice(text).unwrap(),
             "child\n"
         );
-        assert_eq!(
-            blocks[1].kind,
-            BlockKind::Plaintext(PlaintextKind::Implicit)
-        );
+        assert_eq!(blocks[1].kind, BlockKind::Plaintext);
         assert_eq!(
             blocks[1].content_span.slice(text).unwrap(),
             "  later text\n"
@@ -644,25 +568,11 @@ mod tests {
 
     #[test]
     fn spans_remain_valid_for_utf8_content() {
-        let text = "\u{25E6} 챕터\n";
+        let text = "챕터\n";
         let blocks = parse_blocks(text).unwrap();
 
         let content = blocks[0].content_span.slice(text).unwrap();
         assert_eq!(content, "챕터\n");
-    }
-
-    #[test]
-    fn explicit_plaintext_blocks_are_root_only() {
-        let text = "- parent\n\t\u{25E6} child text\n";
-        let blocks = parse_blocks(text).unwrap();
-
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].kind, BlockKind::Outliner);
-        assert!(blocks[0].children.is_empty());
-        assert_eq!(
-            blocks[0].content_span.slice(text).unwrap(),
-            "parent\n\t\u{25E6} child text\n"
-        );
     }
 
     #[test]

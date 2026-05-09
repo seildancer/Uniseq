@@ -56,57 +56,35 @@ blocks. Blocks have no durable identity.
 
 ## Summary
 
-Implement the parser around two backend block syntaxes, not one explicit syntax plus one implicit fallback:
+The parser recognizes one explicit block syntax:
 
-- outliner block: starts with -
-- plaintext block: starts with ◦
+- outliner block: a line starting with `- ` (optional leading tab indentation for nesting depth)
 
-The parser must also support a legacy/fallback plaintext shape for existing non-Uniseq markdown:
+Any content that does not start a new outliner block and cannot be absorbed as a continuation of an existing outliner block becomes a plaintext block. There is no separate explicit marker for plaintext — it is defined purely by what is not an outliner block.
 
-- a contiguous non-list region without ◦ is still parsed as a plaintext block
-- but it is treated as a compatibility parse result, so later edits can rewrite it into explicit ◦ syntax
+## Implementation
 
-This keeps the backend syntax aligned with the frontend model while still opening arbitrary markdown files safely.
+- Public entrypoint: `parse_blocks(text: &str) -> Result<Vec<Block>, CoreError>`.
+- `BlockKind` has two variants: `Outliner` and `Plaintext`.
+- `PlaintextKind` (Explicit/Implicit) does not exist; the distinction was removed as unnecessary.
+- Parse two source cases:
+    - outliner block: line starting with `- ` (tabs before `-` set indent level)
+    - plaintext block: any line that does not start an outliner block and is not absorbed as a continuation of an existing block
+- Use visual indentation width for structure (TAB_WIDTH = 4), preserving exact source bytes and spans.
+- Continuation for outliner blocks: following non-marker lines belong to the block when their indentation reaches at least `indent_width + 2` (the content column after `- `), and the block has no children yet.
+- Plaintext blocks are always root-level — `continue_existing_block` empties the stack before starting one, so they can never be children.
+- Outliner blocks may have children (deeper-indented outliner blocks nested inside them).
+- `block_span`: full source range owned by the block, including child blocks.
+- `content_span`: the block’s own textual region only, excluding child block source ranges. For outliner blocks this starts after `- `; for plaintext blocks it starts at the line start.
+- Triple-backtick fenced code regions are opaque for block-start detection: `- ` inside a fence does not start a block.
+- Ref extraction is a separate post-pass over completed blocks; `outgoing_refs` is empty after structural parsing.
 
-## Implementation Changes
+## Assumptions
 
-- Add a parser module with a public entrypoint like parse_blocks(text: &str) -> Result<Vec<Block>, CoreError>.
-- Add a parser error type to CoreError, but keep parsing permissive for mixed existing markdown.
-- Extend Block to distinguish block kind explicitly.
-Add a small enum such as:
-    - BlockKind::Outliner
-    - BlockKind::Plaintext
-- Add a second parser-level flag on plaintext blocks to distinguish:
-    - explicit ◦ plaintext blocks from native Uniseq syntax
-    - implicit plaintext blocks parsed from legacy/non-Uniseq markdown
-    This can be a field on Block or a sub-variant, but it should be explicit so later edit/rewrite logic can converge implicit plaintext into ◦.
-- Parse three source cases:
-    - explicit outliner block: marker -
-    - explicit plaintext block: marker ◦
-    - implicit plaintext compatibility block: contiguous non--/non-◦ region not attached to a previous block
-- Use visual indentation width for structure, accepting mixed tabs/spaces in existing files while preserving exact source bytes and spans.
-- Define continuation for both explicit block types:
-    - after - item, following non-marker lines belong to that block when their indentation reaches at least the content column after -
-    - after ◦ text, following non-marker lines belong to that block when their indentation reaches at least the content column after ◦
-- If a contiguous text region does not begin with ◦, parse it as an implicit plaintext block with multiline ownership rules analogous to explicit ◦ blocks.
-- Define child nesting from greater indentation width on later - or ◦ marker lines.
-Both block kinds may have children.
-- Define block_span as the full source range owned by the block, including child blocks.
-- Define content_span as the block’s own textual region only, excluding child block source ranges.
-For - and ◦ blocks, this starts after the marker and following space.
-For implicit plaintext blocks, this covers the owned text region directly.
-- Treat triple-backtick fenced code regions as opaque for block-start detection.
-- or ◦ inside a fence must not start blocks.
-- Do not extract refs in this step; outgoing_refs remains empty.
-
-## Assumptions And Defaults
-
-- ◦ is real backend syntax for explicit plaintext blocks, not just a frontend rendering detail.
-- Legacy non-Uniseq markdown without ◦ is supported by parsing it into implicit plaintext blocks for compatibility.
-- Later edit/write paths should be able to converge implicit plaintext blocks into explicit ◦ syntax, but that rewrite behavior is out of scope for this parser step.
-- Both - and ◦ blocks are first-class structural blocks in the tree.
-- Fenced code handling is limited to triple backticks in v1.
-- Ref extraction is the next step after block structure is stable.
+- Plaintext blocks are content before, after, or between outliner blocks — no marker required or supported.
+- Only outliner blocks may be nested; plaintext blocks are always at the root level.
+- Fenced code handling is limited to triple backticks.
+- Ref extraction runs after block structure is stable.
 
 
 # References And Indices Plan

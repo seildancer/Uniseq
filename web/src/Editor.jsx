@@ -28,27 +28,8 @@ function measureIndent(text, i, len) {
 function consumeContinuation(text, i, len, contentColumn) {
   while (i < len) {
     const { width: indentWidth, end: j } = measureIndent(text, i, len);
-
     if (j < len && text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
-    if (indentWidth === 0 && j < len && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
-
-    if (contentColumn !== undefined && indentWidth < contentColumn) break;
-
-    while (i < len && text[i] !== "\n") i++;
-    if (i < len) i++;
-  }
-  return i;
-}
-
-function consumeOutlinerContinuation(text, i, len, contentColumn) {
-  while (i < len) {
-    const { width: indentWidth, end: j } = measureIndent(text, i, len);
-
-    if (j < len && text[j] === "-" && j + 1 < len && text[j + 1] === " ") break;
-    if (indentWidth === 0 && j < len && text[j] === "◦" && j + 1 < len && text[j + 1] === " ") break;
-
     if (indentWidth < contentColumn) break;
-
     while (i < len && text[i] !== "\n") i++;
     if (i < len) i++;
   }
@@ -70,22 +51,14 @@ function parseBlocks(text) {
       i = contentStart;
       while (i < len && text[i] !== "\n") i++;
       if (i < len) i++;
-      i = consumeOutlinerContinuation(text, i, len, contentColumn);
-      blocks.push({ start: blockStart, end: i, depth: Math.floor(indentWidth / TAB_WIDTH), kind: "outliner", contentStart });
-    } else if (indentWidth === 0 && markerStart < len && text[markerStart] === "◦" && markerStart + 1 < len && text[markerStart + 1] === " ") {
-      const contentStart = markerStart + 2;
-      const contentColumn = indentWidth + 2;
-      i = contentStart;
-      while (i < len && text[i] !== "\n") i++;
-      if (i < len) i++;
       i = consumeContinuation(text, i, len, contentColumn);
-      blocks.push({ start: blockStart, end: i, depth: 0, kind: "explicit_plaintext", contentStart });
+      blocks.push({ start: blockStart, end: i, depth: Math.floor(indentWidth / TAB_WIDTH), kind: "outliner", contentStart });
     } else {
       i = blockStart;
       while (i < len && text[i] !== "\n") i++;
       if (i < len) i++;
       i = consumeContinuation(text, i, len, 0);
-      blocks.push({ start: blockStart, end: i, depth: 0, kind: "implicit_plaintext", contentStart: blockStart });
+      blocks.push({ start: blockStart, end: i, depth: 0, kind: "plaintext", contentStart: blockStart });
     }
   }
 
@@ -96,7 +69,6 @@ function parseBlocks(text) {
 
 function blockPrefix(depth, kind) {
   if (kind === "outliner") return "\t".repeat(depth) + "- ";
-  if (kind === "explicit_plaintext") return "◦ ";
   return "";
 }
 
@@ -294,7 +266,7 @@ export default function Editor({ pageId, blocks, workspace, page }) {
     } else if (e.key === "Enter" && isOutliner) {
       e.preventDefault();
       if (currentContent.trim() === "") {
-        const newText = spliceText(text, block.start, block.end, "◦ \n");
+        const newText = spliceText(text, block.start, block.end, "\n");
         setText(newText);
         textRef.current = newText;
         scheduleWrite(newText);
@@ -316,7 +288,7 @@ export default function Editor({ pageId, blocks, workspace, page }) {
       }
     } else if (e.key === "Backspace" && isOutliner && currentContent === "") {
       e.preventDefault();
-      const newText = spliceText(text, block.start, block.end, "◦ \n");
+      const newText = spliceText(text, block.start, block.end, "\n");
       setText(newText);
       textRef.current = newText;
       scheduleWrite(newText);

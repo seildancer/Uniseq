@@ -1,15 +1,9 @@
 use super::{FileFingerprint, PageId, SourceSpan};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaintextKind {
-    Explicit,
-    Implicit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
     Outliner,
-    Plaintext(PlaintextKind),
+    Plaintext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,20 +56,8 @@ impl Block {
         Self::leaf(BlockKind::Outliner, block_span, content_span)
     }
 
-    pub fn explicit_plaintext(block_span: SourceSpan, content_span: SourceSpan) -> Self {
-        Self::leaf(
-            BlockKind::Plaintext(PlaintextKind::Explicit),
-            block_span,
-            content_span,
-        )
-    }
-
-    pub fn implicit_plaintext(block_span: SourceSpan, content_span: SourceSpan) -> Self {
-        Self::leaf(
-            BlockKind::Plaintext(PlaintextKind::Implicit),
-            block_span,
-            content_span,
-        )
+    pub fn plaintext(block_span: SourceSpan, content_span: SourceSpan) -> Self {
+        Self::leaf(BlockKind::Plaintext, block_span, content_span)
     }
 
     pub fn walk(&self) -> BlockWalk<'_> {
@@ -174,13 +156,8 @@ mod tests {
     }
 
     #[test]
-    fn distinguishes_explicit_and_implicit_plaintext_blocks() {
-        let explicit =
-            Block::explicit_plaintext(SourceSpan::unchecked(0, 6), SourceSpan::unchecked(3, 6));
-        let implicit =
-            Block::implicit_plaintext(SourceSpan::unchecked(0, 4), SourceSpan::unchecked(0, 4));
-
-        assert_eq!(explicit.kind, BlockKind::Plaintext(PlaintextKind::Explicit));
-        assert_eq!(implicit.kind, BlockKind::Plaintext(PlaintextKind::Implicit));
+    fn plaintext_block_has_correct_kind() {
+        let block = Block::plaintext(SourceSpan::unchecked(0, 4), SourceSpan::unchecked(0, 4));
+        assert_eq!(block.kind, BlockKind::Plaintext);
     }
 }

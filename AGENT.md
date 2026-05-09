@@ -18,7 +18,9 @@
 - Stream pages live in top-level stream folders such as `journals/` or `diary/`, with files named `yyyy_mm_dd.md`.
 - `assets/` is reserved for binaries such as images, PDFs, and attachments.
 - `uniseq/` is reserved for persisted app metadata, caches, and config.
-- Page bodies are modeled into blocks.
+- Page bodies are modeled into blocks. Block kinds:
+  - **Outliner**: a line starting with `- ` (optional leading tabs set nesting depth)
+  - **Plaintext**: any content before, after, or between outliner blocks — no explicit marker
 - All references are `block -> page`.
 - Supported page reference syntax is `[[Page]]` and `#Page`, and both resolve to page-backed pages only.
 - Stream pages are file-backed pages for discovery, parsing, reads, and controlled create/delete operations, but they are not targetable through markdown ref syntax.

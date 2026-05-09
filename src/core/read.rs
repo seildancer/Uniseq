@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use super::{
-    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, PlaintextKind,
-    SourceSpan, WorkspaceCache,
+    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan,
+    WorkspaceCache,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,8 +60,7 @@ pub struct OutgoingPageRefSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockSnapshotKind {
     Outliner,
-    ExplicitPlaintext,
-    ImplicitPlaintext,
+    Plaintext,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -234,8 +233,7 @@ fn block_snapshot(
 fn block_snapshot_kind(kind: BlockKind) -> BlockSnapshotKind {
     match kind {
         BlockKind::Outliner => BlockSnapshotKind::Outliner,
-        BlockKind::Plaintext(PlaintextKind::Explicit) => BlockSnapshotKind::ExplicitPlaintext,
-        BlockKind::Plaintext(PlaintextKind::Implicit) => BlockSnapshotKind::ImplicitPlaintext,
+        BlockKind::Plaintext => BlockSnapshotKind::Plaintext,
     }
 }
 
