@@ -8,8 +8,18 @@ const WRITE_DEBOUNCE_MS = 300;
 
 function blocksToText(blocks) {
   return blocks
-    .map((b) => (b.kind === "outliner" ? "\t".repeat(b.depth) + "- " : "") + b.content + "\n")
+    .map((b) => {
+      const content = b.kind === "outliner"
+        ? b.content.replace(/\n/g, '\n  ')
+        : b.content;
+      return (b.kind === "outliner" ? "\t".repeat(b.depth) + "- " : "") + content + "\n";
+    })
     .join("");
+}
+
+function normalizeBlockContent(block) {
+  if (block.kind !== "outliner") return block.content;
+  return block.content.replace(/\n[ \t]+/g, '\n');
 }
 
 function adjustHeight(el) {
@@ -241,7 +251,7 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
                 setAutocomplete(prev => ({ ...prev, activeIdx: Math.max(prev.activeIdx - 1, 0) }));
                 return;
               }
-              if (e.key === 'Enter' || e.key === 'Tab') {
+              if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
                 e.preventDefault();
                 const isCreateItem = autocomplete.activeIdx === autocomplete.suggestions.length;
                 applyAutocomplete(isCreateItem ? null : autocomplete.suggestions[autocomplete.activeIdx]);
@@ -306,12 +316,16 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
 // ── Editor ─────────────────────────────────────────────────────────────────
 
 export default function Editor({ pageId, blocks, pages, onNavigate }) {
-  const [localBlocks, setLocalBlocks] = useState(blocks);
+  const [localBlocks, setLocalBlocks] = useState(() =>
+    blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) })),
+  );
   const [focusedIdx, setFocusedIdx] = useState(null);
   const debounceRef = useRef(null);
   const pendingCursorRef = useRef(null);
   const pendingClickRef = useRef(null);
-  const localBlocksRef = useRef(blocks);
+  const localBlocksRef = useRef(
+    blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) })),
+  );
 
   useEffect(() => {
     localBlocksRef.current = localBlocks;
@@ -320,8 +334,9 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
   // Reset when the incoming block array changes (page switch or external file change).
   useEffect(() => {
     clearTimeout(debounceRef.current);
-    setLocalBlocks(blocks);
-    localBlocksRef.current = blocks;
+    const normalized = blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) }));
+    setLocalBlocks(normalized);
+    localBlocksRef.current = normalized;
     setFocusedIdx(null);
   }, [blocks]); // eslint-disable-line react-hooks/exhaustive-deps
 
