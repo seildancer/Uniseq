@@ -410,20 +410,20 @@ h2 {
 }
 
 .workspace-sidebar {
-  overflow-y: auto;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr auto;
   gap: 0;
   border-right: 1px solid var(--line);
   background: var(--panel);
+  overflow: hidden;
 }
 
-.workspace-sidebar::-webkit-scrollbar,
+.sidebar-section--pages::-webkit-scrollbar,
 .editor-panel::-webkit-scrollbar {
   width: 4px;
 }
 
-.workspace-sidebar::-webkit-scrollbar-track {
+.sidebar-section--pages::-webkit-scrollbar-track {
   background: var(--panel);
 }
 
@@ -431,13 +431,13 @@ h2 {
   background: var(--bg);
 }
 
-.workspace-sidebar::-webkit-scrollbar-thumb,
+.sidebar-section--pages::-webkit-scrollbar-thumb,
 .editor-panel::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;
 }
 
-[data-theme="dark"] .workspace-sidebar::-webkit-scrollbar-thumb,
+[data-theme="dark"] .sidebar-section--pages::-webkit-scrollbar-thumb,
 [data-theme="dark"] .editor-panel::-webkit-scrollbar-thumb {
   background: #3f4b4e;
 }
@@ -460,6 +460,11 @@ h2 {
   display: grid;
   gap: 14px;
   align-content: start;
+}
+
+.sidebar-section--pages {
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .stream-list,

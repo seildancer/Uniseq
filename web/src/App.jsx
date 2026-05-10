@@ -674,7 +674,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="sidebar-section">
+              <div className="sidebar-section sidebar-section--pages">
                 <div className="section-heading">
                   <h2>Pages</h2>
                 </div>
