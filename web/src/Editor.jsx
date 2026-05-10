@@ -100,6 +100,12 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
     }
   }, [isFocused]);
 
+  useEffect(() => {
+    if (isFocused && textareaRef.current) {
+      adjustHeight(textareaRef.current);
+    }
+  });
+
   // Apply pending cursor after content changes (e.g., "- " → outliner conversion)
   useEffect(() => {
     if (isFocused && textareaRef.current && pendingCursor.current !== null) {
