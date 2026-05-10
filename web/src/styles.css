@@ -505,8 +505,9 @@ h2 {
   padding-left: calc(var(--page-tree-depth, 0) * 18px);
   border-radius: 8px;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
+  position: relative;
 }
 
 .page-tree-row:hover {
@@ -568,6 +569,74 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.94rem;
+}
+
+.page-tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  visibility: hidden;
+}
+
+.page-tree-row:hover .page-tree-actions,
+.page-tree-row:has(.page-tree-dropdown) .page-tree-actions {
+  visibility: visible;
+}
+
+.page-tree-action-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.page-tree-action-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.page-tree-menu-wrap {
+  position: relative;
+}
+
+.page-tree-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 2px);
+  z-index: 100;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 4px;
+  min-width: 120px;
+}
+
+.page-tree-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.page-tree-dropdown-item:hover {
+  background: var(--hover);
 }
 
 .sidebar-footer {

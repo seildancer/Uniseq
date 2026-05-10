@@ -113,6 +113,8 @@ function PageTree({
   selectedPageId,
   onSelectPage,
   onTogglePageTree,
+  pageMenuOpenId,
+  onPageMenuToggle,
 }) {
   return (
     <ul className={depth === 0 ? "page-tree" : "page-tree page-tree--nested"}>
@@ -120,6 +122,7 @@ function PageTree({
         const hasChildren = children.length > 0;
         const isExpanded = Boolean(expandedPageIds[page.page_id]);
         const isActive = page.page_id === selectedPageId;
+        const isMenuOpen = pageMenuOpenId === page.page_id;
 
         return (
           <li key={page.page_id} className="page-tree-node">
@@ -159,6 +162,33 @@ function PageTree({
               >
                 <span className="page-tree-title">{pageLabel(page)}</span>
               </button>
+
+              <div className="page-tree-actions">
+                <div className="page-tree-menu-wrap">
+                  <button
+                    className="page-tree-action-btn"
+                    type="button"
+                    aria-label="More options"
+                    aria-expanded={isMenuOpen}
+                    onClick={() => onPageMenuToggle(page.page_id)}
+                  >
+                    ⋯
+                  </button>
+                  {isMenuOpen && (
+                    <div className="page-tree-dropdown">
+                      <button className="page-tree-dropdown-item" type="button">Move</button>
+                      <button className="page-tree-dropdown-item" type="button">Delete</button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="page-tree-action-btn"
+                  type="button"
+                  aria-label="Add subpage"
+                >
+                  +
+                </button>
+              </div>
             </div>
 
             {hasChildren && isExpanded ? (
@@ -169,6 +199,8 @@ function PageTree({
                 selectedPageId={selectedPageId}
                 onSelectPage={onSelectPage}
                 onTogglePageTree={onTogglePageTree}
+                pageMenuOpenId={pageMenuOpenId}
+                onPageMenuToggle={onPageMenuToggle}
               />
             ) : null}
           </li>
@@ -197,6 +229,7 @@ export default function App() {
   const [expandedPageIds, setExpandedPageIds] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const [pageMenuOpenId, setPageMenuOpenId] = useState(null);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages);
@@ -382,6 +415,18 @@ export default function App() {
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }
   }, [menuOpen]);
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (!event.target.closest(".page-tree-menu-wrap")) {
+        setPageMenuOpenId(null);
+      }
+    }
+    if (pageMenuOpenId !== null) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [pageMenuOpenId]);
 
   useEffect(() => {
     isBootEffectMountedRef.current = true;
@@ -643,6 +688,8 @@ export default function App() {
                     selectedPageId={selectedPageId}
                     onSelectPage={handleSelectPage}
                     onTogglePageTree={handleTogglePageTree}
+                    pageMenuOpenId={pageMenuOpenId}
+                    onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
                   />
                 )}
               </div>
