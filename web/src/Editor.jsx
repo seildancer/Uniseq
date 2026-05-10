@@ -17,11 +17,46 @@ function adjustHeight(el) {
   el.style.height = el.scrollHeight + "px";
 }
 
+function pageLeafName(pageId) {
+  const segments = pageId.split('/');
+  return segments[segments.length - 1] ?? pageId;
+}
+
+function preprocessTagsForRender(content) {
+  return content
+    .replace(/\[\[([^\]]+)\]\]/g, '[$1](PAGE:$1)')
+    .replace(/#([a-zA-Z0-9_/.-]+)/g, '[#$1](PAGE:$1)');
+}
+
+function detectTagTrigger(text, cursorPos) {
+  const segment = text.slice(Math.max(0, cursorPos - 50), cursorPos);
+  const bracketMatch = segment.match(/\[\[([^\]]*)$/);
+  if (bracketMatch) {
+    return {
+      kind: 'bracket',
+      query: bracketMatch[1],
+      triggerStart: Math.max(0, cursorPos - 50) + bracketMatch.index,
+    };
+  }
+  const hashMatch = segment.match(/#([a-zA-Z0-9_/.-]*)$/);
+  if (hashMatch) {
+    return {
+      kind: 'hash',
+      query: hashMatch[1],
+      triggerStart: Math.max(0, cursorPos - 50) + hashMatch.index,
+    };
+  }
+  return null;
+}
+
 // ── BlockRow ───────────────────────────────────────────────────────────────
 
-function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown }) {
+function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, pages, onNavigate }) {
   const textareaRef = useRef(null);
   const isOutliner = block.kind === "outliner";
+
+  const [autocomplete, setAutocomplete] = useState(null);
+  const activeItemRef = useRef(null);
 
   useEffect(() => {
     if (isFocused && textareaRef.current) {
@@ -32,6 +67,52 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown }
       adjustHeight(el);
     }
   }, [isFocused]);
+
+  useEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [autocomplete?.activeIdx]);
+
+  function updateAutocomplete(value, cursorPos) {
+    const trigger = detectTagTrigger(value, cursorPos);
+    if (!trigger) { setAutocomplete(null); return; }
+    const q = trigger.query.toLowerCase();
+    const suggestions = pages
+      .filter(p => {
+        const id = p.page_id.toLowerCase();
+        const title = (p.title || '').toLowerCase();
+        const leaf = pageLeafName(p.page_id).toLowerCase();
+        return id.includes(q) || title.includes(q) || leaf.includes(q);
+      })
+      .slice(0, 8);
+    if (!suggestions.length) { setAutocomplete(null); return; }
+    setAutocomplete(prev => ({
+      trigger,
+      suggestions,
+      activeIdx: (prev?.trigger.triggerStart === trigger.triggerStart) ? Math.min(prev.activeIdx, suggestions.length - 1) : 0,
+    }));
+  }
+
+  function applyAutocomplete(page) {
+    const { trigger } = autocomplete;
+    const cursorPos = textareaRef.current?.selectionStart ?? block.content.length;
+    const replacement = trigger.kind === 'bracket'
+      ? `[[${pageLeafName(page.page_id)}]]`
+      : `#${pageLeafName(page.page_id)}`;
+    const newContent =
+      block.content.slice(0, trigger.triggerStart) +
+      replacement +
+      block.content.slice(cursorPos);
+    onContentChange(idx, newContent);
+    setAutocomplete(null);
+    const newCursor = trigger.triggerStart + replacement.length;
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        textareaRef.current.setSelectionRange(newCursor, newCursor);
+        textareaRef.current.focus();
+        adjustHeight(textareaRef.current);
+      }
+    });
+  }
 
   const rowClass = [
     "block-row",
@@ -54,7 +135,33 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown }
           </span>
         )}
         <div className="block-content">
-          <ReactMarkdown>{block.content || " "}</ReactMarkdown>
+          <ReactMarkdown
+            urlTransform={(url) => url}
+            components={{
+              a: ({ href, children }) => {
+                if (href?.startsWith('PAGE:')) {
+                  const name = href.slice(5);
+                  return (
+                    <span
+                      className="tag-link"
+                      onClick={(e) => {
+                        e.stopPropagation(); // prevent block-row onClick from firing
+                        const target = pages.find(
+                          p => p.page_id === name || p.title === name || pageLeafName(p.page_id) === name
+                        );
+                        if (target) onNavigate(target.page_id);
+                      }}
+                    >
+                      {children}
+                    </span>
+                  );
+                }
+                return <a href={href}>{children}</a>;
+              }
+            }}
+          >
+            {preprocessTagsForRender(block.content || ' ')}
+          </ReactMarkdown>
         </div>
       </div>
     );
@@ -67,24 +174,67 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown }
           •
         </span>
       )}
-      <textarea
-        ref={textareaRef}
-        className="block-textarea"
-        value={block.content}
-        onChange={(e) => {
-          onContentChange(idx, e.target.value);
-          adjustHeight(e.target);
-        }}
-        onKeyDown={(e) => onKeyDown(e, idx)}
-        onBlur={() => onFocus(null)}
-      />
+      <div className="block-textarea-wrap">
+        <textarea
+          ref={textareaRef}
+          className="block-textarea"
+          value={block.content}
+          onChange={(e) => {
+            onContentChange(idx, e.target.value);
+            adjustHeight(e.target);
+            updateAutocomplete(e.target.value, e.target.selectionStart);
+          }}
+          onKeyDown={(e) => {
+            if (autocomplete) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                setAutocomplete(prev => ({ ...prev, activeIdx: Math.min(prev.activeIdx + 1, prev.suggestions.length - 1) }));
+                return;
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                setAutocomplete(prev => ({ ...prev, activeIdx: Math.max(prev.activeIdx - 1, 0) }));
+                return;
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault();
+                applyAutocomplete(autocomplete.suggestions[autocomplete.activeIdx]);
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setAutocomplete(null);
+                return;
+              }
+            }
+            onKeyDown(e, idx);
+          }}
+          onBlur={() => { setAutocomplete(null); onFocus(null); }}
+        />
+        {autocomplete && (
+          <ul className="autocomplete-dropdown" role="listbox">
+            {autocomplete.suggestions.map((page, i) => (
+              <li
+                key={page.page_id}
+                ref={i === autocomplete.activeIdx ? activeItemRef : null}
+                className={`autocomplete-item${i === autocomplete.activeIdx ? ' autocomplete-item--active' : ''}`}
+                role="option"
+                onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(page); }}
+              >
+                <span className="autocomplete-item-title">{page.title || pageLeafName(page.page_id)}</span>
+                <span className="autocomplete-item-id">{pageLeafName(page.page_id)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
 
 // ── Editor ─────────────────────────────────────────────────────────────────
 
-export default function Editor({ pageId, blocks }) {
+export default function Editor({ pageId, blocks, pages, onNavigate }) {
   const [localBlocks, setLocalBlocks] = useState(blocks);
   const [focusedIdx, setFocusedIdx] = useState(null);
   const debounceRef = useRef(null);
@@ -217,6 +367,8 @@ export default function Editor({ pageId, blocks }) {
           onFocus={handleFocus}
           onContentChange={handleContentChange}
           onKeyDown={handleKeyDown}
+          pages={pages}
+          onNavigate={onNavigate}
         />
       ))}
     </>

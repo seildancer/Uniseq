@@ -637,6 +637,8 @@ export default function App() {
                     pageId={loadedPageId}
                     blocks={selectedPageBlocks}
                     key={loadedPageId}
+                    pages={regularPages}
+                    onNavigate={handleSelectPage}
                   />
                 </>
               )}
