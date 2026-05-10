@@ -51,7 +51,7 @@ function detectTagTrigger(text, cursorPos) {
 
 // ── BlockRow ───────────────────────────────────────────────────────────────
 
-function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, pages, onNavigate }) {
+function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, pages, onNavigate, pendingCursor, pendingClick }) {
   const textareaRef = useRef(null);
   const isOutliner = block.kind === "outliner";
 
@@ -62,11 +62,42 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
     if (isFocused && textareaRef.current) {
       const el = textareaRef.current;
       el.focus();
-      const len = el.value.length;
-      el.setSelectionRange(len, len);
+      if (pendingCursor.current !== null) {
+        const pos = pendingCursor.current;
+        pendingCursor.current = null;
+        el.setSelectionRange(pos, pos);
+      } else if (pendingClick.current !== null) {
+        const click = pendingClick.current;
+        pendingClick.current = null;
+        requestAnimationFrame(() => {
+          if (!textareaRef.current) return;
+          let charOffset = null;
+          if (document.caretPositionFromPoint) {
+            const caret = document.caretPositionFromPoint(click.x, click.y);
+            if (caret) charOffset = caret.offset;
+          } else if (document.caretRangeFromPoint) {
+            const range = document.caretRangeFromPoint(click.x, click.y);
+            if (range) charOffset = range.startOffset;
+          }
+          const len = textareaRef.current.value.length;
+          const pos = charOffset !== null ? Math.min(charOffset, len) : len;
+          textareaRef.current.setSelectionRange(pos, pos);
+        });
+      } else {
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
       adjustHeight(el);
     }
   }, [isFocused]);
+
+  // Apply pending cursor after content changes (e.g., "- " → outliner conversion)
+  useEffect(() => {
+    if (isFocused && textareaRef.current && pendingCursor.current !== null) {
+      const pos = pendingCursor.current;
+      pendingCursor.current = null;
+      textareaRef.current.setSelectionRange(pos, pos);
+    }
+  });
 
   useEffect(() => {
     activeItemRef.current?.scrollIntoView({ block: 'nearest' });
@@ -131,7 +162,7 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
       <div
         className={rowClass}
         style={{ "--block-depth": block.depth }}
-        onClick={() => onFocus(idx)}
+        onClick={(e) => onFocus(idx, e.clientX, e.clientY)}
       >
         {isOutliner && (
           <span className="block-bullet" aria-hidden="true">
@@ -222,6 +253,21 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
                 return;
               }
             }
+            if (e.key === 'Tab' && !isOutliner) {
+              e.preventDefault();
+              const el = textareaRef.current;
+              const start = el.selectionStart;
+              const end = el.selectionEnd;
+              const newContent = block.content.slice(0, start) + '\t' + block.content.slice(end);
+              onContentChange(idx, newContent);
+              requestAnimationFrame(() => {
+                if (textareaRef.current) {
+                  textareaRef.current.setSelectionRange(start + 1, start + 1);
+                  adjustHeight(textareaRef.current);
+                }
+              });
+              return;
+            }
             onKeyDown(e, idx);
           }}
           onBlur={() => { setAutocomplete(null); onFocus(null); }}
@@ -263,6 +309,8 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
   const [localBlocks, setLocalBlocks] = useState(blocks);
   const [focusedIdx, setFocusedIdx] = useState(null);
   const debounceRef = useRef(null);
+  const pendingCursorRef = useRef(null);
+  const pendingClickRef = useRef(null);
   const localBlocksRef = useRef(blocks);
 
   useEffect(() => {
@@ -308,14 +356,29 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
     }).catch(() => {});
   }
 
-  function handleFocus(idx) {
+  function handleFocus(idx, clickX, clickY) {
     if (idx === null && focusedIdx !== null) {
       flushWrite(localBlocksRef.current);
+    }
+    if (idx !== null && clickX != null) {
+      pendingClickRef.current = { x: clickX, y: clickY };
     }
     setFocusedIdx(idx);
   }
 
   function handleContentChange(idx, newContent) {
+    const block = localBlocks[idx];
+    if (block.kind === "plaintext" && newContent.startsWith("- ")) {
+      const afterPrefix = newContent.slice(2);
+      const newBlocks = localBlocks.map((b, i) =>
+        i === idx ? { kind: "outliner", depth: 0, content: afterPrefix } : b,
+      );
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      pendingCursorRef.current = afterPrefix.length;
+      scheduleWrite(newBlocks);
+      return;
+    }
     const newBlocks = localBlocks.map((b, i) =>
       i === idx ? { ...b, content: newContent } : b,
     );
@@ -365,6 +428,7 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
           { kind: block.kind, depth: block.depth, content: after },
           ...localBlocks.slice(idx + 1),
         ];
+        pendingCursorRef.current = 0;
         setFocusedIdx(idx + 1);
       }
       setLocalBlocks(newBlocks);
@@ -378,7 +442,72 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
       setLocalBlocks(newBlocks);
       localBlocksRef.current = newBlocks;
       scheduleWrite(newBlocks);
+    } else if (e.key === "Backspace" && !isOutliner && block.content === "" && idx > 0) {
+      e.preventDefault();
+      const newBlocks = localBlocks.filter((_, i) => i !== idx);
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      pendingCursorRef.current = localBlocks[idx - 1].content.length;
+      setFocusedIdx(idx - 1);
+      scheduleWrite(newBlocks);
+    } else if (e.key === "Backspace" && e.target.selectionStart === 0 && e.target.selectionEnd === 0 && idx > 0) {
+      e.preventDefault();
+      const prev = localBlocks[idx - 1];
+      const newBlocks = [
+        ...localBlocks.slice(0, idx - 1),
+        { ...prev, content: prev.content + block.content },
+        ...localBlocks.slice(idx + 1),
+      ];
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      pendingCursorRef.current = prev.content.length;
+      setFocusedIdx(idx - 1);
+      scheduleWrite(newBlocks);
+    } else if (e.key === "ArrowUp") {
+      const el = e.target;
+      const isFirstLine = !el.value.slice(0, el.selectionStart).includes('\n');
+      if (isFirstLine && idx > 0) {
+        e.preventDefault();
+        const col = el.selectionStart;
+        const prevContent = localBlocks[idx - 1].content;
+        const prevLastNewline = prevContent.lastIndexOf('\n');
+        const prevLastLineStart = prevLastNewline + 1;
+        pendingCursorRef.current = Math.min(prevLastLineStart + col, prevContent.length);
+        setFocusedIdx(idx - 1);
+      }
+    } else if (e.key === "ArrowDown") {
+      const el = e.target;
+      const isLastLine = !el.value.slice(el.selectionStart).includes('\n');
+      if (isLastLine && idx < localBlocks.length - 1) {
+        e.preventDefault();
+        const lastNewlineBefore = el.value.lastIndexOf('\n', el.selectionStart - 1);
+        const col = el.selectionStart - (lastNewlineBefore + 1);
+        const nextContent = localBlocks[idx + 1].content;
+        const nextFirstNewline = nextContent.indexOf('\n');
+        const nextFirstLineEnd = nextFirstNewline === -1 ? nextContent.length : nextFirstNewline;
+        pendingCursorRef.current = Math.min(col, nextFirstLineEnd);
+        setFocusedIdx(idx + 1);
+      }
     }
+  }
+
+  if (localBlocks.length === 0) {
+    return (
+      <div
+        className="block-row block-row--plaintext"
+        style={{ opacity: 0.4, cursor: 'text' }}
+        onClick={() => {
+          const newBlocks = [{ kind: "plaintext", depth: 0, content: "" }];
+          setLocalBlocks(newBlocks);
+          localBlocksRef.current = newBlocks;
+          pendingCursorRef.current = 0;
+          setFocusedIdx(0);
+          scheduleWrite(newBlocks);
+        }}
+      >
+        <div className="block-content">Start writing…</div>
+      </div>
+    );
   }
 
   return (
@@ -394,6 +523,8 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
           onKeyDown={handleKeyDown}
           pages={pages}
           onNavigate={onNavigate}
+          pendingCursor={pendingCursorRef}
+          pendingClick={pendingClickRef}
         />
       ))}
     </>
