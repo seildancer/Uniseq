@@ -182,6 +182,7 @@ export default function App() {
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
 
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
   const [mode, setMode] = useState("booting");
   const [workspace, setWorkspace] = useState(null);
   const [pages, setPages] = useState([]);
@@ -364,6 +365,11 @@ export default function App() {
   }
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
+
+  useEffect(() => {
     isBootEffectMountedRef.current = true;
 
     async function boot() {
@@ -521,6 +527,14 @@ export default function App() {
             </div>
 
             <div className="window-controls" data-no-window-drag="true">
+              <button
+                className="window-control-button window-control-button--theme"
+                type="button"
+                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+                onClick={() => setDarkMode((d) => !d)}
+              >
+                {darkMode ? "☀" : "◑"}
+              </button>
               <button
                 className="window-control-button"
                 type="button"
