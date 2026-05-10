@@ -18,8 +18,7 @@ function adjustHeight(el) {
 }
 
 function pageLeafName(pageId) {
-  const segments = pageId.split('/');
-  return segments[segments.length - 1] ?? pageId;
+  return pageId.replace(/^(?:pages|stream):/, '');
 }
 
 function preprocessTagsForRender(content) {
