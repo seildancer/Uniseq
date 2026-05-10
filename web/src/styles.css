@@ -686,6 +686,10 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.autocomplete-item--create .autocomplete-item-title {
+  color: var(--accent);
+  font-style: italic;
+}
 
 .editor-empty-prompt {
   padding: 12px 16px;

@@ -83,20 +83,24 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
         return id.includes(q) || title.includes(q) || leaf.includes(q);
       })
       .slice(0, 8);
-    if (!suggestions.length) { setAutocomplete(null); return; }
-    setAutocomplete(prev => ({
-      trigger,
-      suggestions,
-      activeIdx: (prev?.trigger.triggerStart === trigger.triggerStart) ? Math.min(prev.activeIdx, suggestions.length - 1) : 0,
-    }));
+    const createName = suggestions.length === 0 && trigger.query.length > 0 ? trigger.query : null;
+    if (!suggestions.length && !createName) { setAutocomplete(null); return; }
+    setAutocomplete(prev => {
+      const sameStart = prev?.trigger.triggerStart === trigger.triggerStart;
+      const maxIdx = suggestions.length - 1 + (createName ? 1 : 0);
+      const prevIdx = sameStart ? prev.activeIdx : 0;
+      return { trigger, suggestions, createName, activeIdx: Math.min(prevIdx, maxIdx) };
+    });
   }
 
   function applyAutocomplete(page) {
-    const { trigger } = autocomplete;
+    const { trigger, createName } = autocomplete;
+    const name = page ? pageLeafName(page.page_id) : createName;
+    if (!page && createName) {
+      invoke("create_page", { pageId: `pages:${createName}` }).catch(console.error);
+    }
     const cursorPos = textareaRef.current?.selectionStart ?? block.content.length;
-    const replacement = trigger.kind === 'bracket'
-      ? `[[${pageLeafName(page.page_id)}]]`
-      : `#${pageLeafName(page.page_id)}`;
+    const replacement = trigger.kind === 'bracket' ? `[[${name}]]` : `#${name}`;
     const newContent =
       block.content.slice(0, trigger.triggerStart) +
       replacement +
@@ -148,7 +152,14 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
                         const target = pages.find(
                           p => p.page_id === name || p.title === name || pageLeafName(p.page_id) === name
                         );
-                        if (target) onNavigate(target.page_id);
+                        if (target) {
+                          onNavigate(target.page_id);
+                        } else {
+                          const pageId = `pages:${name}`;
+                          invoke("create_page", { pageId })
+                            .then(() => onNavigate(pageId))
+                            .catch(console.error);
+                        }
                       }}
                     >
                       {children}
@@ -187,7 +198,10 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
             if (autocomplete) {
               if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                setAutocomplete(prev => ({ ...prev, activeIdx: Math.min(prev.activeIdx + 1, prev.suggestions.length - 1) }));
+                setAutocomplete(prev => {
+                  const maxIdx = prev.suggestions.length - 1 + (prev.createName ? 1 : 0);
+                  return { ...prev, activeIdx: Math.min(prev.activeIdx + 1, maxIdx) };
+                });
                 return;
               }
               if (e.key === 'ArrowUp') {
@@ -197,7 +211,8 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
               }
               if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault();
-                applyAutocomplete(autocomplete.suggestions[autocomplete.activeIdx]);
+                const isCreateItem = autocomplete.activeIdx === autocomplete.suggestions.length;
+                applyAutocomplete(isCreateItem ? null : autocomplete.suggestions[autocomplete.activeIdx]);
                 return;
               }
               if (e.key === 'Escape') {
@@ -224,6 +239,16 @@ function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, 
                 <span className="autocomplete-item-id">{pageLeafName(page.page_id)}</span>
               </li>
             ))}
+            {autocomplete.createName && (
+              <li
+                ref={autocomplete.activeIdx === autocomplete.suggestions.length ? activeItemRef : null}
+                className={`autocomplete-item autocomplete-item--create${autocomplete.activeIdx === autocomplete.suggestions.length ? ' autocomplete-item--active' : ''}`}
+                role="option"
+                onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(null); }}
+              >
+                <span className="autocomplete-item-title">+ Create "{autocomplete.createName}"</span>
+              </li>
+            )}
           </ul>
         )}
       </div>

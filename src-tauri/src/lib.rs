@@ -12,7 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
     CoreError, FileFingerprint, FlatBlockSnapshot, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
-    PageContentSnapshot, PageId, PageLocation, PageName, PageSummary, SourceSpan,
+    PageContentSnapshot, PageCreate, PageId, PageLocation, PageName, PageSummary, SourceSpan,
     WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession, create_workspace_root,
     prepare_workspace_root,
 };
@@ -215,6 +215,14 @@ impl WorkspaceController {
         self.session()?
             .write_and_reparse(&page_id, text)
             .map(PageContentDto::from)
+            .map_err(ErrorDto::from)
+    }
+
+    fn create_page(&self, page_id: String) -> CommandResult<()> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        self.session()?
+            .apply_page_create(PageCreate { page_id })
             .map_err(ErrorDto::from)
     }
 
@@ -648,6 +656,11 @@ fn write_page_content(
 }
 
 #[tauri::command]
+fn create_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()> {
+    state.controller.lock().unwrap().create_page(page_id)
+}
+
+#[tauri::command]
 fn page_incoming_refs(
     state: State<'_, AppState>,
     page_id: String,
@@ -699,6 +712,7 @@ pub fn run() {
             page_detail,
             page_content,
             write_page_content,
+            create_page,
             page_incoming_refs,
             page_outgoing_refs,
             drain_workspace_events,

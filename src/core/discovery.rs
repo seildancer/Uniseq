@@ -40,6 +40,10 @@ pub fn discover_workspace(root: impl AsRef<Path>) -> Result<WorkspaceDiscovery, 
     if !missing_parent_page_ids.is_empty() {
         materialize_parent_pages(root, &mut cache, missing_parent_page_ids.clone())?;
     }
+    let missing_ref_page_ids = missing_referenced_page_ids(&cache);
+    if !missing_ref_page_ids.is_empty() {
+        materialize_parent_pages(root, &mut cache, missing_ref_page_ids)?;
+    }
     let remaining_missing_parent_page_ids = cache.missing_parent_page_ids();
     println!(
         "[uniseq-backend] supported-root scan complete: {} supported markdown pages discovered",
@@ -88,6 +92,19 @@ where
     }
 
     Ok(created_or_loaded)
+}
+
+fn missing_referenced_page_ids(cache: &WorkspaceCache) -> Vec<PageId> {
+    let mut missing = std::collections::BTreeSet::new();
+    for page in cache.pages().values() {
+        for outgoing_ref in page.outgoing_refs() {
+            let target = &outgoing_ref.target_page_id;
+            if target.is_page_backed() && cache.page(target).is_none() {
+                missing.insert(target.clone());
+            }
+        }
+    }
+    missing.into_iter().collect()
 }
 
 #[cfg(test)]
