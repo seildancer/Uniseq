@@ -13,6 +13,7 @@ pub struct FlatBlockSnapshot {
 pub struct PageContentSnapshot {
     pub revision: FileFingerprint,
     pub blocks: Vec<FlatBlockSnapshot>,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +98,7 @@ impl<'a> WorkspaceReadApi<'a> {
         Ok(PageContentSnapshot {
             revision: page.fingerprint,
             blocks: flat_blocks(page)?,
+            text: page.text.clone(),
         })
     }
 

@@ -188,7 +188,7 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
-  const [selectedPageBlocks, setSelectedPageBlocks] = useState([]);
+  const [selectedPageText, setSelectedPageText] = useState("");
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -220,14 +220,14 @@ export default function App() {
 
   async function loadPageContent(pageId) {
     if (!pageId) {
-      setSelectedPageBlocks([]);
+      setSelectedPageText("");
       return;
     }
 
     const seq = ++loadPageContentSeqRef.current;
-    const { blocks } = await invoke("page_content", { pageId });
+    const { text } = await invoke("page_content", { pageId });
     if (seq === loadPageContentSeqRef.current) {
-      setSelectedPageBlocks(blocks);
+      setSelectedPageText(text);
       setLoadedPageId(pageId);
     }
   }
@@ -314,7 +314,7 @@ export default function App() {
     setPages([]);
     setStreamNames([]);
     setSelectedPageId("");
-    setSelectedPageBlocks([]);
+    setSelectedPageText("");
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -437,7 +437,7 @@ export default function App() {
 
     if (regularPages.length === 0) {
       setSelectedPageId("");
-      setSelectedPageBlocks([]);
+      setSelectedPageText("");
       return;
     }
 
@@ -475,7 +475,7 @@ export default function App() {
         } else if (event.type === "page_removed") {
           await loadWorkspaceLists().catch(() => {});
           if (event.page_id === loadedPageId) {
-            setSelectedPageBlocks([]);
+            setSelectedPageText("");
             setLoadedPageId(null);
             setSelectedPageId("");
           }
@@ -673,7 +673,7 @@ export default function App() {
                   <p className="body-copy">{loadedPage.workspace_path}</p>
                   <Editor
                     pageId={loadedPageId}
-                    blocks={selectedPageBlocks}
+                    text={selectedPageText}
                     key={loadedPageId}
                     pages={regularPages}
                     onNavigate={handleSelectPage}

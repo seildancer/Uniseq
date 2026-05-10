@@ -1,565 +1,373 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import ReactMarkdown from "react-markdown";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
+import { commonmark } from "@milkdown/preset-commonmark";
+import { history } from "@milkdown/plugin-history";
+import { listener, listenerCtx } from "@milkdown/plugin-listener";
+import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
+import { $prose, replaceAll } from "@milkdown/utils";
+import { Plugin, PluginKey } from "prosemirror-state";
+import { Decoration, DecorationSet } from "prosemirror-view";
 
 const WRITE_DEBOUNCE_MS = 300;
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-
-function blocksToText(blocks) {
-  return blocks
-    .map((b) => {
-      const content = b.kind === "outliner"
-        ? b.content.replace(/\n/g, '\n  ')
-        : b.content;
-      return (b.kind === "outliner" ? "\t".repeat(b.depth) + "- " : "") + content + "\n";
-    })
-    .join("");
-}
-
-function normalizeBlockContent(block) {
-  if (block.kind !== "outliner") return block.content;
-  return block.content.replace(/\n[ \t]+/g, '\n');
-}
-
-function adjustHeight(el) {
-  el.style.height = "auto";
-  el.style.height = el.scrollHeight + "px";
-}
-
 function pageLeafName(pageId) {
-  return pageId.replace(/^(?:pages|stream):/, '');
+  return pageId.replace(/^(?:pages|stream):/, "");
 }
 
-function preprocessTagsForRender(content) {
-  return content
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\[\[([^\]]+)\]\]/g, '[$1](PAGE:$1)')
-    .replace(/#([a-zA-Z0-9_/.-]+)/g, '[#$1](PAGE:$1)');
-}
-
-function detectTagTrigger(text, cursorPos) {
-  const segment = text.slice(Math.max(0, cursorPos - 50), cursorPos);
-  const bracketMatch = segment.match(/\[\[([^\]]*)$/);
+function detectTagTrigger(text) {
+  const bracketMatch = text.match(/\[\[([^\]]*)$/);
   if (bracketMatch) {
-    return {
-      kind: 'bracket',
-      query: bracketMatch[1],
-      triggerStart: Math.max(0, cursorPos - 50) + bracketMatch.index,
-    };
+    return { kind: "bracket", query: bracketMatch[1], triggerStart: bracketMatch.index };
   }
-  const hashMatch = segment.match(/#([a-zA-Z0-9_/.-]*)$/);
+  const hashMatch = text.match(/#([a-zA-Z0-9_/.-]*)$/);
   if (hashMatch) {
-    return {
-      kind: 'hash',
-      query: hashMatch[1],
-      triggerStart: Math.max(0, cursorPos - 50) + hashMatch.index,
-    };
+    return { kind: "hash", query: hashMatch[1], triggerStart: hashMatch.index };
   }
   return null;
 }
 
-// ── BlockRow ───────────────────────────────────────────────────────────────
+// Convert continuation-indented lines to explicit hard breaks so Milkdown
+// preserves multi-line list item content (e.g. "- a\n  b\n  c" → "- a\\\n  b\\\n  c").
+function ensureHardBreaks(text) {
+  const lines = text.split("\n");
+  let inFencedCode = false;
+  return lines
+    .map((line, i) => {
+      if (/^[ \t]*```/.test(line)) {
+        inFencedCode = !inFencedCode;
+        return line;
+      }
+      if (inFencedCode) return line;
+      const nextLine = lines[i + 1];
+      if (nextLine === undefined || nextLine.length === 0) return line;
+      const isContinuation =
+        /^[ \t]/.test(nextLine) &&
+        !/^[ \t]*[-*+] /.test(nextLine) &&
+        !/^[ \t]*\d+\. /.test(nextLine) &&
+        !/^[ \t]*>/.test(nextLine) &&
+        !/^[ \t]*#+[ ]/.test(nextLine) &&
+        !/^[ \t]*```/.test(nextLine);
+      if (isContinuation && line.trim() !== "" && !line.endsWith("\\")) {
+        return line + "\\";
+      }
+      return line;
+    })
+    .join("\n");
+}
 
-function BlockRow({ block, idx, isFocused, onFocus, onContentChange, onKeyDown, pages, onNavigate, pendingCursor, pendingClick }) {
-  const textareaRef = useRef(null);
-  const isOutliner = block.kind === "outliner";
+const blockHighlightKey = new PluginKey("blockHighlight");
 
+const blockHighlightPlugin = $prose(() =>
+  new Plugin({
+    key: blockHighlightKey,
+    props: {
+      decorations(state) {
+        const { selection } = state;
+        const $from = selection.$from;
+        for (let depth = $from.depth; depth > 0; depth--) {
+          const node = $from.node(depth);
+          const name = node.type.name;
+          if (name === "list_item" || name === "paragraph" || name === "heading") {
+            const pos = $from.before(depth);
+            return DecorationSet.create(state.doc, [
+              Decoration.node(pos, pos + node.nodeSize, { class: "milkdown-block--active" }),
+            ]);
+          }
+        }
+        return DecorationSet.empty;
+      },
+    },
+  })
+);
+
+const wikilinkKey = new PluginKey("wikilinks");
+
+function createWikilinkPlugin(navigateRef, pagesRef) {
+  return new Plugin({
+    key: wikilinkKey,
+    props: {
+      decorations(state) {
+        const decos = [];
+        const { from, to } = state.selection;
+        state.doc.descendants((node, pos) => {
+          if (!node.isText) return;
+          const text = node.text;
+          // [[PageRef]] — hide brackets unless cursor is inside
+          const bracketRegex = /\[\[([^\]]+)\]\]/g;
+          let m;
+          while ((m = bracketRegex.exec(text)) !== null) {
+            const start = pos + m.index;
+            const nameStart = start + 2;
+            const nameEnd = nameStart + m[1].length;
+            const closeEnd = nameEnd + 2;
+            const cursorInside = from <= closeEnd && to >= start;
+            if (!cursorInside) {
+              decos.push(Decoration.inline(start, nameStart, { class: "wikilink-bracket" }));
+              decos.push(Decoration.inline(nameEnd, closeEnd, { class: "wikilink-bracket" }));
+            }
+            decos.push(Decoration.inline(nameStart, nameEnd, { class: "tag-link tag-link-wiki" }));
+          }
+          // #tag — style the whole token, word-boundary only
+          const hashRegex = /(?:^|(?<=\s))(#[a-zA-Z0-9_/.-]+)/g;
+          while ((m = hashRegex.exec(text)) !== null) {
+            decos.push(
+              Decoration.inline(pos + m.index, pos + m.index + m[0].length, { class: "tag-link tag-link-hash" })
+            );
+          }
+        });
+        return DecorationSet.create(state.doc, decos);
+      },
+      handleDOMEvents: {
+        click(view, event) {
+          const target = event.target;
+          // External hyperlinks — open in system browser
+          const linkEl = target?.closest?.("a[href]");
+          if (linkEl) {
+            const href = linkEl.getAttribute("href");
+            if (href && /^https?:\/\//.test(href)) {
+              event.preventDefault();
+              invoke("open_url", { url: href });
+              return true;
+            }
+          }
+          return false;
+        },
+      },
+      handleClick(view, pos, event) {
+        const target = event.target;
+        const tagEl = target?.closest?.(".tag-link");
+        if (!tagEl) return false;
+        const raw = tagEl.textContent;
+        let pageName;
+        if (tagEl.classList.contains("tag-link-hash")) {
+          pageName = raw.startsWith("#") ? raw.slice(1) : raw;
+        } else {
+          pageName = raw; // brackets already hidden; textContent is the name
+        }
+        if (!pageName) return false;
+        const allPages = pagesRef.current ?? [];
+        const found = allPages.find(
+          (p) => pageLeafName(p.page_id) === pageName || p.page_id === pageName || p.title === pageName
+        );
+        if (found) {
+          navigateRef.current?.(found.page_id);
+        } else {
+          const pageId = `pages:${pageName}`;
+          invoke("create_page", { pageId })
+            .then(() => navigateRef.current?.(pageId))
+            .catch(console.error);
+        }
+        return false;
+      },
+    },
+  });
+}
+
+function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
   const [autocomplete, setAutocomplete] = useState(null);
   const activeItemRef = useRef(null);
+  const debounceRef = useRef(null);
+  const latestTextRef = useRef(text);
+  const suppressWriteRef = useRef(false);
+  const initializedRef = useRef(false);
+  const navigateRef = useRef(onNavigate);
+  const pagesRef = useRef(pages);
+  navigateRef.current = onNavigate;
+  pagesRef.current = pages;
 
-  useEffect(() => {
-    if (isFocused && textareaRef.current) {
-      const el = textareaRef.current;
-      el.focus();
-      if (pendingCursor.current !== null) {
-        const pos = pendingCursor.current;
-        pendingCursor.current = null;
-        el.setSelectionRange(pos, pos);
-      } else if (pendingClick.current !== null) {
-        const click = pendingClick.current;
-        pendingClick.current = null;
-        requestAnimationFrame(() => {
-          if (!textareaRef.current) return;
-          let charOffset = null;
-          if (document.caretPositionFromPoint) {
-            const caret = document.caretPositionFromPoint(click.x, click.y);
-            if (caret) charOffset = caret.offset;
-          } else if (document.caretRangeFromPoint) {
-            const range = document.caretRangeFromPoint(click.x, click.y);
-            if (range) charOffset = range.startOffset;
-          }
-          const len = textareaRef.current.value.length;
-          const pos = charOffset !== null ? Math.min(charOffset, len) : len;
-          textareaRef.current.setSelectionRange(pos, pos);
+  const { get } = useEditor((root) =>
+    Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, root);
+        ctx.set(defaultValueCtx, ensureHardBreaks(text));
+        ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
+        ctx.update(prosePluginsCtx, (plugins) => [
+          ...plugins,
+          createWikilinkPlugin(navigateRef, pagesRef),
+        ]);
+        ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
+          const cleaned = markdown.replace(/<br\s*\/?>/g, "").replace(/\n{3,}/g, "\n\n");
+          latestTextRef.current = cleaned;
+          if (suppressWriteRef.current) return;
+          clearTimeout(debounceRef.current);
+          debounceRef.current = setTimeout(() => {
+            invoke("write_page_content", { pageId, text: cleaned }).catch(() => {});
+          }, WRITE_DEBOUNCE_MS);
         });
-      } else {
-        el.setSelectionRange(el.value.length, el.value.length);
-      }
-      adjustHeight(el);
-    }
-  }, [isFocused]);
+      })
+      .use(commonmark)
+      .use(listener)
+      .use(history)
+      .use(blockHighlightPlugin)
+  );
 
   useEffect(() => {
-    if (isFocused && textareaRef.current) {
-      adjustHeight(textareaRef.current);
-    }
+    flushRef.current = () => {
+      clearTimeout(debounceRef.current);
+      invoke("write_page_content", { pageId, text: latestTextRef.current }).catch(() => {});
+    };
   });
 
-  // Apply pending cursor after content changes (e.g., "- " → outliner conversion)
+  // Reload editor content when an external file change arrives on the same page.
   useEffect(() => {
-    if (isFocused && textareaRef.current && pendingCursor.current !== null) {
-      const pos = pendingCursor.current;
-      pendingCursor.current = null;
-      textareaRef.current.setSelectionRange(pos, pos);
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      return;
     }
-  });
+    const editor = get();
+    if (!editor) return;
+    suppressWriteRef.current = true;
+    editor.action(replaceAll(ensureHardBreaks(text)));
+    clearTimeout(debounceRef.current);
+    setTimeout(() => { suppressWriteRef.current = false; }, 0);
+  }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    activeItemRef.current?.scrollIntoView({ block: 'nearest' });
-  }, [autocomplete?.activeIdx]);
+  function getBlockInfo() {
+    const editor = get();
+    if (!editor) return null;
+    const view = editor.action((ctx) => ctx.get(editorViewCtx));
+    const { from } = view.state.selection;
+    const $from = view.state.selection.$from;
+    const blockStart = $from.start($from.depth);
+    const textBefore = view.state.doc.textBetween(blockStart, from, "\n");
+    return { view, from, blockStart, textBefore };
+  }
 
-  function updateAutocomplete(value, cursorPos) {
-    const trigger = detectTagTrigger(value, cursorPos);
+  function checkAutocomplete() {
+    const info = getBlockInfo();
+    if (!info) return;
+    const { view, from, blockStart, textBefore } = info;
+    const trigger = detectTagTrigger(textBefore);
     if (!trigger) { setAutocomplete(null); return; }
     const q = trigger.query.toLowerCase();
     const suggestions = pages
-      .filter(p => {
+      .filter((p) => {
         const id = p.page_id.toLowerCase();
-        const title = (p.title || '').toLowerCase();
+        const title = (p.title || "").toLowerCase();
         const leaf = pageLeafName(p.page_id).toLowerCase();
         return id.includes(q) || title.includes(q) || leaf.includes(q);
       })
       .slice(0, 8);
     const createName = suggestions.length === 0 && trigger.query.length > 0 ? trigger.query : null;
     if (!suggestions.length && !createName) { setAutocomplete(null); return; }
-    setAutocomplete(prev => {
-      const sameStart = prev?.trigger.triggerStart === trigger.triggerStart;
+    const coords = view.coordsAtPos(from);
+    setAutocomplete((prev) => {
       const maxIdx = suggestions.length - 1 + (createName ? 1 : 0);
-      const prevIdx = sameStart ? prev.activeIdx : 0;
-      return { trigger, suggestions, createName, activeIdx: Math.min(prevIdx, maxIdx) };
+      const sameStart = prev?.blockStart === blockStart && prev?.triggerStart === trigger.triggerStart;
+      return {
+        trigger, suggestions, createName, blockStart, triggerStart: trigger.triggerStart,
+        activeIdx: sameStart ? Math.min(prev.activeIdx, maxIdx) : 0,
+        coords: { top: coords.bottom, left: coords.left },
+      };
     });
   }
 
   function applyAutocomplete(page) {
-    const { trigger, createName } = autocomplete;
-    const name = page ? pageLeafName(page.page_id) : createName;
-    if (!page && createName) {
-      invoke("create_page", { pageId: `pages:${createName}` }).catch(console.error);
+    const info = getBlockInfo();
+    if (!info) return;
+    const { view, from, blockStart, textBefore } = info;
+    const trigger = detectTagTrigger(textBefore);
+    if (!trigger) return;
+    const name = page ? pageLeafName(page.page_id) : autocomplete.createName;
+    if (!page && autocomplete.createName) {
+      invoke("create_page", { pageId: `pages:${autocomplete.createName}` }).catch(console.error);
     }
-    const cursorPos = textareaRef.current?.selectionStart ?? block.content.length;
-    const replacement = trigger.kind === 'bracket' ? `[[${name}]]` : `#${name}`;
-    const newContent =
-      block.content.slice(0, trigger.triggerStart) +
-      replacement +
-      block.content.slice(cursorPos);
-    onContentChange(idx, newContent);
-    setAutocomplete(null);
-    const newCursor = trigger.triggerStart + replacement.length;
-    requestAnimationFrame(() => {
-      if (textareaRef.current) {
-        textareaRef.current.setSelectionRange(newCursor, newCursor);
-        textareaRef.current.focus();
-        adjustHeight(textareaRef.current);
-      }
-    });
-  }
-
-  const rowClass = [
-    "block-row",
-    isOutliner ? "block-row--outliner" : "block-row--plaintext",
-    isFocused ? "block-row--editing" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  if (!isFocused) {
-    return (
-      <div
-        className={rowClass}
-        style={{ "--block-depth": block.depth }}
-        onClick={(e) => onFocus(idx, e.clientX, e.clientY)}
-      >
-        {isOutliner && (
-          <span className="block-bullet" aria-hidden="true">
-            •
-          </span>
-        )}
-        <div className="block-content">
-          <ReactMarkdown
-            urlTransform={(url) => url}
-            components={{
-              a: ({ href, children }) => {
-                if (href?.startsWith('PAGE:')) {
-                  const name = href.slice(5);
-                  return (
-                    <span
-                      className="tag-link"
-                      onClick={(e) => {
-                        e.stopPropagation(); // prevent block-row onClick from firing
-                        const target = pages.find(
-                          p => p.page_id === name || p.title === name || pageLeafName(p.page_id) === name
-                        );
-                        if (target) {
-                          onNavigate(target.page_id);
-                        } else {
-                          const pageId = `pages:${name}`;
-                          invoke("create_page", { pageId })
-                            .then(() => onNavigate(pageId))
-                            .catch(console.error);
-                        }
-                      }}
-                    >
-                      {children}
-                    </span>
-                  );
-                }
-                return <a href={href}>{children}</a>;
-              }
-            }}
-          >
-            {preprocessTagsForRender(block.content || ' ')}
-          </ReactMarkdown>
-        </div>
-      </div>
+    const replacement = trigger.kind === "bracket" ? `[[${name}]]` : `#${name}`;
+    view.dispatch(
+      view.state.tr.replaceWith(blockStart + trigger.triggerStart, from, view.state.schema.text(replacement))
     );
+    view.focus();
+    setAutocomplete(null);
   }
+
+  useEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [autocomplete?.activeIdx]);
 
   return (
-    <div className={rowClass} style={{ "--block-depth": block.depth }}>
-      {isOutliner && (
-        <span className="block-bullet" aria-hidden="true">
-          •
-        </span>
+    <div
+      className="milkdown-editor"
+      onKeyDownCapture={(e) => {
+        if (!autocomplete) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          e.stopPropagation();
+          setAutocomplete((prev) => ({
+            ...prev,
+            activeIdx: Math.min(prev.activeIdx + 1, prev.suggestions.length - 1 + (prev.createName ? 1 : 0)),
+          }));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          e.stopPropagation();
+          setAutocomplete((prev) => ({ ...prev, activeIdx: Math.max(prev.activeIdx - 1, 0) }));
+        } else if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          e.stopPropagation();
+          const isCreate = autocomplete.activeIdx === autocomplete.suggestions.length;
+          applyAutocomplete(isCreate ? null : autocomplete.suggestions[autocomplete.activeIdx]);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          e.stopPropagation();
+          setAutocomplete(null);
+        }
+      }}
+      onKeyUp={(e) => {
+        if (autocomplete && ["ArrowUp", "ArrowDown", "Escape", "Enter", "Tab"].includes(e.key)) return;
+        checkAutocomplete();
+      }}
+    >
+      <Milkdown />
+      {autocomplete && (
+        <ul
+          className="autocomplete-dropdown"
+          role="listbox"
+          style={{ position: "fixed", top: autocomplete.coords.top + 4, left: autocomplete.coords.left }}
+        >
+          {autocomplete.suggestions.map((page, i) => (
+            <li
+              key={page.page_id}
+              ref={i === autocomplete.activeIdx ? activeItemRef : null}
+              className={`autocomplete-item${i === autocomplete.activeIdx ? " autocomplete-item--active" : ""}`}
+              role="option"
+              onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(page); }}
+            >
+              <span className="autocomplete-item-title">{page.title || pageLeafName(page.page_id)}</span>
+              <span className="autocomplete-item-id">{pageLeafName(page.page_id)}</span>
+            </li>
+          ))}
+          {autocomplete.createName && (
+            <li
+              ref={autocomplete.activeIdx === autocomplete.suggestions.length ? activeItemRef : null}
+              className={`autocomplete-item autocomplete-item--create${autocomplete.activeIdx === autocomplete.suggestions.length ? " autocomplete-item--active" : ""}`}
+              role="option"
+              onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(null); }}
+            >
+              <span className="autocomplete-item-title">+ Create "{autocomplete.createName}"</span>
+            </li>
+          )}
+        </ul>
       )}
-      <div className="block-textarea-wrap">
-        <textarea
-          ref={textareaRef}
-          className="block-textarea"
-          value={block.content}
-          onChange={(e) => {
-            onContentChange(idx, e.target.value);
-            adjustHeight(e.target);
-            updateAutocomplete(e.target.value, e.target.selectionStart);
-          }}
-          onKeyDown={(e) => {
-            if (autocomplete) {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setAutocomplete(prev => {
-                  const maxIdx = prev.suggestions.length - 1 + (prev.createName ? 1 : 0);
-                  return { ...prev, activeIdx: Math.min(prev.activeIdx + 1, maxIdx) };
-                });
-                return;
-              }
-              if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setAutocomplete(prev => ({ ...prev, activeIdx: Math.max(prev.activeIdx - 1, 0) }));
-                return;
-              }
-              if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-                e.preventDefault();
-                const isCreateItem = autocomplete.activeIdx === autocomplete.suggestions.length;
-                applyAutocomplete(isCreateItem ? null : autocomplete.suggestions[autocomplete.activeIdx]);
-                return;
-              }
-              if (e.key === 'Escape') {
-                e.preventDefault();
-                setAutocomplete(null);
-                return;
-              }
-            }
-            if (e.key === 'Tab' && !isOutliner) {
-              e.preventDefault();
-              const el = textareaRef.current;
-              const start = el.selectionStart;
-              const end = el.selectionEnd;
-              const newContent = block.content.slice(0, start) + '\t' + block.content.slice(end);
-              onContentChange(idx, newContent);
-              requestAnimationFrame(() => {
-                if (textareaRef.current) {
-                  textareaRef.current.setSelectionRange(start + 1, start + 1);
-                  adjustHeight(textareaRef.current);
-                }
-              });
-              return;
-            }
-            onKeyDown(e, idx);
-          }}
-          onBlur={() => { setAutocomplete(null); onFocus(null); }}
-        />
-        {autocomplete && (
-          <ul className="autocomplete-dropdown" role="listbox">
-            {autocomplete.suggestions.map((page, i) => (
-              <li
-                key={page.page_id}
-                ref={i === autocomplete.activeIdx ? activeItemRef : null}
-                className={`autocomplete-item${i === autocomplete.activeIdx ? ' autocomplete-item--active' : ''}`}
-                role="option"
-                onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(page); }}
-              >
-                <span className="autocomplete-item-title">{page.title || pageLeafName(page.page_id)}</span>
-                <span className="autocomplete-item-id">{pageLeafName(page.page_id)}</span>
-              </li>
-            ))}
-            {autocomplete.createName && (
-              <li
-                ref={autocomplete.activeIdx === autocomplete.suggestions.length ? activeItemRef : null}
-                className={`autocomplete-item autocomplete-item--create${autocomplete.activeIdx === autocomplete.suggestions.length ? ' autocomplete-item--active' : ''}`}
-                role="option"
-                onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(null); }}
-              >
-                <span className="autocomplete-item-title">+ Create "{autocomplete.createName}"</span>
-              </li>
-            )}
-          </ul>
-        )}
-      </div>
     </div>
   );
 }
 
-// ── Editor ─────────────────────────────────────────────────────────────────
-
-export default function Editor({ pageId, blocks, pages, onNavigate }) {
-  const [localBlocks, setLocalBlocks] = useState(() =>
-    blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) })),
-  );
-  const [focusedIdx, setFocusedIdx] = useState(null);
-  const debounceRef = useRef(null);
-  const pendingCursorRef = useRef(null);
-  const pendingClickRef = useRef(null);
-  const localBlocksRef = useRef(
-    blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) })),
-  );
+export default function MilkdownEditor({ pageId, text, pages, onNavigate }) {
+  const flushRef = useRef(null);
 
   useEffect(() => {
-    localBlocksRef.current = localBlocks;
-  }, [localBlocks]);
-
-  // Reset when the incoming block array changes (page switch or external file change).
-  useEffect(() => {
-    clearTimeout(debounceRef.current);
-    const normalized = blocks.map((b) => ({ ...b, content: normalizeBlockContent(b) }));
-    setLocalBlocks(normalized);
-    localBlocksRef.current = normalized;
-    setFocusedIdx(null);
-  }, [blocks]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Flush on unmount (app close / workspace close).
-  useEffect(() => {
-    return () => {
-      clearTimeout(debounceRef.current);
-      if (pageId) {
-        invoke("write_page_content", {
-          pageId,
-          text: blocksToText(localBlocksRef.current),
-        }).catch(() => {});
-      }
-    };
+    return () => { flushRef.current?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function scheduleWrite(newBlocks) {
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      invoke("write_page_content", {
-        pageId,
-        text: blocksToText(newBlocks),
-      }).catch(() => {});
-    }, WRITE_DEBOUNCE_MS);
-  }
-
-  function flushWrite(newBlocks) {
-    clearTimeout(debounceRef.current);
-    invoke("write_page_content", {
-      pageId,
-      text: blocksToText(newBlocks),
-    }).catch(() => {});
-  }
-
-  function handleFocus(idx, clickX, clickY) {
-    if (idx === null && focusedIdx !== null) {
-      flushWrite(localBlocksRef.current);
-    }
-    if (idx !== null && clickX != null) {
-      pendingClickRef.current = { x: clickX, y: clickY };
-    }
-    setFocusedIdx(idx);
-  }
-
-  function handleContentChange(idx, newContent) {
-    const block = localBlocks[idx];
-    if (block.kind === "plaintext" && newContent.startsWith("- ")) {
-      const afterPrefix = newContent.slice(2);
-      const newBlocks = localBlocks.map((b, i) =>
-        i === idx ? { kind: "outliner", depth: 0, content: afterPrefix } : b,
-      );
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      pendingCursorRef.current = afterPrefix.length;
-      scheduleWrite(newBlocks);
-      return;
-    }
-    const newBlocks = localBlocks.map((b, i) =>
-      i === idx ? { ...b, content: newContent } : b,
-    );
-    setLocalBlocks(newBlocks);
-    localBlocksRef.current = newBlocks;
-    scheduleWrite(newBlocks);
-  }
-
-  function handleKeyDown(e, idx) {
-    const block = localBlocks[idx];
-    const isOutliner = block.kind === "outliner";
-
-    if (e.key === "Tab") {
-      e.preventDefault();
-      if (!isOutliner) return;
-
-      let newDepth;
-      if (e.shiftKey) {
-        newDepth = Math.max(0, block.depth - 1);
-      } else {
-        const prev = localBlocks[idx - 1];
-        const maxDepth = prev ? prev.depth + 1 : 0;
-        newDepth = Math.min(block.depth + 1, maxDepth);
-      }
-      if (newDepth === block.depth) return;
-
-      const newBlocks = localBlocks.map((b, i) =>
-        i === idx ? { ...b, depth: newDepth } : b,
-      );
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      scheduleWrite(newBlocks);
-    } else if (e.key === "Enter" && e.shiftKey) {
-      e.preventDefault();
-      const el = e.target;
-      const start = el.selectionStart;
-      const newContent = block.content.slice(0, start) + '\n' + block.content.slice(start);
-      const newBlocks = localBlocks.map((b, i) =>
-        i === idx ? { ...b, content: newContent } : b,
-      );
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      pendingCursorRef.current = start + 1;
-      scheduleWrite(newBlocks);
-    } else if (e.key === "Enter" && isOutliner) {
-      e.preventDefault();
-      let newBlocks;
-      if (block.content.trim() === "") {
-        newBlocks = localBlocks.map((b, i) =>
-          i === idx ? { kind: "plaintext", depth: 0, content: "" } : b,
-        );
-      } else {
-        const cursor = e.target.selectionStart;
-        const before = block.content.slice(0, cursor);
-        const after = block.content.slice(cursor);
-        newBlocks = [
-          ...localBlocks.slice(0, idx),
-          { ...block, content: before },
-          { kind: block.kind, depth: block.depth, content: after },
-          ...localBlocks.slice(idx + 1),
-        ];
-        pendingCursorRef.current = 0;
-        setFocusedIdx(idx + 1);
-      }
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      scheduleWrite(newBlocks);
-    } else if (e.key === "Backspace" && isOutliner && block.content === "") {
-      e.preventDefault();
-      const newBlocks = localBlocks.map((b, i) =>
-        i === idx ? { kind: "plaintext", depth: 0, content: "" } : b,
-      );
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      scheduleWrite(newBlocks);
-    } else if (e.key === "Backspace" && !isOutliner && block.content === "" && idx > 0) {
-      e.preventDefault();
-      const newBlocks = localBlocks.filter((_, i) => i !== idx);
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      pendingCursorRef.current = localBlocks[idx - 1].content.length;
-      setFocusedIdx(idx - 1);
-      scheduleWrite(newBlocks);
-    } else if (e.key === "Backspace" && e.target.selectionStart === 0 && e.target.selectionEnd === 0 && idx > 0) {
-      e.preventDefault();
-      const prev = localBlocks[idx - 1];
-      const newBlocks = [
-        ...localBlocks.slice(0, idx - 1),
-        { ...prev, content: prev.content + block.content },
-        ...localBlocks.slice(idx + 1),
-      ];
-      setLocalBlocks(newBlocks);
-      localBlocksRef.current = newBlocks;
-      pendingCursorRef.current = prev.content.length;
-      setFocusedIdx(idx - 1);
-      scheduleWrite(newBlocks);
-    } else if (e.key === "ArrowUp") {
-      const el = e.target;
-      const isFirstLine = !el.value.slice(0, el.selectionStart).includes('\n');
-      if (isFirstLine && idx > 0) {
-        e.preventDefault();
-        const col = el.selectionStart;
-        const prevContent = localBlocks[idx - 1].content;
-        const prevLastNewline = prevContent.lastIndexOf('\n');
-        const prevLastLineStart = prevLastNewline + 1;
-        pendingCursorRef.current = Math.min(prevLastLineStart + col, prevContent.length);
-        setFocusedIdx(idx - 1);
-      }
-    } else if (e.key === "ArrowDown") {
-      const el = e.target;
-      const isLastLine = !el.value.slice(el.selectionStart).includes('\n');
-      if (isLastLine && idx < localBlocks.length - 1) {
-        e.preventDefault();
-        const lastNewlineBefore = el.value.lastIndexOf('\n', el.selectionStart - 1);
-        const col = el.selectionStart - (lastNewlineBefore + 1);
-        const nextContent = localBlocks[idx + 1].content;
-        const nextFirstNewline = nextContent.indexOf('\n');
-        const nextFirstLineEnd = nextFirstNewline === -1 ? nextContent.length : nextFirstNewline;
-        pendingCursorRef.current = Math.min(col, nextFirstLineEnd);
-        setFocusedIdx(idx + 1);
-      }
-    }
-  }
-
-  if (localBlocks.length === 0) {
-    return (
-      <div
-        className="block-row block-row--plaintext"
-        style={{ opacity: 0.4, cursor: 'text' }}
-        onClick={() => {
-          const newBlocks = [{ kind: "plaintext", depth: 0, content: "" }];
-          setLocalBlocks(newBlocks);
-          localBlocksRef.current = newBlocks;
-          pendingCursorRef.current = 0;
-          setFocusedIdx(0);
-          scheduleWrite(newBlocks);
-        }}
-      >
-        <div className="block-content">Start writing…</div>
-      </div>
-    );
-  }
-
   return (
-    <>
-      {localBlocks.map((block, idx) => (
-        <BlockRow
-          key={idx}
-          block={block}
-          idx={idx}
-          isFocused={idx === focusedIdx}
-          onFocus={handleFocus}
-          onContentChange={handleContentChange}
-          onKeyDown={handleKeyDown}
-          pages={pages}
-          onNavigate={onNavigate}
-          pendingCursor={pendingCursorRef}
-          pendingClick={pendingClickRef}
-        />
-      ))}
-    </>
+    <MilkdownProvider>
+      <MilkdownEditorInner
+        pageId={pageId}
+        text={text}
+        pages={pages}
+        onNavigate={onNavigate}
+        flushRef={flushRef}
+      />
+    </MilkdownProvider>
   );
 }

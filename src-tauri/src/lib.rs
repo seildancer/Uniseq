@@ -70,6 +70,7 @@ struct FlatBlockDto {
 struct PageContentDto {
     revision: FileFingerprintDto,
     blocks: Vec<FlatBlockDto>,
+    text: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -331,6 +332,7 @@ impl From<PageContentSnapshot> for PageContentDto {
         Self {
             revision: FileFingerprintDto::from(value.revision),
             blocks: value.blocks.into_iter().map(FlatBlockDto::from).collect(),
+            text: value.text,
         }
     }
 }
@@ -696,6 +698,11 @@ fn stop_watching(state: State<'_, AppState>) -> CommandResult<bool> {
     state.controller.lock().unwrap().stop_watching()
 }
 
+#[tauri::command]
+fn open_url(url: String) {
+    let _ = open::that(url);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -718,7 +725,8 @@ pub fn run() {
             drain_workspace_events,
             take_last_watch_error,
             start_watching,
-            stop_watching
+            stop_watching,
+            open_url
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
