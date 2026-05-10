@@ -637,6 +637,7 @@ h2 {
   min-width: 0;
   line-height: 1.6;
   font-size: 0.95rem;
+  white-space: pre-wrap;
 }
 
 .block-content p { margin: 0; }

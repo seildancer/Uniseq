@@ -411,6 +411,18 @@ export default function Editor({ pageId, blocks, pages, onNavigate }) {
       setLocalBlocks(newBlocks);
       localBlocksRef.current = newBlocks;
       scheduleWrite(newBlocks);
+    } else if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      const el = e.target;
+      const start = el.selectionStart;
+      const newContent = block.content.slice(0, start) + '\n' + block.content.slice(start);
+      const newBlocks = localBlocks.map((b, i) =>
+        i === idx ? { ...b, content: newContent } : b,
+      );
+      setLocalBlocks(newBlocks);
+      localBlocksRef.current = newBlocks;
+      pendingCursorRef.current = start + 1;
+      scheduleWrite(newBlocks);
     } else if (e.key === "Enter" && isOutliner) {
       e.preventDefault();
       let newBlocks;
