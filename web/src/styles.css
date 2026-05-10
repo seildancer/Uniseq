@@ -353,9 +353,46 @@ h2 {
   color: #ffffff;
 }
 
-.window-control-button--theme:hover {
-  background: var(--hover);
+.topbar-menu {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+}
+
+.topbar-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  min-width: 180px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 2px;
+}
+
+.topbar-menu-item {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
   color: var(--ink);
+  font-size: 0.94rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.topbar-menu-item:hover {
+  background: var(--hover);
+}
+
+.topbar-menu-item:focus-visible {
+  outline: 2px solid rgba(31, 111, 95, 0.42);
+  outline-offset: 2px;
 }
 
 .workspace-body {

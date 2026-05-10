@@ -23,6 +23,7 @@ function pageLeafName(pageId) {
 
 function preprocessTagsForRender(content) {
   return content
+    .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/\[\[([^\]]+)\]\]/g, '[$1](PAGE:$1)')
     .replace(/#([a-zA-Z0-9_/.-]+)/g, '[#$1](PAGE:$1)');
 }

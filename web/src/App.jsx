@@ -195,6 +195,8 @@ export default function App() {
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
   const [expandedPageIds, setExpandedPageIds] = useState({});
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages);
@@ -370,6 +372,18 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    function handleClickOutside(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    }
+    if (menuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [menuOpen]);
+
+  useEffect(() => {
     isBootEffectMountedRef.current = true;
 
     async function boot() {
@@ -527,14 +541,41 @@ export default function App() {
             </div>
 
             <div className="window-controls" data-no-window-drag="true">
-              <button
-                className="window-control-button window-control-button--theme"
-                type="button"
-                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-                onClick={() => setDarkMode((d) => !d)}
-              >
-                {darkMode ? "☀" : "◑"}
-              </button>
+              <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
+                <button
+                  className="window-control-button"
+                  type="button"
+                  aria-label="Menu"
+                  aria-expanded={menuOpen}
+                  onClick={() => setMenuOpen((open) => !open)}
+                >
+                  ⋮
+                </button>
+                {menuOpen && (
+                  <div className="topbar-menu-dropdown">
+                    <button
+                      className="topbar-menu-item"
+                      type="button"
+                      onClick={() => {
+                        void loadWorkspaceLists();
+                        setMenuOpen(false);
+                      }}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      className="topbar-menu-item"
+                      type="button"
+                      onClick={() => {
+                        setDarkMode((d) => !d);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      {darkMode ? "Light mode" : "Dark mode"}
+                    </button>
+                  </div>
+                )}
+              </div>
               <button
                 className="window-control-button"
                 type="button"
@@ -591,9 +632,6 @@ export default function App() {
               <div className="sidebar-section">
                 <div className="section-heading">
                   <h2>Pages</h2>
-                  <button className="ghost-button" type="button" onClick={loadWorkspaceLists}>
-                    Refresh
-                  </button>
                 </div>
 
                 {regularPages.length === 0 ? (
