@@ -198,6 +198,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
   const initializedRef = useRef(false);
   const navigateRef = useRef(onNavigate);
   const pagesRef = useRef(pages);
+  const suppressNextCheckRef = useRef(false);
   navigateRef.current = onNavigate;
   pagesRef.current = pages;
 
@@ -312,6 +313,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
     );
     view.focus();
     setAutocomplete(null);
+    suppressNextCheckRef.current = true;
   }
 
   useEffect(() => {
@@ -343,10 +345,15 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
           e.preventDefault();
           e.stopPropagation();
           setAutocomplete(null);
+          suppressNextCheckRef.current = true;
         }
       }}
       onKeyUp={(e) => {
         if (autocomplete && ["ArrowUp", "ArrowDown", "Escape", "Enter", "Tab"].includes(e.key)) return;
+        if (suppressNextCheckRef.current) {
+          suppressNextCheckRef.current = false;
+          return;
+        }
         checkAutocomplete();
       }}
     >
