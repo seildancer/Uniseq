@@ -397,6 +397,38 @@ h2 {
   outline-offset: 2px;
 }
 
+.topbar-menu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 8px;
+}
+
+.topbar-menu-info {
+  padding: 8px 12px;
+  font-size: 0.88rem;
+}
+
+.topbar-menu-info-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 2px 0;
+  color: var(--muted);
+}
+
+.topbar-menu-info-row span:last-child {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.topbar-menu-item--danger {
+  color: #c0392b;
+}
+
+.topbar-menu-item--danger:hover {
+  background: rgba(192, 57, 43, 0.1);
+}
+
 .workspace-body {
   min-height: 0;
   display: grid;

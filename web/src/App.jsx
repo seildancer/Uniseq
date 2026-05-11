@@ -618,6 +618,28 @@ export default function App() {
                     >
                       {darkMode ? "Light mode" : "Dark mode"}
                     </button>
+                    <div className="topbar-menu-divider"></div>
+                    <div className="topbar-menu-info">
+                      <div className="topbar-menu-info-row">
+                        <span>Pages</span>
+                        <span>{pages.length}</span>
+                      </div>
+                      <div className="topbar-menu-info-row">
+                        <span>Watcher</span>
+                        <span>{workspace.watcher_status.mode ?? "starting"}</span>
+                      </div>
+                    </div>
+                    <div className="topbar-menu-divider"></div>
+                    <button
+                      className="topbar-menu-item topbar-menu-item--danger"
+                      type="button"
+                      onClick={() => {
+                        void handleCloseWorkspace();
+                        setMenuOpen(false);
+                      }}
+                    >
+                      Close workspace
+                    </button>
                   </div>
                 )}
               </div>
@@ -692,23 +714,6 @@ export default function App() {
                     onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
                   />
                 )}
-              </div>
-
-              <div className="sidebar-footer">
-                <dl className="workspace-stats">
-                  <div>
-                    <dt>Pages</dt>
-                    <dd>{pages.length}</dd>
-                  </div>
-                  <div>
-                    <dt>Watcher</dt>
-                    <dd>{workspace.watcher_status.mode ?? "starting"}</dd>
-                  </div>
-                </dl>
-
-                <button className="secondary-button" type="button" onClick={handleCloseWorkspace}>
-                  Close workspace
-                </button>
               </div>
             </aside>
 
