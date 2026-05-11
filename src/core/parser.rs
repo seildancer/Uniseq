@@ -16,6 +16,7 @@ struct LineInfo {
     is_outliner: bool,
     content_start: usize,
     is_fence_line: bool,
+    is_blank: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -33,15 +34,25 @@ pub fn parse_blocks(text: &str) -> Result<Vec<Block>, CoreError> {
     let mut roots = Vec::new();
     let mut stack = Vec::new();
     let mut in_fence = false;
+    let mut consecutive_blanks = 0;
 
     for line in iter_lines(text) {
         let line = analyze_line(text, line.start(), line.end(), in_fence)?;
 
-        if line.is_outliner {
-            close_for_outliner_marker(&mut stack, &mut roots, line.indent_width)?;
-            stack.push(start_outliner_block(line));
-        } else if !continue_existing_block(&mut stack, &mut roots, line.indent_width, line.end)? {
-            stack.push(start_plaintext_block(line));
+        if !in_fence && line.is_blank {
+            consecutive_blanks += 1;
+            if consecutive_blanks >= 2 {
+                close_plaintext_top(&mut stack, &mut roots)?;
+            }
+            // blank line: separator only, no new block (until we hit 2+ consecutive)
+        } else {
+            consecutive_blanks = 0;
+            if line.is_outliner {
+                close_for_outliner_marker(&mut stack, &mut roots, line.indent_width)?;
+                stack.push(start_outliner_block(line));
+            } else if !continue_existing_block(&mut stack, &mut roots, line.indent_width, line.end)? {
+                stack.push(start_plaintext_block(line));
+            }
         }
 
         if line.is_fence_line {
@@ -102,6 +113,7 @@ fn analyze_line(
     }
 
     let trimmed = &line_without_newline[indent_bytes..];
+    let is_blank = trimmed.is_empty();
     let is_fence_line = trimmed.starts_with(FENCE_MARKER);
 
     let mut is_outliner = false;
@@ -126,6 +138,7 @@ fn analyze_line(
         is_outliner,
         content_start,
         is_fence_line,
+        is_blank,
     })
 }
 
@@ -149,6 +162,13 @@ fn close_for_outliner_marker(
         close_top_block(stack, roots)?;
     }
 
+    Ok(())
+}
+
+fn close_plaintext_top(stack: &mut Vec<OpenBlock>, roots: &mut Vec<Block>) -> Result<(), CoreError> {
+    if stack.last().is_some_and(|b| b.kind == BlockKind::Plaintext) {
+        close_top_block(stack, roots)?;
+    }
     Ok(())
 }
 
@@ -625,5 +645,42 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         assert!(blocks[0].outgoing_refs.is_empty());
         assert_eq!(ref_targets(&blocks[1]), vec!["Page"]);
+    }
+
+    #[test]
+    fn single_blank_line_does_not_split_plaintext() {
+        let text = "hello\n\nworld\n";
+        let blocks = parse_blocks(text).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, BlockKind::Plaintext);
+        assert_eq!(blocks[0].content_span.slice(text).unwrap(), "hello\n\nworld\n");
+    }
+
+    #[test]
+    fn triple_newline_splits_plaintext_into_two_blocks() {
+        let text = "hello\n\n\nworld\n";
+        let blocks = parse_blocks(text).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].kind, BlockKind::Plaintext);
+        assert_eq!(blocks[1].kind, BlockKind::Plaintext);
+        assert_eq!(blocks[0].content_span.slice(text).unwrap(), "hello\n");
+        assert_eq!(blocks[1].content_span.slice(text).unwrap(), "world\n");
+    }
+
+    #[test]
+    fn four_newlines_splits_plaintext_into_two_blocks() {
+        let text = "hello\n\n\n\nworld\n";
+        let blocks = parse_blocks(text).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].content_span.slice(text).unwrap(), "hello\n");
+        assert_eq!(blocks[1].content_span.slice(text).unwrap(), "world\n");
+    }
+
+    #[test]
+    fn blank_line_between_outliners_does_not_create_extra_blocks() {
+        let text = "- one\n\n- two\n";
+        let blocks = parse_blocks(text).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks.iter().all(|b| b.kind == BlockKind::Outliner));
     }
 }

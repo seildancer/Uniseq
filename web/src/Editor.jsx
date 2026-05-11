@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
 import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
@@ -8,6 +8,8 @@ import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
 import { $prose, replaceAll } from "@milkdown/utils";
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
+import { keymap } from "prosemirror-keymap";
+import remarkBreaks from "remark-breaks";
 
 const WRITE_DEBOUNCE_MS = 300;
 
@@ -25,35 +27,6 @@ function detectTagTrigger(text) {
     return { kind: "hash", query: hashMatch[1], triggerStart: hashMatch.index };
   }
   return null;
-}
-
-// Convert continuation-indented lines to explicit hard breaks so Milkdown
-// preserves multi-line list item content (e.g. "- a\n  b\n  c" → "- a\\\n  b\\\n  c").
-function ensureHardBreaks(text) {
-  const lines = text.split("\n");
-  let inFencedCode = false;
-  return lines
-    .map((line, i) => {
-      if (/^[ \t]*```/.test(line)) {
-        inFencedCode = !inFencedCode;
-        return line;
-      }
-      if (inFencedCode) return line;
-      const nextLine = lines[i + 1];
-      if (nextLine === undefined || nextLine.length === 0) return line;
-      const isContinuation =
-        /^[ \t]/.test(nextLine) &&
-        !/^[ \t]*[-*+] /.test(nextLine) &&
-        !/^[ \t]*\d+\. /.test(nextLine) &&
-        !/^[ \t]*>/.test(nextLine) &&
-        !/^[ \t]*#+[ ]/.test(nextLine) &&
-        !/^[ \t]*```/.test(nextLine);
-      if (isContinuation && line.trim() !== "" && !line.endsWith("\\")) {
-        return line + "\\";
-      }
-      return line;
-    })
-    .join("\n");
 }
 
 const blockHighlightKey = new PluginKey("blockHighlight");
@@ -82,6 +55,58 @@ const blockHighlightPlugin = $prose(() =>
 );
 
 const wikilinkKey = new PluginKey("wikilinks");
+
+function createEnterKeyPlugin() {
+  return keymap({
+    Enter(state, dispatch) {
+      const { selection } = state;
+      if (!selection.empty) return false;
+      const { $from } = selection;
+
+      // Only intercept in bare paragraphs (not inside list_item)
+      if ($from.parent.type.name !== "paragraph") return false;
+      for (let d = $from.depth - 1; d > 0; d--) {
+        if ($from.node(d).type.name === "list_item") return false;
+      }
+
+      const nodeBefore = $from.nodeBefore;
+      const atEnd = $from.parentOffset === $from.parent.content.size;
+
+      if (nodeBefore?.type.name === "hardbreak" && atEnd) {
+        const posBeforeHardbreak = $from.pos - nodeBefore.nodeSize;
+        const nodeBeforeHardbreak = state.doc.resolve(posBeforeHardbreak).nodeBefore;
+
+        if (nodeBeforeHardbreak?.type.name === "hardbreak") {
+          // Triple-enter: split paragraph
+          if (dispatch) {
+            dispatch(state.tr.split($from.pos).scrollIntoView());
+          }
+          return true;
+        }
+
+        // Double-enter: insert another hardbreak
+        const hardbreakType = state.schema.nodes.hardbreak;
+        if (!hardbreakType) return false;
+        if (dispatch) {
+          dispatch(
+            state.tr.replaceSelectionWith(hardbreakType.create()).scrollIntoView()
+          );
+        }
+        return true;
+      }
+
+      // Single enter: insert hard_break (visual line break, same block)
+      const hardbreakType = state.schema.nodes.hardbreak;
+      if (!hardbreakType) return false;
+      if (dispatch) {
+        dispatch(
+          state.tr.replaceSelectionWith(hardbreakType.create()).scrollIntoView()
+        );
+      }
+      return true;
+    },
+  });
+}
 
 function createWikilinkPlugin(navigateRef, pagesRef) {
   return new Plugin({
@@ -180,14 +205,22 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root);
-        ctx.set(defaultValueCtx, ensureHardBreaks(text));
+        ctx.set(defaultValueCtx, text);
         ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
+        ctx.update(remarkPluginsCtx, (plugins) => [
+          ...plugins,
+          { plugin: remarkBreaks, options: {} },
+        ]);
         ctx.update(prosePluginsCtx, (plugins) => [
+          createEnterKeyPlugin(),
           ...plugins,
           createWikilinkPlugin(navigateRef, pagesRef),
         ]);
         ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
-          const cleaned = markdown.replace(/<br\s*\/?>/g, "").replace(/\n{3,}/g, "\n\n");
+          const cleaned = markdown
+            .replace(/\\\n/g, "\n")
+            .replace(/<br\s*\/?>/g, "")
+            .replace(/\n{4,}/g, "\n\n\n");
           latestTextRef.current = cleaned;
           if (suppressWriteRef.current) return;
           clearTimeout(debounceRef.current);
@@ -218,7 +251,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
     const editor = get();
     if (!editor) return;
     suppressWriteRef.current = true;
-    editor.action(replaceAll(ensureHardBreaks(text)));
+    editor.action(replaceAll(text));
     clearTimeout(debounceRef.current);
     setTimeout(() => { suppressWriteRef.current = false; }, 0);
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps

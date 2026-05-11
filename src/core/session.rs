@@ -2089,7 +2089,7 @@ mod tests {
         workspace.write_file("A.md", "- body\r\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
 
-        let block = session.page_blocks(&PageId::new(["A"]).unwrap()).unwrap();
+        let block = session.page_content(&PageId::new(["A"]).unwrap()).unwrap();
         assert_eq!(block.revision, FileFingerprint::from_text("- body\r\n"));
         assert_eq!(block.blocks[0].content, "body");
         assert_eq!(
