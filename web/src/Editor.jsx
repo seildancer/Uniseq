@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Editor, rootCtx, defaultValueCtx, prosePluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
+import { gfm } from "@milkdown/preset-gfm";
 import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
@@ -11,6 +12,7 @@ import createDeleteKeyPlugin from "./plugins/deleteKeyPlugin";
 import createIndentPlugin from "./plugins/indentPlugin";
 import createWikilinkPlugin from "./plugins/wikilinkPlugin";
 import blockHighlightPlugin from "./plugins/blockHighlightPlugin";
+import taskListClickPlugin from "./plugins/taskListClickPlugin";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
 import AutocompleteEditor from "./components/Autocomplete";
 
@@ -33,6 +35,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
         ctx.update(prosePluginsCtx, (plugins) => [
           createDeleteKeyPlugin(),
           createIndentPlugin(),
+          taskListClickPlugin(),
           ...plugins,
           createWikilinkPlugin(navigateRef, pagesRef),
         ]);
@@ -41,6 +44,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
         });
       })
       .use(commonmark)
+      .use(gfm)
       .use(listener)
       .use(history)
       .use(blockHighlightPlugin)
