@@ -955,8 +955,34 @@ code {
 
 /* Block-level highlight decoration applied by ProseMirror plugin */
 .milkdown-editor .milkdown-block--active {
-  background: var(--selected);
   border-radius: 5px;
+  position: relative;
+}
+
+.milkdown-editor .milkdown-block--active::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  background: linear-gradient(
+    to top left,
+    rgba(255, 255, 255, 0.80) 0%,
+    rgba(255, 255, 255, 0.30) 40%,
+    transparent 100%
+  );
+  clip-path: polygon(100% 100%, 100% 0, 0 100%);
+  pointer-events: none;
+}
+
+[data-theme="dark"] .milkdown-editor .milkdown-block--active::after {
+  background: linear-gradient(
+    to top left,
+    rgba(185, 214, 189, 0.80) 0%,
+    rgba(185, 214, 189, 0.30) 40%,
+    transparent 100%
+  );
 }
 
 /* Autocomplete dropdown is fixed-positioned (position set inline) */

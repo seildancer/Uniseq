@@ -17,7 +17,10 @@ export default $prose(() =>
           if (name === "list_item" || name === "paragraph" || name === "heading") {
             const pos = $from.before(depth);
             return DecorationSet.create(state.doc, [
-              Decoration.node(pos, pos + node.nodeSize, { class: "milkdown-block--active" }),
+              Decoration.node(pos, pos + node.nodeSize, {
+                class: "milkdown-block--active",
+                "data-block-active": "true",
+              }),
             ]);
           }
         }
