@@ -10,8 +10,8 @@ import breaks from "remark-breaks";
 
 import createDeleteKeyPlugin from "./plugins/deleteKeyPlugin";
 import createIndentPlugin from "./plugins/indentPlugin";
-import createWikilinkPlugin from "./plugins/wikilinkPlugin";
-import blockHighlightPlugin from "./plugins/blockHighlightPlugin";
+import createWikilinkPlugin, { resetWikilinkFocus } from "./plugins/wikilinkPlugin";
+import blockHighlightPlugin, { resetBlockHighlightFocus } from "./plugins/blockHighlightPlugin";
 import taskListClickPlugin from "./plugins/taskListClickPlugin";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
 import AutocompleteEditor from "./components/Autocomplete";
@@ -24,6 +24,11 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
   const onMarkdownUpdatedRef = useRef(null);
   navigateRef.current = onNavigate;
   pagesRef.current = pages;
+
+  useEffect(() => {
+    resetWikilinkFocus();
+    resetBlockHighlightFocus();
+  }, [pageId]);
 
   const { get } = useEditor((root) =>
     Editor.make()

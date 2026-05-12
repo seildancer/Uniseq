@@ -911,40 +911,6 @@ code {
   margin: 0;
 }
 
-.milkdown-editor .ProseMirror li[data-item-type="task"] {
-  list-style: none;
-  margin-left: -22px;
-  padding-left: 22px;
-  position: relative;
-}
-
-.milkdown-editor .ProseMirror li[data-item-type="task"]::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.35em;
-  width: 14px;
-  height: 14px;
-  border: 2px solid var(--line);
-  border-radius: 3px;
-  cursor: pointer;
-  background: var(--bg);
-}
-
-.milkdown-editor .ProseMirror li[data-item-type="task"][data-checked="true"]::before {
-  background: var(--accent);
-  border-color: var(--accent);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3 7l3 3 5-5' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-size: 12px;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-.milkdown-editor .ProseMirror li[data-item-type="task"][data-checked="true"] > p {
-  text-decoration: line-through;
-  color: var(--muted);
-}
-
 .milkdown-editor .ProseMirror h1,
 .milkdown-editor .ProseMirror h2,
 .milkdown-editor .ProseMirror h3 {

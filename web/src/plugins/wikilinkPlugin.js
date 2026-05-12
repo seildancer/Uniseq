@@ -5,6 +5,12 @@ import pageLeafName from "../utils/pageLeafName";
 
 const wikilinkKey = new PluginKey("wikilinks");
 
+let hasFocus = false;
+
+export function resetWikilinkFocus() {
+  hasFocus = false;
+}
+
 export default function createWikilinkPlugin(navigateRef, pagesRef) {
   return new Plugin({
     key: wikilinkKey,
@@ -23,7 +29,7 @@ export default function createWikilinkPlugin(navigateRef, pagesRef) {
             const nameStart = start + 2;
             const nameEnd = nameStart + m[1].length;
             const closeEnd = nameEnd + 2;
-            const cursorInside = from <= closeEnd && to >= start;
+            const cursorInside = hasFocus && from <= closeEnd && to >= start;
             if (!cursorInside) {
               decos.push(Decoration.inline(start, nameStart, { class: "wikilink-bracket" }));
               decos.push(Decoration.inline(nameEnd, closeEnd, { class: "wikilink-bracket" }));
@@ -41,6 +47,14 @@ export default function createWikilinkPlugin(navigateRef, pagesRef) {
         return DecorationSet.create(state.doc, decos);
       },
       handleDOMEvents: {
+        focus: () => {
+          hasFocus = true;
+          return false;
+        },
+        blur: () => {
+          hasFocus = false;
+          return false;
+        },
         click(view, event) {
           const target = event.target;
           // External hyperlinks — open in system browser
