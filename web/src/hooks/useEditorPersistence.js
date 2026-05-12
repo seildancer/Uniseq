@@ -14,7 +14,8 @@ export function useEditorPersistence({ get, pageId, text, flushRef, onMarkdownUp
   useEffect(() => {
     flushRef.current = () => {
       clearTimeout(debounceRef.current);
-      const cleaned = stripBreakOutsideFencedCode(latestTextRef.current);
+      const raw = latestTextRef.current;
+      const cleaned = stripBreakOutsideFencedCode(raw.replace(/\\\[\[/g, "[[").replace(/\\\]\]/g, "]]"));
       invoke("write_page_content", { pageId, text: cleaned }).catch(() => {});
     };
   });
@@ -34,7 +35,8 @@ export function useEditorPersistence({ get, pageId, text, flushRef, onMarkdownUp
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 
   onMarkdownUpdatedRef.current = (markdown) => {
-    const cleaned = stripBreakOutsideFencedCode(markdown);
+    const unescaped = markdown.replace(/\\\[\[/g, "[[").replace(/\\\]\]/g, "]]");
+    const cleaned = stripBreakOutsideFencedCode(unescaped);
     latestTextRef.current = cleaned;
     if (suppressWriteRef.current) return;
     clearTimeout(debounceRef.current);

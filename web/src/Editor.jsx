@@ -8,6 +8,7 @@ import { $remark } from "@milkdown/utils";
 import breaks from "remark-breaks";
 
 import createDeleteKeyPlugin from "./plugins/deleteKeyPlugin";
+import createIndentPlugin from "./plugins/indentPlugin";
 import createWikilinkPlugin from "./plugins/wikilinkPlugin";
 import blockHighlightPlugin from "./plugins/blockHighlightPlugin";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
@@ -31,6 +32,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
 
         ctx.update(prosePluginsCtx, (plugins) => [
           createDeleteKeyPlugin(),
+          createIndentPlugin(),
           ...plugins,
           createWikilinkPlugin(navigateRef, pagesRef),
         ]);
