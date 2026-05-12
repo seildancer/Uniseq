@@ -4,12 +4,16 @@ import { commonmark } from "@milkdown/preset-commonmark";
 import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
+import { $remark } from "@milkdown/utils";
+import breaks from "remark-breaks";
 
 import createDeleteKeyPlugin from "./plugins/deleteKeyPlugin";
 import createWikilinkPlugin from "./plugins/wikilinkPlugin";
 import blockHighlightPlugin from "./plugins/blockHighlightPlugin";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
 import AutocompleteEditor from "./components/Autocomplete";
+
+const remarkBreaks = $remark("remarkBreaks", () => breaks);
 
 function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
   const navigateRef = useRef(onNavigate);
@@ -38,6 +42,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
       .use(listener)
       .use(history)
       .use(blockHighlightPlugin)
+      .use(remarkBreaks.plugin)
   );
 
   useEditorPersistence({ get, pageId, text, flushRef, onMarkdownUpdatedRef });
