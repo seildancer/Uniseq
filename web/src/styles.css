@@ -545,6 +545,13 @@ h2 {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: center;
   position: relative;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .page-tree-row:hover {
@@ -553,6 +560,19 @@ h2 {
 
 .page-tree-row--active {
   background: var(--selected);
+}
+
+.page-tree-row--picked {
+  background: var(--selected);
+}
+
+.page-tree-row--disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.page-tree-row--disabled:hover {
+  background: transparent;
 }
 
 .page-tree-toggle,
@@ -1062,4 +1082,84 @@ code {
   .editor-panel {
     padding: 18px;
   }
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.35);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.modal {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+  max-width: 420px;
+  width: 100%;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 14px;
+}
+
+.modal h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.modal p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.modal-hint {
+  color: var(--muted);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-list {
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
+  display: grid;
+  gap: 2px;
+}
+
+.modal-list-item {
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.94rem;
+  cursor: pointer;
+}
+
+.modal-list-item:hover {
+  background: var(--hover);
+}
+
+.modal-list-item--active {
+  background: var(--selected);
+}
+
+.modal-tree-wrap {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 4px;
 }

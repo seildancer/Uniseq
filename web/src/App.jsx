@@ -115,19 +115,36 @@ function PageTree({
   onTogglePageTree,
   pageMenuOpenId,
   onPageMenuToggle,
+  onRename,
+  onMove,
+  onDelete,
+  pickerMode = false,
+  pickerValue = "",
+  onPickerSelect,
+  disabledIds = new Set(),
 }) {
   return (
     <ul className={depth === 0 ? "page-tree" : "page-tree page-tree--nested"}>
       {nodes.map(({ page, children }) => {
         const hasChildren = children.length > 0;
         const isExpanded = Boolean(expandedPageIds[page.page_id]);
-        const isActive = page.page_id === selectedPageId;
-        const isMenuOpen = pageMenuOpenId === page.page_id;
+        const isActive = !pickerMode && page.page_id === selectedPageId;
+        const isPicked = pickerMode && page.page_id === pickerValue;
+        const isMenuOpen = !pickerMode && pageMenuOpenId === page.page_id;
+        const isDisabled = pickerMode && disabledIds.has(page.page_id);
 
         return (
           <li key={page.page_id} className="page-tree-node">
             <div
-              className={isActive ? "page-tree-row page-tree-row--active" : "page-tree-row"}
+              className={
+                isActive
+                  ? "page-tree-row page-tree-row--active"
+                  : isPicked
+                    ? "page-tree-row page-tree-row--picked"
+                    : isDisabled
+                      ? "page-tree-row page-tree-row--disabled"
+                      : "page-tree-row"
+              }
               style={{ "--page-tree-depth": depth }}
             >
               {hasChildren ? (
@@ -158,37 +175,65 @@ function PageTree({
               <button
                 className="page-tree-item"
                 type="button"
-                onClick={() => onSelectPage(page.page_id)}
+                disabled={isDisabled}
+                onClick={() => {
+                  if (pickerMode) {
+                    if (!isDisabled) onPickerSelect?.(page.page_id);
+                  } else {
+                    onSelectPage(page.page_id);
+                  }
+                }}
               >
                 <span className="page-tree-title">{pageLabel(page)}</span>
               </button>
 
-              <div className="page-tree-actions">
-                <div className="page-tree-menu-wrap">
+              {!pickerMode && (
+                <div className="page-tree-actions">
+                  <div className="page-tree-menu-wrap">
+                    <button
+                      className="page-tree-action-btn"
+                      type="button"
+                      aria-label="More options"
+                      aria-expanded={isMenuOpen}
+                      onClick={() => onPageMenuToggle(page.page_id)}
+                    >
+                      ⋯
+                    </button>
+                    {isMenuOpen && (
+                      <div className="page-tree-dropdown">
+                        <button
+                          className="page-tree-dropdown-item"
+                          type="button"
+                          onClick={() => onRename(page.page_id)}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          className="page-tree-dropdown-item"
+                          type="button"
+                          onClick={() => onMove(page.page_id)}
+                        >
+                          Move
+                        </button>
+                        <button
+                          className="page-tree-dropdown-item"
+                          type="button"
+                          onClick={() => onDelete(page.page_id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
                   <button
                     className="page-tree-action-btn"
                     type="button"
-                    aria-label="More options"
-                    aria-expanded={isMenuOpen}
-                    onClick={() => onPageMenuToggle(page.page_id)}
+                    aria-label="Add subpage"
                   >
-                    ⋯
+                    +
                   </button>
-                  {isMenuOpen && (
-                    <div className="page-tree-dropdown">
-                      <button className="page-tree-dropdown-item" type="button">Move</button>
-                      <button className="page-tree-dropdown-item" type="button">Delete</button>
-                    </div>
-                  )}
                 </div>
-                <button
-                  className="page-tree-action-btn"
-                  type="button"
-                  aria-label="Add subpage"
-                >
-                  +
-                </button>
-              </div>
+              )}
             </div>
 
             {hasChildren && isExpanded ? (
@@ -201,6 +246,13 @@ function PageTree({
                 onTogglePageTree={onTogglePageTree}
                 pageMenuOpenId={pageMenuOpenId}
                 onPageMenuToggle={onPageMenuToggle}
+                onRename={onRename}
+                onMove={onMove}
+                onDelete={onDelete}
+                pickerMode={pickerMode}
+                pickerValue={pickerValue}
+                onPickerSelect={onPickerSelect}
+                disabledIds={disabledIds}
               />
             ) : null}
           </li>
@@ -230,6 +282,9 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const [pageMenuOpenId, setPageMenuOpenId] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [moveTarget, setMoveTarget] = useState("");
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages);
@@ -364,6 +419,105 @@ export default function App() {
       ...current,
       [pageId]: !current[pageId],
     }));
+  }
+
+  function openRenameModal(pageId) {
+    setPageMenuOpenId(null);
+    setRenameValue(readPageLeafName(pageId));
+    setModal({ type: "rename", pageId });
+  }
+
+  function openMoveModal(pageId) {
+    setPageMenuOpenId(null);
+    setMoveTarget("");
+    setModal({ type: "move", pageId });
+  }
+
+  function openDeleteModal(pageId) {
+    setPageMenuOpenId(null);
+    setModal({ type: "delete", pageId });
+  }
+
+  function closeModal() {
+    setModal(null);
+    setRenameValue("");
+    setMoveTarget("");
+  }
+
+  async function handleConfirmRename(newTitle) {
+    if (!modal?.pageId || !newTitle.trim()) return;
+    setBusyAction("rename");
+    setActionError(null);
+    try {
+      await invoke("rename_page", { pageId: modal.pageId, newTitle: newTitle.trim() });
+      const prefix = modal.pageId.lastIndexOf("/");
+      const newPageId =
+        prefix >= 0
+          ? modal.pageId.slice(0, prefix + 1) + newTitle.trim()
+          : "pages:" + newTitle.trim();
+      if (selectedPageId === modal.pageId) {
+        setSelectedPageId(newPageId);
+      }
+      if (loadedPageId === modal.pageId) {
+        setLoadedPageId(newPageId);
+      }
+      await loadWorkspaceLists();
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleConfirmMove(newParentPageId) {
+    if (!modal?.pageId) return;
+    setBusyAction("move");
+    setActionError(null);
+    try {
+      await invoke("move_page", {
+        pageId: modal.pageId,
+        newParentPageId: newParentPageId || null,
+      });
+      const leafName = readPageLeafName(modal.pageId);
+      const newPageId = newParentPageId
+        ? newParentPageId + "/" + leafName
+        : "pages:" + leafName;
+      if (selectedPageId === modal.pageId) {
+        setSelectedPageId(newPageId);
+      }
+      if (loadedPageId === modal.pageId) {
+        setLoadedPageId(newPageId);
+      }
+      await loadWorkspaceLists();
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleConfirmDelete() {
+    if (!modal?.pageId) return;
+    setBusyAction("delete");
+    setActionError(null);
+    try {
+      await invoke("delete_page", { pageId: modal.pageId });
+      if (selectedPageId === modal.pageId) {
+        setSelectedPageId("");
+        setSelectedPageText("");
+      }
+      if (loadedPageId === modal.pageId) {
+        setLoadedPageId(null);
+      }
+      await loadWorkspaceLists();
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function handleMinimizeWindow() {
@@ -712,6 +866,9 @@ export default function App() {
                     onTogglePageTree={handleTogglePageTree}
                     pageMenuOpenId={pageMenuOpenId}
                     onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
+                    onRename={openRenameModal}
+                    onMove={openMoveModal}
+                    onDelete={openDeleteModal}
                   />
                 )}
               </div>
@@ -735,6 +892,138 @@ export default function App() {
             </section>
           </div>
         </section>
+
+        {modal && (
+          <div className="modal-overlay" onClick={closeModal}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              {modal.type === "rename" && (
+                <>
+                  <h3>Rename page</h3>
+                  <div className="field">
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleConfirmRename(renameValue);
+                        }
+                        if (e.key === "Escape") {
+                          closeModal();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={closeModal}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={
+                        !renameValue.trim() ||
+                        renameValue.trim() === readPageLeafName(modal.pageId)
+                      }
+                      onClick={() => void handleConfirmRename(renameValue)}
+                    >
+                      {busyAction === "rename" ? "Renaming..." : "Rename"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "move" && (
+                <>
+                  <h3>Move page</h3>
+                  <p className="modal-hint">
+                    Choose a new parent for <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong>
+                  </p>
+                  <div className="modal-tree-wrap">
+                    <button
+                      className={
+                        moveTarget === ""
+                          ? "page-tree-row page-tree-row--picked"
+                          : "page-tree-row"
+                      }
+                      type="button"
+                      style={{ "--page-tree-depth": 0 }}
+                      onClick={() => setMoveTarget("")}
+                    >
+                      <span className="page-tree-toggle page-tree-toggle--placeholder" aria-hidden="true" />
+                      <span className="page-tree-item" style={{ textAlign: "left" }}>
+                        <span className="page-tree-title">Root (no parent)</span>
+                      </span>
+                    </button>
+                    <PageTree
+                      nodes={pageTree}
+                      expandedPageIds={expandedPageIds}
+                      onTogglePageTree={handleTogglePageTree}
+                      pickerMode
+                      pickerValue={moveTarget}
+                      onPickerSelect={setMoveTarget}
+                      disabledIds={new Set([
+                        modal.pageId,
+                        ...regularPages
+                          .filter((p) => p.page_id.startsWith(modal.pageId + "/"))
+                          .map((p) => p.page_id),
+                      ])}
+                    />
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={closeModal}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={busyAction === "move"}
+                      onClick={() => void handleConfirmMove(moveTarget)}
+                    >
+                      {busyAction === "move" ? "Moving..." : "Move"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "delete" && (
+                <>
+                  <h3>Delete page</h3>
+                  <p>
+                    Delete <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong> and all its subpages? This cannot be undone.
+                  </p>
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={closeModal}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={busyAction === "delete"}
+                      onClick={() => void handleConfirmDelete()}
+                    >
+                      {busyAction === "delete" ? "Deleting..." : "Delete"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     );
   }

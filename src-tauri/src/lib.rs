@@ -12,9 +12,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
     CoreError, FileFingerprint, FlatBlockSnapshot, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
-    PageContentSnapshot, PageCreate, PageId, PageLocation, PageName, PageSummary, SourceSpan,
-    WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession, create_workspace_root,
-    prepare_workspace_root,
+    PageContentSnapshot, PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName,
+    PageRename, PageSummary, SourceSpan, WatcherFallbackReason, WatcherMode, WorkspaceEvent,
+    WorkspaceSession, create_workspace_root, prepare_workspace_root,
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -224,6 +224,41 @@ impl WorkspaceController {
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
             .apply_page_create(PageCreate { page_id })
+            .map_err(ErrorDto::from)
+    }
+
+    fn rename_page(&self, page_id: String, new_title: String) -> CommandResult<()> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        let new_leaf_name = PageName::new(&new_title).map_err(CoreError::from)?;
+        self.session()?
+            .apply_page_rename(PageRename {
+                source_page_id: page_id,
+                new_leaf_name,
+            })
+            .map_err(ErrorDto::from)
+    }
+
+    fn move_page(&self, page_id: String, new_parent_page_id: Option<String>) -> CommandResult<()> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        let destination_parent_page_id = match new_parent_page_id {
+            Some(id) => Some(parse_page_id_input(&id).map_err(|_| ErrorDto::invalid_page_id(&id))?),
+            None => None,
+        };
+        self.session()?
+            .apply_page_move(PageMove {
+                source_page_id: page_id,
+                destination_parent_page_id,
+            })
+            .map_err(ErrorDto::from)
+    }
+
+    fn delete_page(&self, page_id: String) -> CommandResult<()> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        self.session()?
+            .apply_page_delete_subtree(PageDeleteSubtree { page_id })
             .map_err(ErrorDto::from)
     }
 
@@ -663,6 +698,29 @@ fn create_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()>
 }
 
 #[tauri::command]
+fn rename_page(
+    state: State<'_, AppState>,
+    page_id: String,
+    new_title: String,
+) -> CommandResult<()> {
+    state.controller.lock().unwrap().rename_page(page_id, new_title)
+}
+
+#[tauri::command]
+fn move_page(
+    state: State<'_, AppState>,
+    page_id: String,
+    new_parent_page_id: Option<String>,
+) -> CommandResult<()> {
+    state.controller.lock().unwrap().move_page(page_id, new_parent_page_id)
+}
+
+#[tauri::command]
+fn delete_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()> {
+    state.controller.lock().unwrap().delete_page(page_id)
+}
+
+#[tauri::command]
 fn page_incoming_refs(
     state: State<'_, AppState>,
     page_id: String,
@@ -720,6 +778,9 @@ pub fn run() {
             page_content,
             write_page_content,
             create_page,
+            rename_page,
+            move_page,
+            delete_page,
             page_incoming_refs,
             page_outgoing_refs,
             drain_workspace_events,
