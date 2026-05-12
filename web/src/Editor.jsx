@@ -8,6 +8,7 @@ import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
 import { $remark } from "@milkdown/utils";
 import breaks from "remark-breaks";
 
+import createBackspacePlugin from "./plugins/backspacePlugin";
 import createDeleteKeyPlugin from "./plugins/deleteKeyPlugin";
 import createIndentPlugin from "./plugins/indentPlugin";
 import createWikilinkPlugin, { resetWikilinkFocus } from "./plugins/wikilinkPlugin";
@@ -38,6 +39,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
         ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
 
         ctx.update(prosePluginsCtx, (plugins) => [
+          createBackspacePlugin(),
           createDeleteKeyPlugin(),
           createIndentPlugin(),
           taskListClickPlugin(),
