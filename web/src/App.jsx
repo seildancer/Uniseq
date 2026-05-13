@@ -43,15 +43,33 @@ function buildPageTree(pages) {
     childrenByParent.set(parentId, siblings);
   }
 
-  for (const siblings of childrenByParent.values()) {
-    siblings.sort((left, right) => left.page_id.localeCompare(right.page_id));
-  }
+  const comparePages = (left, right) => left.page_id.localeCompare(right.page_id);
 
-  const buildNodes = (parentId = null) =>
-    (childrenByParent.get(parentId) ?? []).map((page) => ({
-      page,
-      children: buildNodes(page.page_id),
-    }));
+  const buildNodes = (parentId = null) => {
+    const nodes = (childrenByParent.get(parentId) ?? []).map((page) => {
+      const children = buildNodes(page.page_id);
+      const subtreeModifiedAt = Math.max(
+        page.modified_at ?? Number.NEGATIVE_INFINITY,
+        ...children.map((child) => child.subtreeModifiedAt),
+      );
+
+      return {
+        page,
+        children,
+        subtreeModifiedAt,
+      };
+    });
+
+    nodes.sort((left, right) => {
+      if (left.subtreeModifiedAt !== right.subtreeModifiedAt) {
+        return right.subtreeModifiedAt - left.subtreeModifiedAt;
+      }
+
+      return comparePages(left.page, right.page);
+    });
+
+    return nodes;
+  };
 
   return buildNodes(null);
 }

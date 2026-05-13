@@ -932,7 +932,7 @@ mod tests {
         assert!(cache.page(&PageId::new(["A", "B", "C"]).unwrap()).is_none());
         assert_eq!(workspace.read_file("X.md"), "- [[A/B]] and [[A/B/C]]\n");
 
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
         let _x_blocks = read_api.page_content(&PageId::new(["X"]).unwrap()).unwrap();
         let x_outgoing = read_api.page_outgoing_refs(&PageId::new(["X"]).unwrap()).unwrap();
         assert_eq!(x_outgoing.len(), 2);
@@ -1002,7 +1002,7 @@ mod tests {
         )
         .unwrap();
 
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
         let incoming_refs = read_api
             .page_incoming_refs(&PageId::new(["A", "C"]).unwrap())
             .unwrap();

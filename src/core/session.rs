@@ -373,7 +373,12 @@ impl Drop for WorkspaceSession {
 
 impl WorkspaceSessionState {
     fn with_read_api<R>(&self, f: impl FnOnce(WorkspaceReadApi<'_>) -> R) -> R {
-        f(WorkspaceReadApi::new(&self.cache))
+        f(WorkspaceReadApi::new(&self.cache, &|page| {
+            self.fs_snapshot
+                .markdown_files
+                .get(&page.workspace_path)
+                .and_then(|stamp| stamp.modified_at)
+        }))
     }
 
     fn write_and_reparse_inner(

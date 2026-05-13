@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan, WorkspaceCache};
 
@@ -23,6 +24,7 @@ pub struct PageSummary {
     pub workspace_path: PathBuf,
     pub title: String,
     pub revision: FileFingerprint,
+    pub modified_at: Option<u64>,
     pub parent_page_id: Option<PageId>,
     pub child_page_count: usize,
 }
@@ -51,29 +53,40 @@ pub struct OutgoingPageRefSnapshot {
     pub target_exists: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct WorkspaceReadApi<'a> {
     cache: &'a WorkspaceCache,
+    page_modified_at: &'a dyn Fn(&Page) -> Option<SystemTime>,
 }
 
 impl<'a> WorkspaceReadApi<'a> {
-    pub fn new(cache: &'a WorkspaceCache) -> Self {
-        Self { cache }
+    pub fn new(
+        cache: &'a WorkspaceCache,
+        page_modified_at: &'a dyn Fn(&Page) -> Option<SystemTime>,
+    ) -> Self {
+        Self {
+            cache,
+            page_modified_at,
+        }
     }
 
     pub fn all_pages(&self) -> Vec<PageSummary> {
-        self.cache.pages().values().map(page_summary).collect()
+        self.cache
+            .pages()
+            .values()
+            .map(|page| page_summary(page, self.page_modified_at))
+            .collect()
     }
 
     pub fn page_summary(&self, page_id: &PageId) -> Result<PageSummary, CoreError> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
-        Ok(page_summary(page))
+        Ok(page_summary(page, self.page_modified_at))
     }
 
     pub fn page_detail(&self, page_id: &PageId) -> Result<PageDetail, CoreError> {
         let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
         Ok(PageDetail {
-            summary: page_summary(page),
+            summary: page_summary(page, self.page_modified_at),
             incoming_refs: incoming_ref_snapshots(self.cache, page_id)?,
             outgoing_refs: outgoing_ref_snapshots(self.cache, page),
             outgoing_ref_count: page.outgoing_refs().count(),
@@ -87,7 +100,7 @@ impl<'a> WorkspaceReadApi<'a> {
             .map(|child_page_id| {
                 self.cache
                     .page(child_page_id)
-                    .map(page_summary)
+                    .map(|page| page_summary(page, self.page_modified_at))
                     .ok_or(CoreError::MissingPage)
             })
             .collect()
@@ -128,7 +141,7 @@ impl<'a> WorkspaceReadApi<'a> {
                 page.outgoing_refs()
                     .any(|outgoing_ref| self.cache.page(&outgoing_ref.target_page_id).is_none())
             })
-            .map(page_summary)
+            .map(|page| page_summary(page, self.page_modified_at))
             .collect()
     }
 
@@ -138,7 +151,7 @@ impl<'a> WorkspaceReadApi<'a> {
             .values()
             .skip(offset)
             .take(limit)
-            .map(page_summary)
+            .map(|page| page_summary(page, self.page_modified_at))
             .collect()
     }
 }
@@ -186,16 +199,24 @@ fn incoming_ref_snapshots(
         .collect())
 }
 
-fn page_summary(page: &Page) -> PageSummary {
+fn page_summary(page: &Page, page_modified_at: &dyn Fn(&Page) -> Option<SystemTime>) -> PageSummary {
     PageSummary {
         page_id: page.page_id.clone(),
         location: page.location.clone(),
         workspace_path: page.workspace_path.clone(),
         title: page.title.clone(),
         revision: page.fingerprint,
+        modified_at: page_modified_at(page).and_then(system_time_to_unix_ms),
         parent_page_id: page.parent_page_id(),
         child_page_count: page.child_page_ids.len(),
     }
+}
+
+fn system_time_to_unix_ms(value: SystemTime) -> Option<u64> {
+    value
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 fn outgoing_ref_snapshots(
@@ -238,7 +259,7 @@ mod tests {
             parsed_page(&["A", "B"], ""),
             parsed_page(&["C"], ""),
         ]);
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
 
         assert_eq!(
             read_api.all_pages(),
@@ -249,6 +270,7 @@ mod tests {
                     workspace_path: std::path::PathBuf::from("pages").join("A.md"),
                     title: "A".to_owned(),
                     revision: FileFingerprint::from_text(""),
+                    modified_at: None,
                     parent_page_id: None,
                     child_page_count: 1,
                 },
@@ -258,6 +280,7 @@ mod tests {
                     workspace_path: std::path::PathBuf::from("pages").join("A___B.md"),
                     title: "B".to_owned(),
                     revision: FileFingerprint::from_text(""),
+                    modified_at: None,
                     parent_page_id: Some(PageId::new(["A"]).unwrap()),
                     child_page_count: 0,
                 },
@@ -267,6 +290,7 @@ mod tests {
                     workspace_path: std::path::PathBuf::from("pages").join("C.md"),
                     title: "C".to_owned(),
                     revision: FileFingerprint::from_text(""),
+                    modified_at: None,
                     parent_page_id: None,
                     child_page_count: 0,
                 },
@@ -279,7 +303,7 @@ mod tests {
         let text = "- parent [[B]]\n\t- child #Missing\n";
         let cache =
             WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
 
         let detail = read_api.page_detail(&PageId::new(["A"]).unwrap()).unwrap();
 
@@ -295,7 +319,7 @@ mod tests {
         let text = "- parent [[B]]\n\t- child\n";
         let cache =
             WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
 
         let incoming_refs = read_api
             .page_incoming_refs(&PageId::new(["B"]).unwrap())
@@ -318,7 +342,7 @@ mod tests {
     fn incoming_refs_require_existing_target_pages() {
         let text = "- [[Missing]]\n";
         let cache = WorkspaceCache::from_pages([parsed_page(&["A"], text)]);
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
 
         assert_eq!(
             read_api
@@ -333,7 +357,7 @@ mod tests {
         let text = "- [[B]] and [[Missing]]\n";
         let cache =
             WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
-        let read_api = WorkspaceReadApi::new(&cache);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
 
         let outgoing_refs = read_api
             .page_outgoing_refs(&PageId::new(["A"]).unwrap())

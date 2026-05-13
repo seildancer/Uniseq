@@ -45,6 +45,7 @@ struct PageSummaryDto {
     workspace_path: String,
     title: String,
     revision: FileFingerprintDto,
+    modified_at: Option<u64>,
     parent_page_id: Option<String>,
     child_page_count: usize,
 }
@@ -350,6 +351,7 @@ impl From<PageSummary> for PageSummaryDto {
             workspace_path: workspace_path_to_string(&value.workspace_path),
             title: value.title,
             revision: FileFingerprintDto::from(value.revision),
+            modified_at: value.modified_at,
             parent_page_id: value.parent_page_id.as_ref().map(page_id_to_string),
             child_page_count: value.child_page_count,
         }
