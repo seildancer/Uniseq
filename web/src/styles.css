@@ -622,6 +622,33 @@ h2 {
   background: transparent;
 }
 
+.page-tree-row--dragged {
+  opacity: 0.56;
+}
+
+.page-tree-row--drop-before::before,
+.page-tree-row--drop-after::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--page-tree-depth, 0) * 18px + 6px);
+  right: 6px;
+  height: 2px;
+  background: #8a6542;
+  border-radius: 999px;
+}
+
+.page-tree-row--drop-before::before {
+  top: 0;
+}
+
+.page-tree-row--drop-after::after {
+  bottom: 0;
+}
+
+.page-tree-row--drop-child {
+  background: color-mix(in srgb, var(--selected) 64%, transparent);
+}
+
 .page-tree-toggle,
 .page-tree-item {
   border: 0;
@@ -665,6 +692,12 @@ h2 {
   padding: 4px 8px 4px 6px;
   border-radius: 8px;
   text-align: left;
+  cursor: grab;
+  touch-action: none;
+}
+
+.page-tree-item:active {
+  cursor: grabbing;
 }
 
 .page-tree-title {
@@ -741,6 +774,27 @@ h2 {
 
 .page-tree-dropdown-item:hover {
   background: var(--hover);
+}
+
+.page-tree-drag-ghost {
+  position: fixed;
+  z-index: 400;
+  pointer-events: none;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, var(--ink) 30%);
+  background: color-mix(in srgb, var(--bg) 92%, white 8%);
+  box-shadow: 0 14px 30px rgba(17, 17, 17, 0.18);
+}
+
+.page-tree-drag-ghost-title {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.94rem;
+  color: var(--ink);
 }
 
 .sidebar-footer {

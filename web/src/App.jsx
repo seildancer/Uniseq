@@ -10,6 +10,10 @@ const INITIAL_CREATE_STATE = {
 };
 
 const NOTICE_AUTO_DISMISS_MS = 4000;
+const ROOT_PARENT_KEY = "__root__";
+const DRAG_LONG_PRESS_MS = 260;
+const DRAG_MOVE_SLOP_PX = 8;
+const AUTO_EXPAND_ON_HOVER_MS = 600;
 
 const appWindow = getCurrentWindow();
 
@@ -33,8 +37,25 @@ function pageLabel(page) {
   return page.title || readPageLeafName(page.page_id) || page.page_id;
 }
 
-function buildPageTree(pages) {
+function parentOrderKey(parentPageId) {
+  return parentPageId ?? ROOT_PARENT_KEY;
+}
+
+function orderChildPageIdsForParent(pages, parentPageId, pageOrderByParent) {
+  const siblings = pages
+    .filter((page) => (page.parent_page_id ?? null) === (parentPageId ?? null))
+    .map((page) => page.page_id);
+  const siblingSet = new Set(siblings);
+  const stored = pageOrderByParent[parentOrderKey(parentPageId)] ?? [];
+  const ordered = stored.filter((pageId) => siblingSet.has(pageId));
+  const seen = new Set(ordered);
+  ordered.push(...siblings.filter((pageId) => !seen.has(pageId)).sort((left, right) => left.localeCompare(right)));
+  return ordered;
+}
+
+function buildPageTree(pages, pageOrderByParent) {
   const childrenByParent = new Map();
+  const pagesById = new Map(pages.map((page) => [page.page_id, page]));
 
   for (const page of pages) {
     const parentId = page.parent_page_id ?? null;
@@ -43,30 +64,20 @@ function buildPageTree(pages) {
     childrenByParent.set(parentId, siblings);
   }
 
-  const comparePages = (left, right) => left.page_id.localeCompare(right.page_id);
-
   const buildNodes = (parentId = null) => {
-    const nodes = (childrenByParent.get(parentId) ?? []).map((page) => {
+    const orderedChildIds = orderChildPageIdsForParent(pages, parentId, pageOrderByParent);
+    const nodes = orderedChildIds.map((pageId) => {
+      const page = pagesById.get(pageId);
+      if (!page) {
+        return null;
+      }
       const children = buildNodes(page.page_id);
-      const subtreeModifiedAt = Math.max(
-        page.modified_at ?? Number.NEGATIVE_INFINITY,
-        ...children.map((child) => child.subtreeModifiedAt),
-      );
 
       return {
         page,
         children,
-        subtreeModifiedAt,
       };
-    });
-
-    nodes.sort((left, right) => {
-      if (left.subtreeModifiedAt !== right.subtreeModifiedAt) {
-        return right.subtreeModifiedAt - left.subtreeModifiedAt;
-      }
-
-      return comparePages(left.page, right.page);
-    });
+    }).filter(Boolean);
 
     return nodes;
   };
@@ -108,6 +119,57 @@ function isPageInSubtree(pageId, rootPageId) {
   }
 
   return pageId === rootPageId || pageId.startsWith(rootPageId + "/");
+}
+
+function remapPageOrderEntries(pageOrderByParent, sourcePageId, targetPageId) {
+  const next = {};
+
+  for (const [parentKey, orderedIds] of Object.entries(pageOrderByParent)) {
+    const remappedParentKey =
+      parentKey === ROOT_PARENT_KEY
+        ? parentKey
+        : remapSubtreePageId(parentKey, sourcePageId, targetPageId);
+    const existing = next[remappedParentKey] ?? [];
+    const seen = new Set(existing);
+
+    for (const orderedId of orderedIds) {
+      const remappedId = remapSubtreePageId(orderedId, sourcePageId, targetPageId);
+      if (!seen.has(remappedId)) {
+        existing.push(remappedId);
+        seen.add(remappedId);
+      }
+    }
+
+    next[remappedParentKey] = existing;
+  }
+
+  return next;
+}
+
+function removePageOrderEntries(pageOrderByParent, sourcePageId) {
+  return Object.fromEntries(
+    Object.entries(pageOrderByParent)
+      .filter(([parentKey]) => parentKey === ROOT_PARENT_KEY || !isPageInSubtree(parentKey, sourcePageId))
+      .map(([parentKey, orderedIds]) => [
+        parentKey,
+        orderedIds.filter((pageId) => !isPageInSubtree(pageId, sourcePageId)),
+      ]),
+  );
+}
+
+function insertPageIdRelative(orderedIds, movingPageId, targetPageId, mode) {
+  const filtered = orderedIds.filter((pageId) => pageId !== movingPageId);
+  const targetIndex = filtered.indexOf(targetPageId);
+  if (targetIndex < 0) {
+    return [...filtered, movingPageId];
+  }
+
+  const insertIndex = mode === "before" ? targetIndex : targetIndex + 1;
+  return [
+    ...filtered.slice(0, insertIndex),
+    movingPageId,
+    ...filtered.slice(insertIndex),
+  ];
 }
 
 function normalizeError(error) {
@@ -166,6 +228,8 @@ function PageTree({
   pickerValue = "",
   onPickerSelect,
   disabledIds = new Set(),
+  dragState = null,
+  onDragItemPointerDown,
 }) {
   return (
     <ul className={depth === 0 ? "page-tree" : "page-tree page-tree--nested"}>
@@ -176,20 +240,26 @@ function PageTree({
         const isPicked = pickerMode && page.page_id === pickerValue;
         const isMenuOpen = !pickerMode && pageMenuOpenId === page.page_id;
         const isDisabled = pickerMode && disabledIds.has(page.page_id);
+        const isDragged = dragState?.sourcePageId === page.page_id;
+        const hoverMode = dragState?.hover?.pageId === page.page_id ? dragState.hover.mode : null;
+        const rowClassName = [
+          "page-tree-row",
+          isActive ? "page-tree-row--active" : "",
+          isPicked ? "page-tree-row--picked" : "",
+          isDisabled ? "page-tree-row--disabled" : "",
+          isDragged ? "page-tree-row--dragged" : "",
+          hoverMode === "before" ? "page-tree-row--drop-before" : "",
+          hoverMode === "after" ? "page-tree-row--drop-after" : "",
+          hoverMode === "child" ? "page-tree-row--drop-child" : "",
+        ].filter(Boolean).join(" ");
 
         return (
           <li key={page.page_id} className="page-tree-node">
             <div
-              className={
-                isActive
-                  ? "page-tree-row page-tree-row--active"
-                  : isPicked
-                    ? "page-tree-row page-tree-row--picked"
-                    : isDisabled
-                      ? "page-tree-row page-tree-row--disabled"
-                      : "page-tree-row"
-              }
+              className={rowClassName}
               style={{ "--page-tree-depth": depth }}
+              data-page-row="true"
+              data-page-id={page.page_id}
             >
               {hasChildren ? (
                 <button
@@ -220,6 +290,12 @@ function PageTree({
                 className="page-tree-item"
                 type="button"
                 disabled={isDisabled}
+                data-no-window-drag="true"
+                onPointerDown={(event) => {
+                  if (!pickerMode && !isDisabled) {
+                    onDragItemPointerDown?.(event, page.page_id, pageLabel(page));
+                  }
+                }}
                 onClick={() => {
                   if (pickerMode) {
                     if (!isDisabled) onPickerSelect?.(page.page_id);
@@ -297,6 +373,8 @@ function PageTree({
                 pickerValue={pickerValue}
                 onPickerSelect={onPickerSelect}
                 disabledIds={disabledIds}
+                dragState={dragState}
+                onDragItemPointerDown={onDragItemPointerDown}
               />
             ) : null}
           </li>
@@ -314,6 +392,7 @@ export default function App() {
   const [mode, setMode] = useState("booting");
   const [workspace, setWorkspace] = useState(null);
   const [pages, setPages] = useState([]);
+  const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedPageText, setSelectedPageText] = useState("");
@@ -331,9 +410,14 @@ export default function App() {
   const [modal, setModal] = useState(null);
   const [renameValue, setRenameValue] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
+  const [dragState, setDragState] = useState(null);
+  const dragLongPressTimerRef = useRef(null);
+  const dragHoverExpandTimerRef = useRef(null);
+  const suppressPageClickRef = useRef(false);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
-  const pageTree = buildPageTree(regularPages);
+  const pageTree = buildPageTree(regularPages, pageOrderByParent);
+  const regularPagesById = new Map(regularPages.map((page) => [page.page_id, page]));
   const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
   const loadedPage = regularPages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageEditorKey = loadedPageId && selectedPageRevision
@@ -345,12 +429,14 @@ export default function App() {
     !createState.folderName.trim();
 
   async function loadWorkspaceLists() {
-    const [allPages, allStreamNames] = await Promise.all([
+    const [allPages, allStreamNames, order] = await Promise.all([
       invoke("all_pages"),
       invoke("all_streams"),
+      invoke("page_order"),
     ]);
     setPages(allPages);
     setStreamNames(allStreamNames);
+    setPageOrderByParent(order.sibling_order_by_parent ?? {});
   }
 
   const loadPageContentSeqRef = useRef(0);
@@ -461,6 +547,7 @@ export default function App() {
     await invoke("close_workspace");
     setWorkspace(null);
     setPages([]);
+    setPageOrderByParent({});
     setStreamNames([]);
     setSelectedPageId("");
     setSelectedPageText("");
@@ -468,10 +555,15 @@ export default function App() {
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
+    setDragState(null);
     setMode("onboarding");
   }
 
   function handleSelectPage(pageId) {
+    if (suppressPageClickRef.current) {
+      suppressPageClickRef.current = false;
+      return;
+    }
     setSelectedPageId(pageId);
     setActionError(null);
   }
@@ -517,6 +609,7 @@ export default function App() {
         prefix >= 0
           ? modal.pageId.slice(0, prefix + 1) + newTitle.trim()
           : "pages:" + newTitle.trim();
+      setPageOrderByParent((current) => remapPageOrderEntries(current, modal.pageId, newPageId));
       setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
@@ -541,6 +634,7 @@ export default function App() {
       const newPageId = newParentPageId
         ? newParentPageId + "/" + leafName
         : "pages:" + leafName;
+      setPageOrderByParent((current) => remapPageOrderEntries(current, modal.pageId, newPageId));
       setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
@@ -558,6 +652,7 @@ export default function App() {
     setActionError(null);
     try {
       await invoke("delete_page", { pageId: modal.pageId });
+      setPageOrderByParent((current) => removePageOrderEntries(current, modal.pageId));
       if (isPageInSubtree(selectedPageId, modal.pageId)) {
         setSelectedPageId("");
         setSelectedPageText("");
@@ -575,6 +670,169 @@ export default function App() {
     }
   }
 
+  async function persistSiblingOrder(parentPageId, orderedChildPageIds) {
+    const parentKey = parentOrderKey(parentPageId);
+    setPageOrderByParent((current) => ({
+      ...current,
+      [parentKey]: orderedChildPageIds,
+    }));
+    await invoke("set_page_sibling_order", {
+      parentPageId: parentPageId ?? null,
+      orderedChildPageIds,
+    });
+  }
+
+  function clearPendingDragState() {
+    if (dragLongPressTimerRef.current) {
+      clearTimeout(dragLongPressTimerRef.current);
+      dragLongPressTimerRef.current = null;
+    }
+    if (dragHoverExpandTimerRef.current) {
+      clearTimeout(dragHoverExpandTimerRef.current.timerId ?? dragHoverExpandTimerRef.current);
+      dragHoverExpandTimerRef.current = null;
+    }
+  }
+
+  function computeDragHover(clientX, clientY, sourcePageId) {
+    const row = document.elementFromPoint(clientX, clientY)?.closest?.("[data-page-row='true']");
+    if (!row) {
+      return null;
+    }
+
+    const targetPageId = row.getAttribute("data-page-id");
+    const targetPage = regularPagesById.get(targetPageId);
+    if (!targetPage || targetPageId === sourcePageId || isPageInSubtree(targetPageId, sourcePageId)) {
+      return null;
+    }
+
+    const rect = row.getBoundingClientRect();
+    const upperBound = rect.top + rect.height * 0.28;
+    const lowerBound = rect.bottom - rect.height * 0.28;
+    const mode = clientY <= upperBound ? "before" : clientY >= lowerBound ? "after" : "child";
+    const parentPageId =
+      mode === "child" ? targetPage.page_id : targetPage.parent_page_id ?? null;
+
+    return {
+      mode,
+      pageId: targetPage.page_id,
+      parentPageId,
+    };
+  }
+
+  async function performTreeDrop(currentDragState) {
+    const hover = currentDragState?.hover;
+    const sourcePageId = currentDragState?.sourcePageId;
+    if (!hover || !sourcePageId) {
+      return;
+    }
+
+    const sourcePage = regularPagesById.get(sourcePageId);
+    if (!sourcePage) {
+      return;
+    }
+
+    const oldParentPageId = sourcePage.parent_page_id ?? null;
+    const leafName = readPageLeafName(sourcePageId);
+    const newParentPageId = hover.parentPageId ?? null;
+    const newPageId = newParentPageId ? `${newParentPageId}/${leafName}` : `pages:${leafName}`;
+    const nextOrderParentId = hover.mode === "child" ? hover.pageId : newParentPageId;
+    const targetParentPageId = hover.mode === "child" ? hover.pageId : hover.parentPageId ?? null;
+    const currentSiblingOrder = orderChildPageIdsForParent(regularPages, targetParentPageId, pageOrderByParent);
+
+    let nextSiblingOrder;
+    if (hover.mode === "child") {
+      nextSiblingOrder = [...currentSiblingOrder.filter((pageId) => pageId !== sourcePageId), newPageId];
+    } else {
+      nextSiblingOrder = insertPageIdRelative(
+        currentSiblingOrder.map((pageId) => (pageId === sourcePageId ? newPageId : pageId)),
+        newPageId,
+        hover.pageId,
+        hover.mode,
+      );
+    }
+
+    const oldParentNextOrder = orderChildPageIdsForParent(regularPages, oldParentPageId, pageOrderByParent)
+      .filter((pageId) => pageId !== sourcePageId);
+
+    const isSameParent = oldParentPageId === newParentPageId;
+    const isStructuralMove = sourcePageId !== newPageId;
+    const isOrderChanged = JSON.stringify(currentSiblingOrder) !== JSON.stringify(nextSiblingOrder);
+
+    if (!isStructuralMove && !isOrderChanged) {
+      return;
+    }
+
+    setBusyAction("drag-move");
+    setActionError(null);
+
+    try {
+      if (isStructuralMove) {
+        await invoke("move_page", {
+          pageId: sourcePageId,
+          newParentPageId: newParentPageId ?? null,
+        });
+        setPageOrderByParent((current) => remapPageOrderEntries(current, sourcePageId, newPageId));
+        setSelectedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
+        setLoadedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
+      }
+
+      if (!isSameParent) {
+        await persistSiblingOrder(oldParentPageId, oldParentNextOrder);
+      }
+      await persistSiblingOrder(nextOrderParentId, nextSiblingOrder);
+      if (isStructuralMove) {
+        await loadWorkspaceLists();
+      }
+    } catch (error) {
+      setActionError(normalizeError(error));
+      await loadWorkspaceLists().catch(() => {});
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function handleDragItemPointerDown(event, sourcePageId, sourceLabel) {
+    if (busyAction || modal) {
+      return;
+    }
+
+    clearPendingDragState();
+
+    const nextDragState = {
+      sourcePageId,
+      sourceLabel,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      startX: event.clientX,
+      startY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      hover: null,
+      active: event.pointerType === "mouse",
+    };
+
+    if (event.pointerType === "mouse") {
+      setDragState(nextDragState);
+      return;
+    }
+
+    dragLongPressTimerRef.current = window.setTimeout(() => {
+      setDragState((current) => {
+        if (
+          current &&
+          current.pointerId === nextDragState.pointerId &&
+          current.sourcePageId === nextDragState.sourcePageId
+        ) {
+          return { ...current, active: true };
+        }
+        return current;
+      });
+      dragLongPressTimerRef.current = null;
+    }, DRAG_LONG_PRESS_MS);
+
+    setDragState(nextDragState);
+  }
+
   async function handleMinimizeWindow() {
     await appWindow.minimize();
   }
@@ -586,6 +844,89 @@ export default function App() {
   async function handleCloseWindow() {
     await appWindow.close();
   }
+
+  useEffect(() => {
+    if (!dragState) {
+      clearPendingDragState();
+      return undefined;
+    }
+
+    const handlePointerMove = (event) => {
+      if (event.pointerId !== dragState.pointerId) {
+        return;
+      }
+
+      if (!dragState.active) {
+        const distance = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
+        if (distance > DRAG_MOVE_SLOP_PX) {
+          if (dragState.pointerType === "mouse") {
+            suppressPageClickRef.current = true;
+            setDragState((current) => current ? {
+              ...current,
+              active: true,
+              clientX: event.clientX,
+              clientY: event.clientY,
+            } : current);
+          } else {
+            clearPendingDragState();
+            setDragState(null);
+          }
+        }
+        return;
+      }
+
+      const hover = computeDragHover(event.clientX, event.clientY, dragState.sourcePageId);
+      setDragState((current) => (current ? {
+        ...current,
+        hover,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      } : current));
+
+      if (
+        hover?.mode === "child" &&
+        regularPagesById.get(hover.pageId)?.child_page_count > 0 &&
+        !expandedPageIds[hover.pageId]
+      ) {
+        if (dragHoverExpandTimerRef.current?.pageId !== hover.pageId) {
+          clearTimeout(dragHoverExpandTimerRef.current?.timerId);
+          dragHoverExpandTimerRef.current = {
+            pageId: hover.pageId,
+            timerId: window.setTimeout(() => {
+              setExpandedPageIds((current) => ({ ...current, [hover.pageId]: true }));
+              dragHoverExpandTimerRef.current = null;
+            }, AUTO_EXPAND_ON_HOVER_MS),
+          };
+        }
+      } else if (dragHoverExpandTimerRef.current) {
+        clearTimeout(dragHoverExpandTimerRef.current.timerId);
+        dragHoverExpandTimerRef.current = null;
+      }
+    };
+
+    const finishDrag = async (event) => {
+      if (event.pointerId !== dragState.pointerId) {
+        return;
+      }
+      clearPendingDragState();
+      const currentDragState = dragState;
+      setDragState(null);
+      if (currentDragState.active) {
+        suppressPageClickRef.current = true;
+        await performTreeDrop(currentDragState);
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+    };
+  }, [dragState, expandedPageIds, pageOrderByParent, regularPages]);
 
   function handleTopbarMouseDown(event) {
     if (event.button !== 0) {
@@ -951,6 +1292,8 @@ export default function App() {
                     onRename={openRenameModal}
                     onMove={openMoveModal}
                     onDelete={openDeleteModal}
+                    dragState={dragState?.active ? dragState : null}
+                    onDragItemPointerDown={handleDragItemPointerDown}
                   />
                 )}
               </div>
@@ -975,6 +1318,18 @@ export default function App() {
               )}
             </section>
           </div>
+
+          {dragState?.active ? (
+            <div
+              className="page-tree-drag-ghost"
+              style={{
+                left: dragState.clientX + 14,
+                top: dragState.clientY + 14,
+              }}
+            >
+              <span className="page-tree-drag-ghost-title">{dragState.sourceLabel}</span>
+            </div>
+          ) : null}
         </section>
 
         {modal && (
@@ -1058,6 +1413,7 @@ export default function App() {
                           .filter((p) => p.page_id.startsWith(modal.pageId + "/"))
                           .map((p) => p.page_id),
                       ])}
+                      dragState={null}
                     />
                   </div>
                   <div className="modal-actions">

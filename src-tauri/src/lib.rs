@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -16,6 +17,9 @@ use uniseq_backend::{
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
+const PAGE_ORDER_FILE_NAME: &str = "workspace-page-order.json";
+const ROOT_PARENT_ORDER_KEY: &str = "__root__";
+
 #[derive(Default)]
 struct AppState {
     controller: Mutex<WorkspaceController>,
@@ -70,6 +74,11 @@ struct PageContentDto {
     revision: FileFingerprintDto,
     blocks: Vec<FlatBlockDto>,
     text: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct PageOrderDto {
+    sibling_order_by_parent: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -145,6 +154,16 @@ struct ErrorDto {
     path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+struct PageOrderStore {
+    workspaces: BTreeMap<String, WorkspacePageOrder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+struct WorkspacePageOrder {
+    sibling_order_by_parent: BTreeMap<String, Vec<String>>,
+}
+
 type CommandResult<T> = Result<T, ErrorDto>;
 
 impl WorkspaceController {
@@ -186,6 +205,24 @@ impl WorkspaceController {
 
     fn all_streams(&self) -> CommandResult<Vec<String>> {
         self.session()?.all_streams().map_err(ErrorDto::from)
+    }
+
+    fn page_order(&self, app: &AppHandle) -> CommandResult<PageOrderDto> {
+        let workspace_root = self.session()?.workspace_root();
+        let pages = self.session()?.all_pages();
+        let mut store = read_page_order_store(app)?;
+        let workspace_order = store
+            .workspaces
+            .entry(workspace_root_key(&workspace_root))
+            .or_insert_with(WorkspacePageOrder::default);
+        let normalized = normalize_workspace_page_order(workspace_order, &pages);
+        if normalized != *workspace_order {
+            *workspace_order = normalized.clone();
+            write_page_order_store(app, &store)?;
+        }
+        Ok(PageOrderDto {
+            sibling_order_by_parent: normalized.sibling_order_by_parent,
+        })
     }
 
     fn page_summary(&self, page_id: String) -> CommandResult<PageSummaryDto> {
@@ -241,39 +278,93 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
-    fn rename_page(&self, page_id: String, new_title: String) -> CommandResult<()> {
+    fn rename_page(&self, app: &AppHandle, page_id: String, new_title: String) -> CommandResult<()> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         let new_leaf_name = PageName::new(&new_title).map_err(CoreError::from)?;
+        let target_page_id = renamed_page_id_string(&page_id, &new_leaf_name);
         self.session()?
             .apply_page_rename(PageRename {
-                source_page_id: page_id,
+                source_page_id: page_id.clone(),
                 new_leaf_name,
             })
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from)?;
+        self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id)
     }
 
-    fn move_page(&self, page_id: String, new_parent_page_id: Option<String>) -> CommandResult<()> {
+    fn move_page(
+        &self,
+        app: &AppHandle,
+        page_id: String,
+        new_parent_page_id: Option<String>,
+    ) -> CommandResult<()> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         let destination_parent_page_id = match new_parent_page_id {
             Some(id) => Some(parse_page_id_input(&id).map_err(|_| ErrorDto::invalid_page_id(&id))?),
             None => None,
         };
+        let target_page_id = moved_page_id_string(&page_id, destination_parent_page_id.as_ref());
         self.session()?
             .apply_page_move(PageMove {
-                source_page_id: page_id,
+                source_page_id: page_id.clone(),
                 destination_parent_page_id,
             })
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from)?;
+        self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id)
     }
 
-    fn delete_page(&self, page_id: String) -> CommandResult<()> {
+    fn delete_page(&self, app: &AppHandle, page_id: String) -> CommandResult<()> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
-            .apply_page_delete_subtree(PageDeleteSubtree { page_id })
-            .map_err(ErrorDto::from)
+            .apply_page_delete_subtree(PageDeleteSubtree {
+                page_id: page_id.clone(),
+            })
+            .map_err(ErrorDto::from)?;
+        self.remove_page_order_subtree(app, &page_id_to_string(&page_id))
+    }
+
+    fn set_page_sibling_order(
+        &self,
+        app: &AppHandle,
+        parent_page_id: Option<String>,
+        ordered_child_page_ids: Vec<String>,
+    ) -> CommandResult<()> {
+        let canonical_parent_page_id = parent_page_id
+            .as_deref()
+            .map(parse_page_id_input)
+            .transpose()
+            .map_err(|_| {
+                parent_page_id
+                    .as_deref()
+                    .map(ErrorDto::invalid_page_id)
+                    .unwrap_or_else(ErrorDto::no_workspace_open)
+            })?
+            .as_ref()
+            .map(page_id_to_string);
+        let ordered_child_page_ids = ordered_child_page_ids
+            .iter()
+            .map(|page_id| {
+                parse_page_id_input(page_id)
+                    .map(|parsed| page_id_to_string(&parsed))
+                    .map_err(|_| ErrorDto::invalid_page_id(page_id))
+            })
+            .collect::<CommandResult<Vec<_>>>()?;
+
+        let workspace_root = self.session()?.workspace_root();
+        let pages = self.session()?.all_pages();
+        let mut store = read_page_order_store(app)?;
+        let workspace_order = store
+            .workspaces
+            .entry(workspace_root_key(&workspace_root))
+            .or_insert_with(WorkspacePageOrder::default);
+        workspace_order.sibling_order_by_parent.insert(
+            parent_order_key(canonical_parent_page_id.as_deref()),
+            ordered_child_page_ids,
+        );
+        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
+        write_page_order_store(app, &store)
     }
 
     fn page_incoming_refs(&self, page_id: String) -> CommandResult<Vec<IncomingPageRefDto>> {
@@ -329,6 +420,37 @@ impl WorkspaceController {
         self.session
             .as_mut()
             .ok_or_else(ErrorDto::no_workspace_open)
+    }
+
+    fn remap_page_order_subtree(
+        &self,
+        app: &AppHandle,
+        source_page_id: &str,
+        target_page_id: &str,
+    ) -> CommandResult<()> {
+        let workspace_root = self.session()?.workspace_root();
+        let pages = self.session()?.all_pages();
+        let mut store = read_page_order_store(app)?;
+        let workspace_order = store
+            .workspaces
+            .entry(workspace_root_key(&workspace_root))
+            .or_insert_with(WorkspacePageOrder::default);
+        remap_workspace_page_order_subtree(workspace_order, source_page_id, target_page_id);
+        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
+        write_page_order_store(app, &store)
+    }
+
+    fn remove_page_order_subtree(&self, app: &AppHandle, source_page_id: &str) -> CommandResult<()> {
+        let workspace_root = self.session()?.workspace_root();
+        let pages = self.session()?.all_pages();
+        let mut store = read_page_order_store(app)?;
+        let workspace_order = store
+            .workspaces
+            .entry(workspace_root_key(&workspace_root))
+            .or_insert_with(WorkspacePageOrder::default);
+        remove_workspace_page_order_subtree(workspace_order, source_page_id);
+        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
+        write_page_order_store(app, &store)
     }
 }
 
@@ -690,6 +812,11 @@ fn all_streams(state: State<'_, AppState>) -> CommandResult<Vec<String>> {
 }
 
 #[tauri::command]
+fn page_order(state: State<'_, AppState>, app: AppHandle) -> CommandResult<PageOrderDto> {
+    state.controller.lock().unwrap().page_order(&app)
+}
+
+#[tauri::command]
 fn page_summary(state: State<'_, AppState>, page_id: String) -> CommandResult<PageSummaryDto> {
     state.controller.lock().unwrap().page_summary(page_id)
 }
@@ -726,24 +853,40 @@ fn create_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()>
 #[tauri::command]
 fn rename_page(
     state: State<'_, AppState>,
+    app: AppHandle,
     page_id: String,
     new_title: String,
 ) -> CommandResult<()> {
-    state.controller.lock().unwrap().rename_page(page_id, new_title)
+    state.controller.lock().unwrap().rename_page(&app, page_id, new_title)
 }
 
 #[tauri::command]
 fn move_page(
     state: State<'_, AppState>,
+    app: AppHandle,
     page_id: String,
     new_parent_page_id: Option<String>,
 ) -> CommandResult<()> {
-    state.controller.lock().unwrap().move_page(page_id, new_parent_page_id)
+    state.controller.lock().unwrap().move_page(&app, page_id, new_parent_page_id)
 }
 
 #[tauri::command]
-fn delete_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()> {
-    state.controller.lock().unwrap().delete_page(page_id)
+fn delete_page(state: State<'_, AppState>, app: AppHandle, page_id: String) -> CommandResult<()> {
+    state.controller.lock().unwrap().delete_page(&app, page_id)
+}
+
+#[tauri::command]
+fn set_page_sibling_order(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    parent_page_id: Option<String>,
+    ordered_child_page_ids: Vec<String>,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .set_page_sibling_order(&app, parent_page_id, ordered_child_page_ids)
 }
 
 #[tauri::command]
@@ -799,6 +942,7 @@ pub fn run() {
             clear_last_workspace_path,
             all_pages,
             all_streams,
+            page_order,
             page_summary,
             page_detail,
             page_content,
@@ -807,6 +951,7 @@ pub fn run() {
             rename_page,
             move_page,
             delete_page,
+            set_page_sibling_order,
             page_incoming_refs,
             page_outgoing_refs,
             drain_workspace_events,
@@ -853,6 +998,164 @@ fn page_id_to_string(page_id: &PageId) -> String {
 
 fn workspace_path_to_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn workspace_root_key(path: &Path) -> String {
+    workspace_path_to_string(path)
+}
+
+fn parent_order_key(parent_page_id: Option<&str>) -> String {
+    parent_page_id.unwrap_or(ROOT_PARENT_ORDER_KEY).to_owned()
+}
+
+fn renamed_page_id_string(page_id: &PageId, new_leaf_name: &PageName) -> String {
+    let mut segments = page_id
+        .segments()
+        .iter()
+        .map(|segment| segment.as_str().to_owned())
+        .collect::<Vec<_>>();
+    if let Some(last) = segments.last_mut() {
+        *last = new_leaf_name.as_str().to_owned();
+    }
+    format!("pages:{}", segments.join("/"))
+}
+
+fn moved_page_id_string(page_id: &PageId, destination_parent_page_id: Option<&PageId>) -> String {
+    let leaf_name = page_id.leaf_name().as_str();
+    destination_parent_page_id
+        .map(|parent| format!("{}/{}", page_id_to_string(parent), leaf_name))
+        .unwrap_or_else(|| format!("pages:{leaf_name}"))
+}
+
+fn page_order_store_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(app_storage_dir(app)?.join(PAGE_ORDER_FILE_NAME))
+}
+
+fn read_page_order_store(app: &AppHandle) -> CommandResult<PageOrderStore> {
+    let path = page_order_store_path(app)?;
+    match fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).map_err(|error| ErrorDto {
+            code: "page_order_store_invalid",
+            message: format!("failed to parse page order store: {error}"),
+            path: Some(workspace_path_to_string(&path)),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PageOrderStore::default()),
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
+}
+
+fn write_page_order_store(app: &AppHandle, store: &PageOrderStore) -> CommandResult<()> {
+    let path = page_order_store_path(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
+    }
+    let contents = serde_json::to_string_pretty(store).map_err(|error| ErrorDto {
+        code: "page_order_store_invalid",
+        message: format!("failed to serialize page order store: {error}"),
+        path: Some(workspace_path_to_string(&path)),
+    })?;
+    fs::write(&path, contents).map_err(|error| ErrorDto::io(&path, &error))
+}
+
+fn normalize_workspace_page_order(
+    workspace_order: &WorkspacePageOrder,
+    pages: &[PageSummary],
+) -> WorkspacePageOrder {
+    let mut child_ids_by_parent = BTreeMap::<String, Vec<String>>::new();
+    for page in pages.iter().filter(|page| matches!(page.location, PageLocation::Pages)) {
+        let parent_page_id = page.parent_page_id.as_ref().map(page_id_to_string);
+        child_ids_by_parent
+            .entry(parent_order_key(parent_page_id.as_deref()))
+            .or_default()
+            .push(page_id_to_string(&page.page_id));
+    }
+
+    for child_ids in child_ids_by_parent.values_mut() {
+        child_ids.sort();
+    }
+
+    let mut sibling_order_by_parent = BTreeMap::new();
+    for (parent_key, child_ids) in child_ids_by_parent {
+        let child_set = child_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let mut normalized = workspace_order
+            .sibling_order_by_parent
+            .get(&parent_key)
+            .into_iter()
+            .flatten()
+            .filter(|page_id| child_set.contains(*page_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let existing = normalized.iter().cloned().collect::<BTreeSet<_>>();
+        normalized.extend(
+            child_ids
+                .into_iter()
+                .filter(|page_id| !existing.contains(page_id)),
+        );
+        sibling_order_by_parent.insert(parent_key, normalized);
+    }
+
+    WorkspacePageOrder {
+        sibling_order_by_parent,
+    }
+}
+
+fn remap_workspace_page_order_subtree(
+    workspace_order: &mut WorkspacePageOrder,
+    source_page_id: &str,
+    target_page_id: &str,
+) {
+    let mut remapped = BTreeMap::<String, Vec<String>>::new();
+    for (parent_key, sibling_ids) in &workspace_order.sibling_order_by_parent {
+        let remapped_parent_key = remap_parent_order_key(parent_key, source_page_id, target_page_id);
+        let entry = remapped.entry(remapped_parent_key).or_default();
+        for sibling_id in sibling_ids {
+            let remapped_sibling_id = remap_subtree_page_id(sibling_id, source_page_id, target_page_id);
+            if !entry.contains(&remapped_sibling_id) {
+                entry.push(remapped_sibling_id);
+            }
+        }
+    }
+    workspace_order.sibling_order_by_parent = remapped;
+}
+
+fn remove_workspace_page_order_subtree(workspace_order: &mut WorkspacePageOrder, source_page_id: &str) {
+    workspace_order.sibling_order_by_parent = workspace_order
+        .sibling_order_by_parent
+        .iter()
+        .filter_map(|(parent_key, sibling_ids)| {
+            if is_page_in_subtree(parent_key, source_page_id) {
+                return None;
+            }
+            let filtered = sibling_ids
+                .iter()
+                .filter(|page_id| !is_page_in_subtree(page_id, source_page_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            Some((parent_key.clone(), filtered))
+        })
+        .collect();
+}
+
+fn remap_parent_order_key(parent_key: &str, source_page_id: &str, target_page_id: &str) -> String {
+    if parent_key == ROOT_PARENT_ORDER_KEY {
+        return parent_key.to_owned();
+    }
+    remap_subtree_page_id(parent_key, source_page_id, target_page_id)
+}
+
+fn remap_subtree_page_id(page_id: &str, source_page_id: &str, target_page_id: &str) -> String {
+    if page_id == source_page_id {
+        return target_page_id.to_owned();
+    }
+    let prefix = format!("{source_page_id}/");
+    if let Some(rest) = page_id.strip_prefix(&prefix) {
+        return format!("{target_page_id}/{rest}");
+    }
+    page_id.to_owned()
+}
+
+fn is_page_in_subtree(page_id: &str, root_page_id: &str) -> bool {
+    page_id == root_page_id || page_id.starts_with(&format!("{root_page_id}/"))
 }
 
 fn app_storage_dir(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -919,6 +1222,20 @@ fn write_workspace_file(root: &Path, relative_path: &str, contents: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page_summary(id: &[&str], parent: Option<&[&str]>) -> PageSummary {
+        let page_id = PageId::new(id.iter().copied()).unwrap();
+        PageSummary {
+            page_id,
+            location: PageLocation::Pages,
+            workspace_path: PathBuf::new(),
+            title: id.last().copied().unwrap_or_default().to_owned(),
+            revision: FileFingerprint::from_text(""),
+            modified_at: None,
+            parent_page_id: parent.map(|segments| PageId::new(segments.iter().copied()).unwrap()),
+            child_page_count: 0,
+        }
+    }
 
     #[test]
     fn page_id_string_round_trips_for_pages_and_streams() {
@@ -1106,5 +1423,91 @@ mod tests {
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn normalize_workspace_page_order_keeps_manual_order_and_appends_new_siblings() {
+        let workspace_order = WorkspacePageOrder {
+            sibling_order_by_parent: BTreeMap::from([(
+                ROOT_PARENT_ORDER_KEY.to_owned(),
+                vec!["pages:B".to_owned(), "pages:A".to_owned()],
+            )]),
+        };
+        let normalized = normalize_workspace_page_order(
+            &workspace_order,
+            &[
+                page_summary(&["A"], None),
+                page_summary(&["B"], None),
+                page_summary(&["C"], None),
+            ],
+        );
+
+        assert_eq!(
+            normalized.sibling_order_by_parent[ROOT_PARENT_ORDER_KEY],
+            vec![
+                "pages:B".to_owned(),
+                "pages:A".to_owned(),
+                "pages:C".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn remap_workspace_page_order_subtree_updates_parent_keys_and_values() {
+        let mut workspace_order = WorkspacePageOrder {
+            sibling_order_by_parent: BTreeMap::from([
+                (
+                    ROOT_PARENT_ORDER_KEY.to_owned(),
+                    vec!["pages:A".to_owned(), "pages:X".to_owned()],
+                ),
+                (
+                    "pages:A".to_owned(),
+                    vec!["pages:A/B".to_owned(), "pages:A/C".to_owned()],
+                ),
+                (
+                    "pages:A/B".to_owned(),
+                    vec!["pages:A/B/D".to_owned()],
+                ),
+            ]),
+        };
+
+        remap_workspace_page_order_subtree(&mut workspace_order, "pages:A/B", "pages:Z/B");
+
+        assert_eq!(
+            workspace_order.sibling_order_by_parent["pages:A"],
+            vec!["pages:Z/B".to_owned(), "pages:A/C".to_owned()]
+        );
+        assert_eq!(
+            workspace_order.sibling_order_by_parent["pages:Z/B"],
+            vec!["pages:Z/B/D".to_owned()]
+        );
+    }
+
+    #[test]
+    fn remove_workspace_page_order_subtree_drops_deleted_subtree_keys_and_values() {
+        let mut workspace_order = WorkspacePageOrder {
+            sibling_order_by_parent: BTreeMap::from([
+                (
+                    ROOT_PARENT_ORDER_KEY.to_owned(),
+                    vec!["pages:A".to_owned(), "pages:X".to_owned()],
+                ),
+                (
+                    "pages:A".to_owned(),
+                    vec!["pages:A/B".to_owned(), "pages:A/C".to_owned()],
+                ),
+                (
+                    "pages:A/B".to_owned(),
+                    vec!["pages:A/B/D".to_owned()],
+                ),
+            ]),
+        };
+
+        remove_workspace_page_order_subtree(&mut workspace_order, "pages:A/B");
+
+        assert_eq!(
+            workspace_order.sibling_order_by_parent["pages:A"],
+            vec!["pages:A/C".to_owned()]
+        );
+        assert!(!workspace_order.sibling_order_by_parent.contains_key("pages:A/B"));
     }
 }
