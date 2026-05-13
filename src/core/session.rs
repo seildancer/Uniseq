@@ -9,8 +9,9 @@ use std::time::{Duration, Instant, SystemTime};
 use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
-    CoreError, IncomingPageRefSnapshot, OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail,
-    PageId, PageSummary, WorkspaceCache, WorkspaceReadApi,
+    BlockHandle, BlockSnapshot, CoreError, IncomingPageRefSnapshot, LinkedRefEntry,
+    OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail, PageId, PageSummary, WorkspaceCache,
+    WorkspaceReadApi,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
@@ -234,6 +235,34 @@ impl WorkspaceSession {
             .with_read_api(|read_api| read_api.page_outgoing_refs(source_page_id))
     }
 
+    pub fn page_linked_refs(
+        &self,
+        target_page_id: &PageId,
+    ) -> Result<Vec<LinkedRefEntry>, CoreError> {
+        self.state
+            .read()
+            .unwrap()
+            .with_read_api(|read_api| read_api.page_linked_refs(target_page_id))
+    }
+
+    pub fn block_snapshot(&self, handle: &BlockHandle) -> Result<BlockSnapshot, CoreError> {
+        self.state
+            .read()
+            .unwrap()
+            .with_read_api(|read_api| read_api.block_snapshot(handle))
+    }
+
+    pub fn write_block_markdown(
+        &self,
+        handle: &BlockHandle,
+        replacement_markdown: String,
+    ) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .write_block_markdown_inner(handle, replacement_markdown)
+    }
+
     pub fn apply_page_create(&self, request: PageCreate) -> Result<(), CoreError> {
         self.state
             .write()
@@ -397,11 +426,56 @@ impl WorkspaceSessionState {
             (page.location.clone(), page.workspace_path.clone())
         };
         let absolute_path = self.root.join(&workspace_path);
-        fs::write(&absolute_path, &text)
-            .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
+        fs::write(&absolute_path, &text).map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, text)?;
         self.cache.refresh_page_content(new_page);
         self.with_read_api(|api| api.page_content(page_id))
+    }
+
+    fn write_block_markdown_inner(
+        &mut self,
+        handle: &BlockHandle,
+        replacement_markdown: String,
+    ) -> Result<(), CoreError> {
+        let (page_id, location, workspace_path, next_text) = {
+            let page = self
+                .cache
+                .page(&handle.source_page_id)
+                .ok_or(CoreError::MissingPage)?;
+            if page.fingerprint != handle.source_page_revision {
+                return Err(CoreError::StructuralConflict {
+                    path: page.workspace_path.clone(),
+                });
+            }
+            let Some(_block) = page.find_block_by_span(handle.block_span) else {
+                return Err(CoreError::StructuralConflict {
+                    path: page.workspace_path.clone(),
+                });
+            };
+            handle.block_span.validate_for_text(&page.text)?;
+            let next_text = format!(
+                "{}{}{}",
+                &page.text[..handle.block_span.start()],
+                replacement_markdown,
+                &page.text[handle.block_span.end()..]
+            );
+            (
+                page.page_id.clone(),
+                page.location.clone(),
+                page.workspace_path.clone(),
+                next_text,
+            )
+        };
+
+        let absolute_path = self.root.join(&workspace_path);
+        fs::write(&absolute_path, &next_text)
+            .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
+        let new_page = page_from_markdown_in_location(page_id.clone(), location, next_text)?;
+        self.cache.refresh_page_content(new_page);
+        self.enqueue_event(WorkspaceEvent::PagesChanged {
+            page_ids: vec![page_id],
+        });
+        Ok(())
     }
 
     fn drain_events(&mut self) -> Vec<WorkspaceEvent> {
@@ -1750,7 +1824,10 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![WorkspaceEvent::PagesChanged {
-                page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["A", "B"]).unwrap(),],
+                page_ids: vec![
+                    PageId::new(["A"]).unwrap(),
+                    PageId::new(["A", "B"]).unwrap(),
+                ],
             }]
         );
 
@@ -2176,6 +2253,58 @@ mod tests {
             .unwrap();
 
         assert_eq!(workspace.read_file("A.md"), "- three\n");
-        assert_eq!(second_write.revision, FileFingerprint::from_text("- three\n"));
+        assert_eq!(
+            second_write.revision,
+            FileFingerprint::from_text("- three\n")
+        );
+    }
+
+    #[test]
+    fn write_block_markdown_updates_source_owned_linked_reference_content() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n\t- child\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        let linked_ref = session
+            .page_linked_refs(&PageId::new(["Target"]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        session
+            .write_block_markdown(&linked_ref.block.handle, "- after [[Target]]\n".to_owned())
+            .unwrap();
+
+        assert_eq!(workspace.read_file("Referrer.md"), "- after [[Target]]\n");
+        let refreshed = session
+            .page_linked_refs(&PageId::new(["Target"]).unwrap())
+            .unwrap();
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].block.content, "after [[Target]]");
+    }
+
+    #[test]
+    fn write_block_markdown_can_remove_a_linked_reference_entirely() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        let linked_ref = session
+            .page_linked_refs(&PageId::new(["Target"]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        session
+            .write_block_markdown(&linked_ref.block.handle, "- after\n".to_owned())
+            .unwrap();
+
+        assert_eq!(workspace.read_file("Referrer.md"), "- after\n");
+        assert!(
+            session
+                .page_linked_refs(&PageId::new(["Target"]).unwrap())
+                .unwrap()
+                .is_empty()
+        );
     }
 }

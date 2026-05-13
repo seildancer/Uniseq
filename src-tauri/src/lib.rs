@@ -10,10 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
-    CoreError, FileFingerprint, FlatBlockSnapshot, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
-    PageContentSnapshot, PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName,
-    PageRename, PageSummary, SourceSpan, WatcherFallbackReason, WatcherMode, WorkspaceEvent,
-    WorkspaceSession, create_workspace_root, prepare_workspace_root,
+    BlockHandle, BlockSnapshot, CoreError, FileFingerprint, FlatBlockSnapshot,
+    IncomingPageRefSnapshot, LinkedRefEntry, OutgoingPageRefSnapshot, PageContentSnapshot,
+    PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName, PageRename,
+    PageSummary, RefHighlightSnapshot, SourceSpan, WatcherFallbackReason, WatcherMode,
+    WorkspaceEvent, WorkspaceSession, create_workspace_root, prepare_workspace_root,
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -97,7 +98,42 @@ struct OutgoingPageRefDto {
     target_exists: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct BlockHandleDto {
+    source_page_id: String,
+    source_page_revision: FileFingerprintDto,
+    block_span: SourceSpanDto,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct BlockSnapshotDto {
+    handle: BlockHandleDto,
+    kind: String,
+    block_span: SourceSpanDto,
+    content_span: SourceSpanDto,
+    content: String,
+    markdown: String,
+    outgoing_refs: Vec<OutgoingPageRefDto>,
+    children: Vec<BlockSnapshotDto>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct RefHighlightDto {
+    prefix: String,
+    highlight: String,
+    suffix: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct LinkedRefEntryDto {
+    target_page_id: String,
+    source_page_id: String,
+    ref_span: SourceSpanDto,
+    block: BlockSnapshotDto,
+    block_content_highlight: Option<RefHighlightDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct FileFingerprintDto {
     len_bytes: usize,
     content_hash: u64,
@@ -109,7 +145,7 @@ struct FileFingerprintInputDto {
     content_hash: u64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct SourceSpanDto {
     start: usize,
     end: usize,
@@ -261,11 +297,7 @@ impl WorkspaceController {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
-            .write_and_reparse(
-                &page_id,
-                text,
-                expected_revision.map(FileFingerprint::from),
-            )
+            .write_and_reparse(&page_id, text, expected_revision.map(FileFingerprint::from))
             .map(PageContentDto::from)
             .map_err(ErrorDto::from)
     }
@@ -278,7 +310,12 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
-    fn rename_page(&self, app: &AppHandle, page_id: String, new_title: String) -> CommandResult<()> {
+    fn rename_page(
+        &self,
+        app: &AppHandle,
+        page_id: String,
+        new_title: String,
+    ) -> CommandResult<()> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         let new_leaf_name = PageName::new(&new_title).map_err(CoreError::from)?;
@@ -385,6 +422,34 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
+    fn page_linked_refs(&self, page_id: String) -> CommandResult<Vec<LinkedRefEntryDto>> {
+        let page_id =
+            parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
+        self.session()?
+            .page_linked_refs(&page_id)
+            .map(|refs| refs.into_iter().map(LinkedRefEntryDto::from).collect())
+            .map_err(ErrorDto::from)
+    }
+
+    fn block_snapshot(&self, handle: BlockHandleDto) -> CommandResult<BlockSnapshotDto> {
+        let handle = BlockHandle::try_from(handle)?;
+        self.session()?
+            .block_snapshot(&handle)
+            .map(BlockSnapshotDto::from)
+            .map_err(ErrorDto::from)
+    }
+
+    fn write_block_markdown(
+        &self,
+        handle: BlockHandleDto,
+        replacement_markdown: String,
+    ) -> CommandResult<()> {
+        let handle = BlockHandle::try_from(handle)?;
+        self.session()?
+            .write_block_markdown(&handle, replacement_markdown)
+            .map_err(ErrorDto::from)
+    }
+
     fn drain_workspace_events(&self) -> CommandResult<Vec<WorkspaceEventDto>> {
         let session = self.session()?;
         Ok(session
@@ -440,7 +505,11 @@ impl WorkspaceController {
         write_page_order_store(app, &store)
     }
 
-    fn remove_page_order_subtree(&self, app: &AppHandle, source_page_id: &str) -> CommandResult<()> {
+    fn remove_page_order_subtree(
+        &self,
+        app: &AppHandle,
+        source_page_id: &str,
+    ) -> CommandResult<()> {
         let workspace_root = self.session()?.workspace_root();
         let pages = self.session()?.all_pages();
         let mut store = read_page_order_store(app)?;
@@ -544,6 +613,81 @@ impl From<OutgoingPageRefSnapshot> for OutgoingPageRefDto {
     }
 }
 
+impl From<BlockSnapshot> for BlockSnapshotDto {
+    fn from(value: BlockSnapshot) -> Self {
+        Self {
+            handle: BlockHandleDto::from(value.handle),
+            kind: match value.kind {
+                uniseq_backend::BlockKind::Outliner => "outliner".to_owned(),
+                uniseq_backend::BlockKind::Plaintext => "plaintext".to_owned(),
+            },
+            block_span: SourceSpanDto::from(value.block_span),
+            content_span: SourceSpanDto::from(value.content_span),
+            content: value.content,
+            markdown: value.markdown,
+            outgoing_refs: value
+                .outgoing_refs
+                .into_iter()
+                .map(OutgoingPageRefDto::from)
+                .collect(),
+            children: value
+                .children
+                .into_iter()
+                .map(BlockSnapshotDto::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<BlockHandle> for BlockHandleDto {
+    fn from(value: BlockHandle) -> Self {
+        Self {
+            source_page_id: page_id_to_string(&value.source_page_id),
+            source_page_revision: FileFingerprintDto::from(value.source_page_revision),
+            block_span: SourceSpanDto::from(value.block_span),
+        }
+    }
+}
+
+impl TryFrom<BlockHandleDto> for BlockHandle {
+    type Error = ErrorDto;
+
+    fn try_from(value: BlockHandleDto) -> Result<Self, Self::Error> {
+        let source_page_id = parse_page_id_input(&value.source_page_id)
+            .map_err(|_| ErrorDto::invalid_page_id(&value.source_page_id))?;
+        let block_span = SourceSpan::new(value.block_span.start, value.block_span.end)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        Ok(Self {
+            source_page_id,
+            source_page_revision: FileFingerprint::from(value.source_page_revision),
+            block_span,
+        })
+    }
+}
+
+impl From<RefHighlightSnapshot> for RefHighlightDto {
+    fn from(value: RefHighlightSnapshot) -> Self {
+        Self {
+            prefix: value.prefix,
+            highlight: value.highlight,
+            suffix: value.suffix,
+        }
+    }
+}
+
+impl From<LinkedRefEntry> for LinkedRefEntryDto {
+    fn from(value: LinkedRefEntry) -> Self {
+        Self {
+            target_page_id: page_id_to_string(&value.target_page_id),
+            source_page_id: page_id_to_string(&value.source_page_id),
+            ref_span: SourceSpanDto::from(value.ref_span),
+            block: BlockSnapshotDto::from(value.block),
+            block_content_highlight: value.block_content_highlight.map(RefHighlightDto::from),
+        }
+    }
+}
+
 impl From<FileFingerprint> for FileFingerprintDto {
     fn from(value: FileFingerprint) -> Self {
         Self {
@@ -555,6 +699,12 @@ impl From<FileFingerprint> for FileFingerprintDto {
 
 impl From<FileFingerprintInputDto> for FileFingerprint {
     fn from(value: FileFingerprintInputDto) -> Self {
+        FileFingerprint::from_parts(value.len_bytes, value.content_hash)
+    }
+}
+
+impl From<FileFingerprintDto> for FileFingerprint {
+    fn from(value: FileFingerprintDto) -> Self {
         FileFingerprint::from_parts(value.len_bytes, value.content_hash)
     }
 }
@@ -857,7 +1007,11 @@ fn rename_page(
     page_id: String,
     new_title: String,
 ) -> CommandResult<()> {
-    state.controller.lock().unwrap().rename_page(&app, page_id, new_title)
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .rename_page(&app, page_id, new_title)
 }
 
 #[tauri::command]
@@ -867,7 +1021,11 @@ fn move_page(
     page_id: String,
     new_parent_page_id: Option<String>,
 ) -> CommandResult<()> {
-    state.controller.lock().unwrap().move_page(&app, page_id, new_parent_page_id)
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .move_page(&app, page_id, new_parent_page_id)
 }
 
 #[tauri::command]
@@ -882,11 +1040,11 @@ fn set_page_sibling_order(
     parent_page_id: Option<String>,
     ordered_child_page_ids: Vec<String>,
 ) -> CommandResult<()> {
-    state
-        .controller
-        .lock()
-        .unwrap()
-        .set_page_sibling_order(&app, parent_page_id, ordered_child_page_ids)
+    state.controller.lock().unwrap().set_page_sibling_order(
+        &app,
+        parent_page_id,
+        ordered_child_page_ids,
+    )
 }
 
 #[tauri::command]
@@ -903,6 +1061,35 @@ fn page_outgoing_refs(
     page_id: String,
 ) -> CommandResult<Vec<OutgoingPageRefDto>> {
     state.controller.lock().unwrap().page_outgoing_refs(page_id)
+}
+
+#[tauri::command]
+fn page_linked_refs(
+    state: State<'_, AppState>,
+    page_id: String,
+) -> CommandResult<Vec<LinkedRefEntryDto>> {
+    state.controller.lock().unwrap().page_linked_refs(page_id)
+}
+
+#[tauri::command]
+fn block_snapshot(
+    state: State<'_, AppState>,
+    handle: BlockHandleDto,
+) -> CommandResult<BlockSnapshotDto> {
+    state.controller.lock().unwrap().block_snapshot(handle)
+}
+
+#[tauri::command]
+fn write_block_markdown(
+    state: State<'_, AppState>,
+    handle: BlockHandleDto,
+    replacement_markdown: String,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .write_block_markdown(handle, replacement_markdown)
 }
 
 #[tauri::command]
@@ -954,6 +1141,9 @@ pub fn run() {
             set_page_sibling_order,
             page_incoming_refs,
             page_outgoing_refs,
+            page_linked_refs,
+            block_snapshot,
+            write_block_markdown,
             drain_workspace_events,
             take_last_watch_error,
             start_watching,
@@ -1062,7 +1252,10 @@ fn normalize_workspace_page_order(
     pages: &[PageSummary],
 ) -> WorkspacePageOrder {
     let mut child_ids_by_parent = BTreeMap::<String, Vec<String>>::new();
-    for page in pages.iter().filter(|page| matches!(page.location, PageLocation::Pages)) {
+    for page in pages
+        .iter()
+        .filter(|page| matches!(page.location, PageLocation::Pages))
+    {
         let parent_page_id = page.parent_page_id.as_ref().map(page_id_to_string);
         child_ids_by_parent
             .entry(parent_order_key(parent_page_id.as_deref()))
@@ -1106,10 +1299,12 @@ fn remap_workspace_page_order_subtree(
 ) {
     let mut remapped = BTreeMap::<String, Vec<String>>::new();
     for (parent_key, sibling_ids) in &workspace_order.sibling_order_by_parent {
-        let remapped_parent_key = remap_parent_order_key(parent_key, source_page_id, target_page_id);
+        let remapped_parent_key =
+            remap_parent_order_key(parent_key, source_page_id, target_page_id);
         let entry = remapped.entry(remapped_parent_key).or_default();
         for sibling_id in sibling_ids {
-            let remapped_sibling_id = remap_subtree_page_id(sibling_id, source_page_id, target_page_id);
+            let remapped_sibling_id =
+                remap_subtree_page_id(sibling_id, source_page_id, target_page_id);
             if !entry.contains(&remapped_sibling_id) {
                 entry.push(remapped_sibling_id);
             }
@@ -1118,7 +1313,10 @@ fn remap_workspace_page_order_subtree(
     workspace_order.sibling_order_by_parent = remapped;
 }
 
-fn remove_workspace_page_order_subtree(workspace_order: &mut WorkspacePageOrder, source_page_id: &str) {
+fn remove_workspace_page_order_subtree(
+    workspace_order: &mut WorkspacePageOrder,
+    source_page_id: &str,
+) {
     workspace_order.sibling_order_by_parent = workspace_order
         .sibling_order_by_parent
         .iter()
@@ -1464,10 +1662,7 @@ mod tests {
                     "pages:A".to_owned(),
                     vec!["pages:A/B".to_owned(), "pages:A/C".to_owned()],
                 ),
-                (
-                    "pages:A/B".to_owned(),
-                    vec!["pages:A/B/D".to_owned()],
-                ),
+                ("pages:A/B".to_owned(), vec!["pages:A/B/D".to_owned()]),
             ]),
         };
 
@@ -1495,10 +1690,7 @@ mod tests {
                     "pages:A".to_owned(),
                     vec!["pages:A/B".to_owned(), "pages:A/C".to_owned()],
                 ),
-                (
-                    "pages:A/B".to_owned(),
-                    vec!["pages:A/B/D".to_owned()],
-                ),
+                ("pages:A/B".to_owned(), vec!["pages:A/B/D".to_owned()]),
             ]),
         };
 
@@ -1508,6 +1700,10 @@ mod tests {
             workspace_order.sibling_order_by_parent["pages:A"],
             vec!["pages:A/C".to_owned()]
         );
-        assert!(!workspace_order.sibling_order_by_parent.contains_key("pages:A/B"));
+        assert!(
+            !workspace_order
+                .sibling_order_by_parent
+                .contains_key("pages:A/B")
+        );
     }
 }

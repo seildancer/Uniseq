@@ -158,7 +158,10 @@ fn close_for_outliner_marker(
     roots: &mut Vec<Block>,
     line_indent: usize,
 ) -> Result<(), CoreError> {
-    while stack.last().is_some_and(|block| line_indent <= block.indent_width) {
+    while stack
+        .last()
+        .is_some_and(|block| line_indent <= block.indent_width)
+    {
         close_top_block(stack, roots)?;
     }
 
@@ -527,10 +530,7 @@ mod tests {
 
         assert_eq!(
             blocks.iter().map(|block| block.kind).collect::<Vec<_>>(),
-            vec![
-                BlockKind::Outliner,
-                BlockKind::Plaintext,
-            ]
+            vec![BlockKind::Outliner, BlockKind::Plaintext,]
         );
     }
 
@@ -646,7 +646,10 @@ mod tests {
         let blocks = parse_blocks(text).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, BlockKind::Plaintext);
-        assert_eq!(blocks[0].content_span.slice(text).unwrap(), "hello\n\nworld\n");
+        assert_eq!(
+            blocks[0].content_span.slice(text).unwrap(),
+            "hello\n\nworld\n"
+        );
     }
 
     #[test]
@@ -655,7 +658,10 @@ mod tests {
         let blocks = parse_blocks(text).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].kind, BlockKind::Plaintext);
-        assert_eq!(blocks[0].content_span.slice(text).unwrap(), "hello\n\n\n\nworld\n");
+        assert_eq!(
+            blocks[0].content_span.slice(text).unwrap(),
+            "hello\n\n\n\nworld\n"
+        );
     }
 
     #[test]

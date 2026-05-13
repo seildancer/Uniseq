@@ -839,6 +839,210 @@ h2 {
   gap: 2px;
 }
 
+.editor-title-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.editor-title-input {
+  width: auto;
+  min-width: 1ch;
+  max-width: min(640px, 100%);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1.75rem;
+  font-family: inherit;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.editor-title-input:focus-visible {
+  outline: none;
+}
+
+.editor-title-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.editor-title-form:focus-within .editor-title-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.linked-refs-panel {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, var(--tag) 18%);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--tag-bg) 62%, transparent 38%), transparent 72%),
+    color-mix(in srgb, var(--panel) 86%, var(--bg) 14%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.linked-refs-heading,
+.linked-refs-group-header,
+.linked-ref-row-header,
+.linked-ref-editor-actions,
+.linked-ref-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.linked-refs-heading {
+  margin-bottom: 14px;
+}
+
+.linked-refs-heading h2,
+.linked-refs-group-header strong,
+.linked-ref-source-title {
+  margin: 0;
+}
+
+.linked-refs-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.linked-refs-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.linked-refs-group {
+  border: 1px solid color-mix(in srgb, var(--line) 88%, var(--tag) 12%);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg) 80%, var(--panel) 20%);
+  overflow: hidden;
+}
+
+.linked-refs-group-header {
+  padding: 12px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 92%, transparent 8%);
+  background: color-mix(in srgb, var(--bg) 72%, var(--tag-bg) 28%);
+}
+
+.linked-refs-group-header span,
+.linked-ref-source-label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.linked-refs-group-body {
+  display: grid;
+}
+
+.linked-ref-row {
+  padding: 14px;
+}
+
+.linked-ref-row + .linked-ref-row {
+  border-top: 1px solid color-mix(in srgb, var(--line) 92%, transparent 8%);
+}
+
+.linked-ref-source-label {
+  margin: 0 0 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.linked-ref-row-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.linked-ref-block,
+.linked-ref-children {
+  display: grid;
+  gap: 6px;
+}
+
+.linked-ref-block-line {
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: start;
+  column-gap: 8px;
+  padding-left: calc(var(--linked-ref-depth, 0) * 22px);
+}
+
+.linked-ref-block--plaintext .linked-ref-block-line {
+  grid-template-columns: 1fr;
+}
+
+.linked-ref-bullet {
+  color: var(--muted);
+  line-height: 1.6;
+  user-select: none;
+}
+
+.linked-ref-block-content {
+  min-width: 0;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.linked-ref-mark {
+  padding: 0 2px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tag) 18%, transparent 82%);
+  color: inherit;
+}
+
+.linked-ref-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.linked-ref-editor-label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.linked-ref-editor-input {
+  width: 100%;
+  min-height: 160px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  font: 0.95rem/1.6 "Cascadia Code", "Consolas", monospace;
+  resize: vertical;
+}
+
+.linked-ref-editor-input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tag) 38%, white 62%);
+  outline-offset: 2px;
+}
+
+.linked-ref-editor-error {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.9rem;
+}
+
 .block-row {
   display: grid;
   grid-template-columns: 16px 1fr;

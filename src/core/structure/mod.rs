@@ -439,7 +439,9 @@ fn plan_delete_subtree_transaction(
     let deleted_pages = cache
         .pages()
         .values()
-        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, root_page_id))
+        .filter(|page| {
+            page.location.is_page_backed() && page_id_has_prefix(&page.page_id, root_page_id)
+        })
         .cloned()
         .collect::<Vec<_>>();
     if deleted_pages.is_empty() {
@@ -934,7 +936,9 @@ mod tests {
 
         let read_api = WorkspaceReadApi::new(&cache, &|_| None);
         let _x_blocks = read_api.page_content(&PageId::new(["X"]).unwrap()).unwrap();
-        let x_outgoing = read_api.page_outgoing_refs(&PageId::new(["X"]).unwrap()).unwrap();
+        let x_outgoing = read_api
+            .page_outgoing_refs(&PageId::new(["X"]).unwrap())
+            .unwrap();
         assert_eq!(x_outgoing.len(), 2);
         assert!(!x_outgoing[0].target_exists);
         assert!(!x_outgoing[1].target_exists);

@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan, WorkspaceCache};
+use super::{
+    Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan,
+    WorkspaceCache,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlatBlockSnapshot {
@@ -51,6 +54,41 @@ pub struct OutgoingPageRefSnapshot {
     pub target_page_id: PageId,
     pub ref_span: SourceSpan,
     pub target_exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockHandle {
+    pub source_page_id: PageId,
+    pub source_page_revision: FileFingerprint,
+    pub block_span: SourceSpan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockSnapshot {
+    pub handle: BlockHandle,
+    pub kind: BlockKind,
+    pub block_span: SourceSpan,
+    pub content_span: SourceSpan,
+    pub content: String,
+    pub markdown: String,
+    pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
+    pub children: Vec<BlockSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefHighlightSnapshot {
+    pub prefix: String,
+    pub highlight: String,
+    pub suffix: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedRefEntry {
+    pub target_page_id: PageId,
+    pub source_page_id: PageId,
+    pub ref_span: SourceSpan,
+    pub block: BlockSnapshot,
+    pub block_content_highlight: Option<RefHighlightSnapshot>,
 }
 
 #[derive(Clone, Copy)]
@@ -133,6 +171,54 @@ impl<'a> WorkspaceReadApi<'a> {
         Ok(outgoing_ref_snapshots(self.cache, source_page))
     }
 
+    pub fn block_snapshot(&self, handle: &BlockHandle) -> Result<BlockSnapshot, CoreError> {
+        let source_page = self
+            .cache
+            .page(&handle.source_page_id)
+            .ok_or(CoreError::MissingPage)?;
+        let block = source_page.find_block_by_span(handle.block_span).ok_or(
+            CoreError::StructuralConflict {
+                path: source_page.workspace_path.clone(),
+            },
+        )?;
+        block_snapshot(self.cache, source_page, block)
+    }
+
+    pub fn page_linked_refs(
+        &self,
+        target_page_id: &PageId,
+    ) -> Result<Vec<LinkedRefEntry>, CoreError> {
+        self.cache
+            .page(target_page_id)
+            .ok_or(CoreError::MissingPage)?;
+        let incoming_refs = self.cache.incoming_refs(target_page_id);
+        incoming_refs
+            .iter()
+            .map(|incoming_ref| {
+                let source_page = self
+                    .cache
+                    .page(&incoming_ref.source_page_id)
+                    .ok_or(CoreError::MissingPage)?;
+                let block = source_page
+                    .find_block_by_span(incoming_ref.source_block_span)
+                    .ok_or(CoreError::StructuralConflict {
+                        path: source_page.workspace_path.clone(),
+                    })?;
+                Ok(LinkedRefEntry {
+                    target_page_id: target_page_id.clone(),
+                    source_page_id: incoming_ref.source_page_id.clone(),
+                    ref_span: incoming_ref.ref_span,
+                    block: block_snapshot(self.cache, source_page, block)?,
+                    block_content_highlight: linked_ref_highlight(
+                        source_page,
+                        block.content_span,
+                        incoming_ref.ref_span,
+                    )?,
+                })
+            })
+            .collect()
+    }
+
     pub fn pages_with_missing_targets(&self) -> Vec<PageSummary> {
         self.cache
             .pages()
@@ -199,7 +285,10 @@ fn incoming_ref_snapshots(
         .collect())
 }
 
-fn page_summary(page: &Page, page_modified_at: &dyn Fn(&Page) -> Option<SystemTime>) -> PageSummary {
+fn page_summary(
+    page: &Page,
+    page_modified_at: &dyn Fn(&Page) -> Option<SystemTime>,
+) -> PageSummary {
     PageSummary {
         page_id: page.page_id.clone(),
         location: page.location.clone(),
@@ -240,6 +329,66 @@ fn resolved_block_content(source_page: &Page, block: &Block) -> Result<String, C
         .or_else(|| content.strip_suffix('\n'))
         .unwrap_or(content)
         .to_owned())
+}
+
+fn resolved_block_markdown(source_page: &Page, block: &Block) -> Result<String, CoreError> {
+    Ok(block.block_span.slice(&source_page.text)?.to_owned())
+}
+
+fn block_snapshot(
+    cache: &WorkspaceCache,
+    source_page: &Page,
+    block: &Block,
+) -> Result<BlockSnapshot, CoreError> {
+    Ok(BlockSnapshot {
+        handle: BlockHandle {
+            source_page_id: source_page.page_id.clone(),
+            source_page_revision: source_page.fingerprint,
+            block_span: block.block_span,
+        },
+        kind: block.kind,
+        block_span: block.block_span,
+        content_span: block.content_span,
+        content: resolved_block_content(source_page, block)?,
+        markdown: resolved_block_markdown(source_page, block)?,
+        outgoing_refs: block
+            .outgoing_refs
+            .iter()
+            .map(|outgoing_ref| OutgoingPageRefSnapshot {
+                target_page_id: outgoing_ref.target_page_id.clone(),
+                ref_span: outgoing_ref.ref_span,
+                target_exists: cache.page(&outgoing_ref.target_page_id).is_some(),
+            })
+            .collect(),
+        children: block
+            .children
+            .iter()
+            .map(|child| block_snapshot(cache, source_page, child))
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn linked_ref_highlight(
+    source_page: &Page,
+    content_span: SourceSpan,
+    ref_span: SourceSpan,
+) -> Result<Option<RefHighlightSnapshot>, CoreError> {
+    if !content_span.contains_span(ref_span) {
+        return Ok(None);
+    }
+
+    let prefix_span = SourceSpan::new(content_span.start(), ref_span.start())?;
+    let suffix_span = SourceSpan::new(ref_span.end(), content_span.end())?;
+    let suffix = suffix_span.slice(&source_page.text)?;
+    Ok(Some(RefHighlightSnapshot {
+        prefix: prefix_span.slice(&source_page.text)?.to_owned(),
+        highlight: ref_span.slice(&source_page.text)?.to_owned(),
+        suffix: suffix
+            .strip_suffix("\r\n")
+            .or_else(|| suffix.strip_suffix('\n'))
+            .unwrap_or(suffix)
+            .to_owned(),
+    }))
 }
 
 #[cfg(test)]
@@ -383,5 +532,56 @@ mod tests {
             vec![PageId::new(["A"]).unwrap()]
         );
         assert_eq!(read_api.all_pages_paginated(1, 1).len(), 1);
+    }
+
+    #[test]
+    fn linked_refs_return_editable_block_subtrees_with_exact_highlight() {
+        let text = "- parent [[B]]\n\t- child\n";
+        let cache =
+            WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+
+        let linked_refs = read_api
+            .page_linked_refs(&PageId::new(["B"]).unwrap())
+            .unwrap();
+
+        assert_eq!(linked_refs.len(), 1);
+        assert_eq!(linked_refs[0].source_page_id, PageId::new(["A"]).unwrap());
+        assert_eq!(linked_refs[0].block.content, "parent [[B]]");
+        assert_eq!(linked_refs[0].block.markdown, text);
+        assert_eq!(linked_refs[0].block.children.len(), 1);
+        assert_eq!(
+            linked_refs[0].block_content_highlight,
+            Some(RefHighlightSnapshot {
+                prefix: "parent ".to_owned(),
+                highlight: "[[B]]".to_owned(),
+                suffix: "".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn block_snapshot_refreshes_current_block_even_from_stale_handle() {
+        let text = "- body [[B]]\n";
+        let cache =
+            WorkspaceCache::from_pages([parsed_page(&["A"], text), parsed_page(&["B"], "")]);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+
+        let linked_ref = read_api
+            .page_linked_refs(&PageId::new(["B"]).unwrap())
+            .unwrap()
+            .remove(0);
+        let stale_handle = BlockHandle {
+            source_page_id: linked_ref.block.handle.source_page_id,
+            source_page_revision: FileFingerprint::from_text("stale"),
+            block_span: linked_ref.block.handle.block_span,
+        };
+
+        let block = read_api.block_snapshot(&stale_handle).unwrap();
+        assert_eq!(block.content, "body [[B]]");
+        assert_eq!(
+            block.handle.source_page_revision,
+            FileFingerprint::from_text(text)
+        );
     }
 }

@@ -355,8 +355,7 @@ fn encode_page_segment(name: &str) -> String {
         // If this is already a valid %XX sequence, pass it through unchanged.
         // This prevents double-encoding of segments that came from filenames
         // with external percent-encoding (e.g. %2Ebashrc stays %2Ebashrc).
-        if input[i] == b'%' && i + 2 < input.len() && is_hex(input[i + 1]) && is_hex(input[i + 2])
-        {
+        if input[i] == b'%' && i + 2 < input.len() && is_hex(input[i + 1]) && is_hex(input[i + 2]) {
             out.push('%');
             out.push(input[i + 1] as char);
             out.push(input[i + 2] as char);
@@ -470,7 +469,10 @@ fn parse_page_file_name(file_name: &str) -> Result<PageId, PagePathError> {
         return Err(PagePathError::EmptyHierarchySegment);
     }
 
-    let decoded: Vec<String> = stem.split(HIERARCHY_DELIMITER).map(decode_page_segment).collect();
+    let decoded: Vec<String> = stem
+        .split(HIERARCHY_DELIMITER)
+        .map(decode_page_segment)
+        .collect();
     PageId::new(decoded.iter().map(String::as_str))
 }
 
@@ -680,8 +682,14 @@ mod tests {
     fn special_chars_encode_in_filename_and_decode_back() {
         let page_id = PageId::new(["Meeting: Notes", "Sub?Page"]).unwrap();
         let path = page_id.to_workspace_path();
-        assert_eq!(path, PathBuf::from("pages").join("Meeting%3A Notes___Sub%3FPage.md"));
-        assert_eq!(PageId::from_workspace_path(path.to_str().unwrap()).unwrap(), page_id);
+        assert_eq!(
+            path,
+            PathBuf::from("pages").join("Meeting%3A Notes___Sub%3FPage.md")
+        );
+        assert_eq!(
+            PageId::from_workspace_path(path.to_str().unwrap()).unwrap(),
+            page_id
+        );
     }
 
     #[test]
@@ -689,7 +697,10 @@ mod tests {
         let page_id = PageId::new(["50% Done"]).unwrap();
         let path = page_id.to_workspace_path();
         assert_eq!(path, PathBuf::from("pages").join("50%25 Done.md"));
-        assert_eq!(PageId::from_workspace_path(path.to_str().unwrap()).unwrap(), page_id);
+        assert_eq!(
+            PageId::from_workspace_path(path.to_str().unwrap()).unwrap(),
+            page_id
+        );
     }
 
     #[test]

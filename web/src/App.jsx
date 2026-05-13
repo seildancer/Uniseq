@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Editor from "./Editor.jsx";
+import LinkedReferences from "./components/LinkedReferences.jsx";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -397,6 +398,7 @@ export default function App() {
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedPageText, setSelectedPageText] = useState("");
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
+  const [linkedRefs, setLinkedRefs] = useState([]);
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -409,17 +411,20 @@ export default function App() {
   const [pageMenuOpenId, setPageMenuOpenId] = useState(null);
   const [modal, setModal] = useState(null);
   const [renameValue, setRenameValue] = useState("");
+  const [editorRenameValue, setEditorRenameValue] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [dragState, setDragState] = useState(null);
   const dragLongPressTimerRef = useRef(null);
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
+  const editorTitleInputRef = useRef(null);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
   const regularPagesById = new Map(regularPages.map((page) => [page.page_id, page]));
-  const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
-  const loadedPage = regularPages.find((page) => page.page_id === loadedPageId) ?? null;
+  const pagesById = new Map(pages.map((page) => [page.page_id, page]));
+  const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
+  const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
   const loadedPageEditorKey = loadedPageId && selectedPageRevision
     ? `${loadedPageId}:${selectedPageRevision.len_bytes}:${selectedPageRevision.content_hash}`
     : loadedPageId;
@@ -427,6 +432,13 @@ export default function App() {
     busyAction === "create" ||
     !createState.parentPath ||
     !createState.folderName.trim();
+
+  function renamedPageIdForTitle(pageId, newTitle) {
+    const prefix = pageId.lastIndexOf("/");
+    return prefix >= 0
+      ? pageId.slice(0, prefix + 1) + newTitle
+      : "pages:" + newTitle;
+  }
 
   async function loadWorkspaceLists() {
     const [allPages, allStreamNames, order] = await Promise.all([
@@ -445,6 +457,7 @@ export default function App() {
     if (!pageId) {
       setSelectedPageText("");
       setSelectedPageRevision(null);
+      setLinkedRefs([]);
       return;
     }
 
@@ -455,6 +468,29 @@ export default function App() {
       setSelectedPageRevision(revision);
       setLoadedPageId(pageId);
     }
+  }
+
+  const loadLinkedRefsSeqRef = useRef(0);
+
+  async function loadPageLinkedRefs(pageId) {
+    if (!pageId) {
+      setLinkedRefs([]);
+      return;
+    }
+
+    const seq = ++loadLinkedRefsSeqRef.current;
+    const refs = await invoke("page_linked_refs", { pageId });
+    if (seq === loadLinkedRefsSeqRef.current) {
+      setLinkedRefs(refs);
+    }
+  }
+
+  function showNotice(message, code = "linked_refs_notice") {
+    setNotice({
+      id: Date.now(),
+      code,
+      message,
+    });
   }
 
   async function handleEditorConflict() {
@@ -552,6 +588,7 @@ export default function App() {
     setSelectedPageId("");
     setSelectedPageText("");
     setSelectedPageRevision(null);
+    setLinkedRefs([]);
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -581,6 +618,10 @@ export default function App() {
     setModal({ type: "rename", pageId });
   }
 
+  function resetEditorRenameValue(page = loadedPage) {
+    setEditorRenameValue(page ? page.title || readPageLeafName(page.page_id) : "");
+  }
+
   function openMoveModal(pageId) {
     setPageMenuOpenId(null);
     setMoveTarget("");
@@ -598,27 +639,47 @@ export default function App() {
     setMoveTarget("");
   }
 
-  async function handleConfirmRename(newTitle) {
-    if (!modal?.pageId || !newTitle.trim()) return;
+  async function renamePage(pageId, newTitle, onSuccess) {
+    const trimmedTitle = newTitle.trim();
+    if (!pageId || !trimmedTitle) return;
+    if (trimmedTitle === readPageLeafName(pageId)) {
+      onSuccess?.();
+      return;
+    }
+
     setBusyAction("rename");
     setActionError(null);
     try {
-      await invoke("rename_page", { pageId: modal.pageId, newTitle: newTitle.trim() });
-      const prefix = modal.pageId.lastIndexOf("/");
-      const newPageId =
-        prefix >= 0
-          ? modal.pageId.slice(0, prefix + 1) + newTitle.trim()
-          : "pages:" + newTitle.trim();
-      setPageOrderByParent((current) => remapPageOrderEntries(current, modal.pageId, newPageId));
-      setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
-      setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
+      await invoke("rename_page", { pageId, newTitle: trimmedTitle });
+      const newPageId = renamedPageIdForTitle(pageId, trimmedTitle);
+      setPageOrderByParent((current) => remapPageOrderEntries(current, pageId, newPageId));
+      setSelectedPageId((current) => remapSubtreePageId(current, pageId, newPageId));
+      setLoadedPageId((current) => remapSubtreePageId(current, pageId, newPageId));
       await loadWorkspaceLists();
-      closeModal();
+      onSuccess?.(newPageId);
     } catch (error) {
       setActionError(normalizeError(error));
     } finally {
       setBusyAction("");
     }
+  }
+
+  async function handleConfirmRename(newTitle) {
+    if (!modal?.pageId) return;
+    await renamePage(modal.pageId, newTitle, () => closeModal());
+  }
+
+  async function handleEditorRenameSave() {
+    if (!loadedPage) return;
+    await renamePage(loadedPage.page_id, editorRenameValue, () => {
+      const renamedPageId = renamedPageIdForTitle(loadedPage.page_id, editorRenameValue.trim());
+      resetEditorRenameValue({
+        ...loadedPage,
+        page_id: renamedPageId,
+        title: editorRenameValue.trim(),
+      });
+      editorTitleInputRef.current?.blur();
+    });
   }
 
   async function handleConfirmMove(newParentPageId) {
@@ -808,27 +869,24 @@ export default function App() {
       clientX: event.clientX,
       clientY: event.clientY,
       hover: null,
-      active: event.pointerType === "mouse",
+      active: false,
     };
 
-    if (event.pointerType === "mouse") {
-      setDragState(nextDragState);
-      return;
+    if (event.pointerType !== "mouse") {
+      dragLongPressTimerRef.current = window.setTimeout(() => {
+        setDragState((current) => {
+          if (
+            current &&
+            current.pointerId === nextDragState.pointerId &&
+            current.sourcePageId === nextDragState.sourcePageId
+          ) {
+            return { ...current, active: true };
+          }
+          return current;
+        });
+        dragLongPressTimerRef.current = null;
+      }, DRAG_LONG_PRESS_MS);
     }
-
-    dragLongPressTimerRef.current = window.setTimeout(() => {
-      setDragState((current) => {
-        if (
-          current &&
-          current.pointerId === nextDragState.pointerId &&
-          current.sourcePageId === nextDragState.sourcePageId
-        ) {
-          return { ...current, active: true };
-        }
-        return current;
-      });
-      dragLongPressTimerRef.current = null;
-    }, DRAG_LONG_PRESS_MS);
 
     setDragState(nextDragState);
   }
@@ -1060,7 +1118,10 @@ export default function App() {
       return;
     }
 
-    loadPageContent(selectedPageId).catch((error) => {
+    Promise.all([
+      loadPageContent(selectedPageId),
+      loadPageLinkedRefs(selectedPageId),
+    ]).catch((error) => {
       setActionError(normalizeError(error));
     });
   }, [mode, selectedPageId]);
@@ -1074,25 +1135,39 @@ export default function App() {
       for (const event of events) {
         if (event.type === "workspace_reloaded") {
           await loadWorkspaceLists().catch(() => {});
+          if (loadedPageId) {
+            await loadPageLinkedRefs(loadedPageId).catch(() => {});
+          }
         } else if (event.type === "pages_changed") {
           await loadWorkspaceLists().catch(() => {});
           if (loadedPageId && event.page_ids.includes(loadedPageId)) {
             await loadPageContent(loadedPageId).catch(() => {});
+          }
+          if (
+            loadedPageId &&
+            (event.page_ids.includes(loadedPageId) ||
+              linkedRefs.some((entry) => event.page_ids.includes(entry.source_page_id)))
+          ) {
+            await loadPageLinkedRefs(loadedPageId).catch(() => {});
           }
         } else if (event.type === "page_removed") {
           await loadWorkspaceLists().catch(() => {});
           if (event.page_id === loadedPageId) {
             setSelectedPageText("");
             setSelectedPageRevision(null);
+            setLinkedRefs([]);
             setLoadedPageId(null);
             setSelectedPageId("");
+          }
+          if (linkedRefs.some((entry) => entry.source_page_id === event.page_id)) {
+            await loadPageLinkedRefs(loadedPageId).catch(() => {});
           }
         }
       }
     }, 250);
 
     return () => clearInterval(id);
-  }, [mode, loadedPageId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, loadedPageId, linkedRefs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedPageId) {
@@ -1119,6 +1194,10 @@ export default function App() {
       return changed ? next : current;
     });
   }, [selectedPageId, pages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    resetEditorRenameValue(loadedPage);
+  }, [loadedPageId, loadedPage?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visibleError =
     startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
@@ -1303,7 +1382,54 @@ export default function App() {
               {loadedPage && (
                 <>
                   <p className="eyebrow">Editor</p>
-                  <h1>{loadedPage.title || loadedPage.page_id}</h1>
+                  <form
+                    className="editor-title-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void handleEditorRenameSave();
+                    }}
+                  >
+                    <input
+                      ref={editorTitleInputRef}
+                      className="editor-title-input"
+                      type="text"
+                      value={editorRenameValue}
+                      size={Math.max(editorRenameValue.length, 1)}
+                      onFocus={() => setActionError(null)}
+                      onChange={(event) => setEditorRenameValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          resetEditorRenameValue();
+                          editorTitleInputRef.current?.blur();
+                        }
+                      }}
+                    />
+                    <div className="editor-title-actions">
+                      <button
+                        className="primary-button"
+                        type="submit"
+                        disabled={
+                          busyAction === "rename" ||
+                          !editorRenameValue.trim() ||
+                          editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
+                        }
+                      >
+                        {busyAction === "rename" ? "Saving..." : "Save"}
+                      </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => {
+                          resetEditorRenameValue();
+                          editorTitleInputRef.current?.blur();
+                        }}
+                        disabled={busyAction === "rename"}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
                   <p className="body-copy">{loadedPage.workspace_path}</p>
                   <Editor
                     pageId={loadedPageId}
@@ -1314,6 +1440,20 @@ export default function App() {
                     onNavigate={handleSelectPage}
                     onConflict={() => void handleEditorConflict()}
                   />
+                  {loadedPageIsRegular ? (
+                    <LinkedReferences
+                      entries={linkedRefs}
+                      pages={pages}
+                      onNavigate={(sourcePageId) => {
+                        const sourcePage = pagesById.get(sourcePageId);
+                        if (sourcePage && readStreamName(sourcePage.location) === null) {
+                          handleSelectPage(sourcePageId);
+                        }
+                      }}
+                      onReload={() => loadPageLinkedRefs(loadedPageId)}
+                      onNotice={(message) => showNotice(message, "linked_refs_reload")}
+                    />
+                  ) : null}
                 </>
               )}
             </section>
