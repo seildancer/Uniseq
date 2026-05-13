@@ -52,6 +52,7 @@ pub struct StreamPageDelete {
 enum OperationKind {
     Rename,
     Move,
+    Delete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,45 +73,7 @@ impl IncrementalWorkspaceUpdate {
         }
     }
 
-    fn from_plan(cache: &WorkspaceCache, plan: &RenameTransactionPlan) -> Self {
-        let moved_old_page_ids = plan
-            .page_mappings
-            .iter()
-            .map(|mapping| mapping.old_page_id.clone())
-            .collect::<BTreeSet<_>>();
-        let moved_new_page_ids = plan
-            .page_mappings
-            .iter()
-            .map(|mapping| mapping.new_page_id.clone())
-            .collect::<BTreeSet<_>>();
-        let mut changed_page_ids = plan
-            .file_changes
-            .iter()
-            .map(|change| PageId::from_workspace_path(&change.final_path))
-            .collect::<Result<BTreeSet<_>, _>>()
-            .expect("transaction plans only contain valid workspace paths");
-
-        for mapping in &plan.page_mappings {
-            if mapping.old_page_id.parent() != mapping.new_page_id.parent() {
-                if let Some(old_parent_page_id) = mapping.old_page_id.parent() {
-                    if cache.page(&old_parent_page_id).is_some()
-                        && !moved_old_page_ids.contains(&old_parent_page_id)
-                    {
-                        changed_page_ids.insert(old_parent_page_id);
-                    }
-                }
-
-                if let Some(new_parent_page_id) = mapping.new_page_id.parent() {
-                    if (cache.page(&new_parent_page_id).is_some()
-                        && !moved_old_page_ids.contains(&new_parent_page_id))
-                        || moved_new_page_ids.contains(&new_parent_page_id)
-                    {
-                        changed_page_ids.insert(new_parent_page_id);
-                    }
-                }
-            }
-        }
-
+    fn from_plan(plan: &RenameTransactionPlan) -> Self {
         Self {
             written_paths: plan
                 .file_changes
@@ -118,13 +81,8 @@ impl IncrementalWorkspaceUpdate {
                 .map(|change| change.final_path.clone())
                 .collect(),
             deleted_paths: plan.deletes.clone(),
-            changed_page_ids: changed_page_ids.into_iter().collect(),
-            removed_page_ids: plan
-                .deletes
-                .iter()
-                .map(PageId::from_workspace_path)
-                .collect::<Result<Vec<_>, _>>()
-                .expect("transaction plans only contain valid workspace paths"),
+            changed_page_ids: plan.changed_page_ids.clone(),
+            removed_page_ids: plan.removed_page_ids.clone(),
         }
     }
 }
@@ -134,6 +92,7 @@ impl OperationKind {
         match self {
             Self::Rename => "rename",
             Self::Move => "move",
+            Self::Delete => "delete",
         }
     }
 
@@ -141,6 +100,7 @@ impl OperationKind {
         match value {
             "rename" => Some(Self::Rename),
             "move" => Some(Self::Move),
+            "delete" => Some(Self::Delete),
             _ => None,
         }
     }
@@ -315,56 +275,10 @@ pub(crate) fn apply_page_delete_subtree_with_update(
         });
     }
 
-    let deleted_pages = cache
-        .pages()
-        .values()
-        .filter(|page| {
-            page.location.is_page_backed() && page_id_has_prefix(&page.page_id, &request.page_id)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if deleted_pages.is_empty() {
-        return Err(CoreError::MissingPage);
-    }
-
-    let deleted_page_ids = deleted_pages
-        .iter()
-        .map(|page| page.page_id.clone())
-        .collect::<Vec<_>>();
-    let deleted_set = deleted_page_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let mut changed_page_ids = pages_referring_to_any(cache, deleted_page_ids.iter())?
-        .into_iter()
-        .filter(|page_id| !deleted_set.contains(page_id))
-        .collect::<Vec<_>>();
-    if let Some(parent_page_id) = request.page_id.parent() {
-        if !deleted_set.contains(&parent_page_id) && cache.page(&parent_page_id).is_some() {
-            changed_page_ids.push(parent_page_id);
-        }
-    }
-
-    let mut deleted_paths = Vec::new();
-    for page in &deleted_pages {
-        let absolute_path = root.join(&page.workspace_path);
-        match fs::remove_file(&absolute_path) {
-            Ok(()) => deleted_paths.push(page.workspace_path.clone()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
-        }
-    }
-
-    for page_id in &deleted_page_ids {
-        cache.remove_page(page_id);
-    }
-
-    changed_page_ids.sort();
-    changed_page_ids.dedup();
-
-    Ok(IncrementalWorkspaceUpdate {
-        written_paths: Vec::new(),
-        deleted_paths,
-        changed_page_ids,
-        removed_page_ids: deleted_page_ids,
-    })
+    let plan = plan_delete_subtree_transaction(cache, &request.page_id)?;
+    let update = IncrementalWorkspaceUpdate::from_plan(&plan);
+    let record = TransactionRecord::stage(root, &plan)?;
+    complete_transaction_record(root, cache, record, Some(&plan), Some(update))
 }
 
 pub(crate) fn apply_stream_page_delete_with_update(
@@ -455,7 +369,7 @@ pub fn recover_workspace_transactions(
     }
 
     let record = TransactionRecord::load(root)?;
-    complete_transaction_record(root, cache, record, None)?;
+    complete_transaction_record(root, cache, record, None, None)?;
     Ok(true)
 }
 
@@ -475,7 +389,7 @@ fn plan_and_commit_transaction(
         destination_parent_page_id,
     )?;
     let record = TransactionRecord::stage(root, &plan)?;
-    complete_transaction_record(root, cache, record, Some(&plan))
+    complete_transaction_record(root, cache, record, Some(&plan), None)
 }
 
 fn complete_transaction_record(
@@ -483,17 +397,20 @@ fn complete_transaction_record(
     cache: &mut WorkspaceCache,
     mut record: TransactionRecord,
     prepared_plan: Option<&RenameTransactionPlan>,
+    prepared_update: Option<IncrementalWorkspaceUpdate>,
 ) -> Result<IncrementalWorkspaceUpdate, CoreError> {
-    // Recovery intentionally finishes the rename/move to its planned final state
-    // rather than attempting rollback. Markdown files remain authoritative, and
-    // startup/runtime recovery replays the recorded final state until disk and
-    // cache converge on one deterministic committed outcome.
+    // Recovery intentionally finishes the structural transaction to its planned
+    // final state rather than attempting rollback. Markdown files remain
+    // authoritative, and startup/runtime recovery replays the recorded final
+    // state until disk and cache converge on one deterministic committed
+    // outcome.
     record.validate_final_paths_available(root)?;
     record.mark_applying(root)?;
     record.apply_final_state(root, None, false)?;
     let update = if let Some(plan) = prepared_plan {
+        let update = prepared_update.unwrap_or_else(|| IncrementalWorkspaceUpdate::from_plan(plan));
         apply_transaction_plan_to_cache(cache, plan)?;
-        IncrementalWorkspaceUpdate::from_plan(cache, plan)
+        update
     } else {
         let final_writes = record.final_writes(root)?;
         apply_transaction_writes_to_cache(cache, &final_writes, record.deletes())?;
@@ -515,6 +432,57 @@ fn complete_transaction_record(
     Ok(update)
 }
 
+fn plan_delete_subtree_transaction(
+    cache: &WorkspaceCache,
+    root_page_id: &PageId,
+) -> Result<RenameTransactionPlan, CoreError> {
+    let deleted_pages = cache
+        .pages()
+        .values()
+        .filter(|page| page.location.is_page_backed() && page_id_has_prefix(&page.page_id, root_page_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if deleted_pages.is_empty() {
+        return Err(CoreError::MissingPage);
+    }
+
+    let removed_page_ids = deleted_pages
+        .iter()
+        .map(|page| page.page_id.clone())
+        .collect::<Vec<_>>();
+    let removed_page_id_set = removed_page_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut changed_page_ids = pages_referring_to_any(cache, removed_page_ids.iter())?
+        .into_iter()
+        .filter(|page_id| !removed_page_id_set.contains(page_id))
+        .collect::<Vec<_>>();
+    if let Some(parent_page_id) = root_page_id.parent() {
+        if !removed_page_id_set.contains(&parent_page_id) && cache.page(&parent_page_id).is_some() {
+            changed_page_ids.push(parent_page_id);
+        }
+    }
+    changed_page_ids.sort();
+    changed_page_ids.dedup();
+
+    Ok(RenameTransactionPlan {
+        kind: OperationKind::Delete,
+        page_mappings: Vec::new(),
+        file_changes: Vec::new(),
+        deletes: deleted_pages
+            .iter()
+            .map(|page| page.workspace_path.clone())
+            .collect(),
+        expected_source_files: deleted_pages
+            .iter()
+            .map(|page| planning::ExpectedSourceFile {
+                workspace_path: page.workspace_path.clone(),
+                fingerprint: page.fingerprint,
+            })
+            .collect(),
+        changed_page_ids,
+        removed_page_ids,
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn stage_page_rename_transaction_for_testing(
     root: impl AsRef<Path>,
@@ -531,6 +499,18 @@ pub(crate) fn stage_page_rename_transaction_for_testing(
         &target_page_id,
         None,
     )?;
+    TransactionRecord::stage(root, &plan)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(crate) fn stage_page_delete_transaction_for_testing(
+    root: impl AsRef<Path>,
+    page_id: &PageId,
+) -> Result<(), CoreError> {
+    let root = root.as_ref();
+    let disk_cache = crate::core::files::load_workspace_cache(root)?;
+    let plan = plan_delete_subtree_transaction(&disk_cache, page_id)?;
     TransactionRecord::stage(root, &plan)?;
     Ok(())
 }
@@ -978,6 +958,33 @@ mod tests {
     }
 
     #[test]
+    fn delete_rejects_stale_source_page_content_before_staging() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- cached\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("A___B.md", "- newer\n");
+
+        let error = apply_page_delete_subtree(
+            &workspace.root,
+            &mut cache,
+            PageDeleteSubtree {
+                page_id: PageId::new(["A", "B"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: workspace_test_relative_path("A___B.md")
+            }
+        );
+        assert!(workspace.file_exists("A___B.md"));
+    }
+
+    #[test]
     fn rename_updates_normalized_incoming_refs_after_commit() {
         let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
@@ -1047,6 +1054,33 @@ mod tests {
                 .is_some()
         );
         drop(record);
+    }
+
+    #[test]
+    fn delete_recovery_finishes_interrupted_transaction_and_refreshes_cache() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "");
+        workspace.write_file("A___B.md", "- body\n");
+        workspace.write_file("A___B___C.md", "- child\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
+
+        stage_page_delete_transaction_for_testing(
+            &workspace.root,
+            &PageId::new(["A", "B"]).unwrap(),
+        )
+        .unwrap();
+        apply_staged_transaction_partially_for_testing(&workspace.root, Some(0), true).unwrap();
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        assert!(recover_workspace_transactions(&workspace.root, &mut cache).unwrap());
+
+        assert!(workspace.file_exists("A.md"));
+        assert!(!workspace.file_exists("A___B.md"));
+        assert!(!workspace.file_exists("A___B___C.md"));
+        assert_eq!(workspace.read_file("X.md"), "- [[A/B]]\n");
+        assert!(!workspace.root.join(".uniseq-page-transaction").exists());
+        assert!(cache.page(&PageId::new(["A", "B"]).unwrap()).is_none());
+        assert!(cache.page(&PageId::new(["A", "B", "C"]).unwrap()).is_none());
     }
 
     #[test]

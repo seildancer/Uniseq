@@ -36,6 +36,8 @@ pub(super) struct RenameTransactionPlan {
     pub(super) file_changes: Vec<FileChange>,
     pub(super) deletes: Vec<PathBuf>,
     pub(super) expected_source_files: Vec<ExpectedSourceFile>,
+    pub(super) changed_page_ids: Vec<PageId>,
+    pub(super) removed_page_ids: Vec<PageId>,
 }
 
 pub(super) fn plan_transaction(
@@ -107,12 +109,52 @@ pub(super) fn plan_transaction(
         })
         .collect::<Vec<_>>();
 
+    let moved_old_page_ids = page_mappings
+        .iter()
+        .map(|mapping| mapping.old_page_id.clone())
+        .collect::<BTreeSet<_>>();
+    let moved_new_page_ids = page_mappings
+        .iter()
+        .map(|mapping| mapping.new_page_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut changed_page_ids = file_changes
+        .iter()
+        .map(|change| PageId::from_workspace_path(&change.final_path))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let removed_page_ids = page_mappings
+        .iter()
+        .map(|mapping| mapping.old_page_id.clone())
+        .collect::<Vec<_>>();
+
+    for mapping in &page_mappings {
+        if mapping.old_page_id.parent() != mapping.new_page_id.parent() {
+            if let Some(old_parent_page_id) = mapping.old_page_id.parent() {
+                if cache.page(&old_parent_page_id).is_some()
+                    && !moved_old_page_ids.contains(&old_parent_page_id)
+                {
+                    changed_page_ids.insert(old_parent_page_id);
+                }
+            }
+
+            if let Some(new_parent_page_id) = mapping.new_page_id.parent() {
+                if (cache.page(&new_parent_page_id).is_some()
+                    && !moved_old_page_ids.contains(&new_parent_page_id))
+                    || moved_new_page_ids.contains(&new_parent_page_id)
+                {
+                    changed_page_ids.insert(new_parent_page_id);
+                }
+            }
+        }
+    }
+
     Ok(RenameTransactionPlan {
         kind,
         page_mappings,
         file_changes,
         deletes,
         expected_source_files,
+        changed_page_ids: changed_page_ids.into_iter().collect(),
+        removed_page_ids,
     })
 }
 

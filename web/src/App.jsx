@@ -68,6 +68,30 @@ function collectAncestorPageIds(pageId, pagesById) {
   return ancestorPageIds;
 }
 
+function remapSubtreePageId(pageId, sourcePageId, targetPageId) {
+  if (!pageId || !sourcePageId || !targetPageId) {
+    return pageId;
+  }
+
+  if (pageId === sourcePageId) {
+    return targetPageId;
+  }
+
+  if (pageId.startsWith(sourcePageId + "/")) {
+    return targetPageId + pageId.slice(sourcePageId.length);
+  }
+
+  return pageId;
+}
+
+function isPageInSubtree(pageId, rootPageId) {
+  if (typeof pageId !== "string" || typeof rootPageId !== "string") {
+    return false;
+  }
+
+  return pageId === rootPageId || pageId.startsWith(rootPageId + "/");
+}
+
 function normalizeError(error) {
   if (error && typeof error === "object" && "message" in error) {
     return {
@@ -475,12 +499,8 @@ export default function App() {
         prefix >= 0
           ? modal.pageId.slice(0, prefix + 1) + newTitle.trim()
           : "pages:" + newTitle.trim();
-      if (selectedPageId === modal.pageId) {
-        setSelectedPageId(newPageId);
-      }
-      if (loadedPageId === modal.pageId) {
-        setLoadedPageId(newPageId);
-      }
+      setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
+      setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
       closeModal();
     } catch (error) {
@@ -503,12 +523,8 @@ export default function App() {
       const newPageId = newParentPageId
         ? newParentPageId + "/" + leafName
         : "pages:" + leafName;
-      if (selectedPageId === modal.pageId) {
-        setSelectedPageId(newPageId);
-      }
-      if (loadedPageId === modal.pageId) {
-        setLoadedPageId(newPageId);
-      }
+      setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
+      setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
       closeModal();
     } catch (error) {
@@ -524,12 +540,12 @@ export default function App() {
     setActionError(null);
     try {
       await invoke("delete_page", { pageId: modal.pageId });
-      if (selectedPageId === modal.pageId) {
+      if (isPageInSubtree(selectedPageId, modal.pageId)) {
         setSelectedPageId("");
         setSelectedPageText("");
         setSelectedPageRevision(null);
       }
-      if (loadedPageId === modal.pageId) {
+      if (isPageInSubtree(loadedPageId, modal.pageId)) {
         setLoadedPageId(null);
       }
       await loadWorkspaceLists();
