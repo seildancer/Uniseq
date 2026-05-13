@@ -1382,54 +1382,60 @@ export default function App() {
               {loadedPage && (
                 <>
                   <p className="eyebrow">Editor</p>
-                  <form
-                    className="editor-title-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void handleEditorRenameSave();
-                    }}
-                  >
-                    <input
-                      ref={editorTitleInputRef}
-                      className="editor-title-input"
-                      type="text"
-                      value={editorRenameValue}
-                      size={Math.max(editorRenameValue.length, 1)}
-                      onFocus={() => setActionError(null)}
-                      onChange={(event) => setEditorRenameValue(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          resetEditorRenameValue();
-                          editorTitleInputRef.current?.blur();
-                        }
+                  {loadedPageIsRegular ? (
+                    <form
+                      className="editor-title-form"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleEditorRenameSave();
                       }}
-                    />
-                    <div className="editor-title-actions">
-                      <button
-                        className="primary-button"
-                        type="submit"
-                        disabled={
-                          busyAction === "rename" ||
-                          !editorRenameValue.trim() ||
-                          editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
-                        }
-                      >
-                        {busyAction === "rename" ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => {
-                          resetEditorRenameValue();
-                          editorTitleInputRef.current?.blur();
+                    >
+                      <input
+                        ref={editorTitleInputRef}
+                        className="editor-title-input"
+                        type="text"
+                        value={editorRenameValue}
+                        size={Math.max(editorRenameValue.length, 1)}
+                        onFocus={() => setActionError(null)}
+                        onChange={(event) => setEditorRenameValue(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            resetEditorRenameValue();
+                            editorTitleInputRef.current?.blur();
+                          }
                         }}
-                        disabled={busyAction === "rename"}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
+                      />
+                      <div className="editor-title-actions">
+                        <button
+                          className="primary-button"
+                          type="submit"
+                          disabled={
+                            busyAction === "rename" ||
+                            !editorRenameValue.trim() ||
+                            editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
+                          }
+                        >
+                          {busyAction === "rename" ? "Saving..." : "Save"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => {
+                            resetEditorRenameValue();
+                            editorTitleInputRef.current?.blur();
+                          }}
+                          disabled={busyAction === "rename"}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <h1 className="editor-title-static">
+                      {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
+                    </h1>
+                  )}
                   <p className="body-copy">{loadedPage.workspace_path}</p>
                   <Editor
                     pageId={loadedPageId}

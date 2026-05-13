@@ -15,7 +15,7 @@ function detectTagTrigger(text) {
   return null;
 }
 
-export default function AutocompleteEditor({ get, pages, children }) {
+export default function AutocompleteEditor({ get, pages, children, className = "milkdown-editor" }) {
   const [autocomplete, setAutocomplete] = useState(null);
   const activeItemRef = useRef(null);
   const suppressNextCheckRef = useRef(false);
@@ -85,7 +85,7 @@ export default function AutocompleteEditor({ get, pages, children }) {
 
   return (
     <div
-      className="milkdown-editor"
+      className={className}
       onKeyDownCapture={(e) => {
         if (!autocomplete) return;
         if (e.key === "ArrowDown") {
