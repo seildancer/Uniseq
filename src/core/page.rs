@@ -16,6 +16,13 @@ impl FileFingerprint {
         }
     }
 
+    pub fn from_parts(len_bytes: usize, content_hash: u64) -> Self {
+        Self {
+            len_bytes,
+            content_hash,
+        }
+    }
+
     pub fn len_bytes(self) -> usize {
         self.len_bytes
     }

@@ -5,10 +5,8 @@ use std::sync::Mutex;
 
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(test)]
-use uniseq_backend::PageName;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
     CoreError, FileFingerprint, FlatBlockSnapshot, IncomingPageRefSnapshot, OutgoingPageRefSnapshot,
@@ -91,6 +89,12 @@ struct OutgoingPageRefDto {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct FileFingerprintDto {
+    len_bytes: usize,
+    content_hash: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct FileFingerprintInputDto {
     len_bytes: usize,
     content_hash: u64,
 }
@@ -210,11 +214,20 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
-    fn write_page_content(&self, page_id: String, text: String) -> CommandResult<PageContentDto> {
+    fn write_page_content(
+        &self,
+        page_id: String,
+        text: String,
+        expected_revision: Option<FileFingerprintInputDto>,
+    ) -> CommandResult<PageContentDto> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
-            .write_and_reparse(&page_id, text)
+            .write_and_reparse(
+                &page_id,
+                text,
+                expected_revision.map(FileFingerprint::from),
+            )
             .map(PageContentDto::from)
             .map_err(ErrorDto::from)
     }
@@ -413,6 +426,12 @@ impl From<FileFingerprint> for FileFingerprintDto {
             len_bytes: value.len_bytes(),
             content_hash: value.content_hash(),
         }
+    }
+}
+
+impl From<FileFingerprintInputDto> for FileFingerprint {
+    fn from(value: FileFingerprintInputDto) -> Self {
+        FileFingerprint::from_parts(value.len_bytes, value.content_hash)
     }
 }
 
@@ -688,8 +707,13 @@ fn write_page_content(
     state: State<'_, AppState>,
     page_id: String,
     text: String,
+    expected_revision: Option<FileFingerprintInputDto>,
 ) -> CommandResult<PageContentDto> {
-    state.controller.lock().unwrap().write_page_content(page_id, text)
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .write_page_content(page_id, text, expected_revision)
 }
 
 #[tauri::command]

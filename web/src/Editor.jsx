@@ -19,7 +19,7 @@ import AutocompleteEditor from "./components/Autocomplete";
 
 const remarkBreaks = $remark("remarkBreaks", () => breaks);
 
-function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
+function MilkdownEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, onConflict }) {
   const navigateRef = useRef(onNavigate);
   const pagesRef = useRef(pages);
   const onMarkdownUpdatedRef = useRef(null);
@@ -58,7 +58,15 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
       .use(remarkBreaks.plugin)
   );
 
-  useEditorPersistence({ get, pageId, text, flushRef, onMarkdownUpdatedRef });
+  useEditorPersistence({
+    get,
+    pageId,
+    text,
+    revision,
+    flushRef,
+    onMarkdownUpdatedRef,
+    onConflict,
+  });
 
   return (
     <AutocompleteEditor get={get} pages={pages}>
@@ -67,7 +75,7 @@ function MilkdownEditorInner({ pageId, text, pages, onNavigate, flushRef }) {
   );
 }
 
-export default function MilkdownEditor({ pageId, text, pages, onNavigate }) {
+export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict }) {
   const flushRef = useRef(null);
 
   useEffect(() => {
@@ -79,9 +87,11 @@ export default function MilkdownEditor({ pageId, text, pages, onNavigate }) {
       <MilkdownEditorInner
         pageId={pageId}
         text={text}
+        revision={revision}
         pages={pages}
         onNavigate={onNavigate}
         flushRef={flushRef}
+        onConflict={onConflict}
       />
     </MilkdownProvider>
   );

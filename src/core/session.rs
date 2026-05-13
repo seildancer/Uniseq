@@ -206,8 +206,12 @@ impl WorkspaceSession {
         &self,
         page_id: &PageId,
         text: String,
+        expected_revision: Option<super::FileFingerprint>,
     ) -> Result<PageContentSnapshot, CoreError> {
-        self.state.write().unwrap().write_and_reparse_inner(page_id, text)
+        self.state
+            .write()
+            .unwrap()
+            .write_and_reparse_inner(page_id, text, expected_revision)
     }
 
     pub fn page_incoming_refs(
@@ -376,9 +380,15 @@ impl WorkspaceSessionState {
         &mut self,
         page_id: &PageId,
         text: String,
+        expected_revision: Option<super::FileFingerprint>,
     ) -> Result<PageContentSnapshot, CoreError> {
         let (location, workspace_path) = {
             let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
+            if expected_revision.is_some_and(|revision| revision != page.fingerprint) {
+                return Err(CoreError::StructuralConflict {
+                    path: page.workspace_path.clone(),
+                });
+            }
             (page.location.clone(), page.workspace_path.clone())
         };
         let absolute_path = self.root.join(&workspace_path);
@@ -2107,5 +2117,71 @@ mod tests {
                 .fingerprint,
             FileFingerprint::from_text("- body\r\n")
         );
+    }
+
+    #[test]
+    fn write_and_reparse_rejects_stale_revision_after_structural_rename() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "");
+        workspace.write_file("Target.md", "- body\n");
+        workspace.write_file("Referrer.md", "- #Target\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        let stale_revision = session
+            .page_content(&PageId::new(["Referrer"]).unwrap())
+            .unwrap()
+            .revision;
+
+        session
+            .apply_page_rename(PageRename {
+                source_page_id: PageId::new(["Target"]).unwrap(),
+                new_leaf_name: PageName::new("Renamed").unwrap(),
+            })
+            .unwrap();
+
+        let error = session
+            .write_and_reparse(
+                &PageId::new(["Referrer"]).unwrap(),
+                "- #Target\n".to_owned(),
+                Some(stale_revision),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: workspace_test_relative_path("Referrer.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("Referrer.md"), "- #Renamed\n");
+    }
+
+    #[test]
+    fn write_and_reparse_returns_fresh_revision_for_follow_up_writes() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "- one\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        let first_revision = session
+            .page_content(&PageId::new(["A"]).unwrap())
+            .unwrap()
+            .revision;
+        let first_write = session
+            .write_and_reparse(
+                &PageId::new(["A"]).unwrap(),
+                "- two\n".to_owned(),
+                Some(first_revision),
+            )
+            .unwrap();
+        let second_write = session
+            .write_and_reparse(
+                &PageId::new(["A"]).unwrap(),
+                "- three\n".to_owned(),
+                Some(first_write.revision),
+            )
+            .unwrap();
+
+        assert_eq!(workspace.read_file("A.md"), "- three\n");
+        assert_eq!(second_write.revision, FileFingerprint::from_text("- three\n"));
     }
 }

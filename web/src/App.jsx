@@ -9,6 +9,8 @@ const INITIAL_CREATE_STATE = {
   folderName: "",
 };
 
+const NOTICE_AUTO_DISMISS_MS = 4000;
+
 const appWindow = getCurrentWindow();
 
 function readPageLeafName(pageId) {
@@ -273,9 +275,11 @@ export default function App() {
   const [streamNames, setStreamNames] = useState([]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedPageText, setSelectedPageText] = useState("");
+  const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
   const [expandedPageIds, setExpandedPageIds] = useState({});
@@ -290,6 +294,9 @@ export default function App() {
   const pageTree = buildPageTree(regularPages);
   const selectedPage = regularPages.find((page) => page.page_id === selectedPageId) ?? null;
   const loadedPage = regularPages.find((page) => page.page_id === loadedPageId) ?? null;
+  const loadedPageEditorKey = loadedPageId && selectedPageRevision
+    ? `${loadedPageId}:${selectedPageRevision.len_bytes}:${selectedPageRevision.content_hash}`
+    : loadedPageId;
   const createDisabled =
     busyAction === "create" ||
     !createState.parentPath ||
@@ -309,15 +316,27 @@ export default function App() {
   async function loadPageContent(pageId) {
     if (!pageId) {
       setSelectedPageText("");
+      setSelectedPageRevision(null);
       return;
     }
 
     const seq = ++loadPageContentSeqRef.current;
-    const { text } = await invoke("page_content", { pageId });
+    const { text, revision } = await invoke("page_content", { pageId });
     if (seq === loadPageContentSeqRef.current) {
       setSelectedPageText(text);
+      setSelectedPageRevision(revision);
       setLoadedPageId(pageId);
     }
+  }
+
+  async function handleEditorConflict() {
+    if (!loadedPageId) return;
+    await loadPageContent(loadedPageId).catch(() => {});
+    setNotice({
+      id: Date.now(),
+      code: "stale_page_reload",
+      message: "Page changed while the editor was open. Reloaded the latest content.",
+    });
   }
 
   async function openWorkspaceRoot(rootPath) {
@@ -403,6 +422,7 @@ export default function App() {
     setStreamNames([]);
     setSelectedPageId("");
     setSelectedPageText("");
+    setSelectedPageRevision(null);
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -507,6 +527,7 @@ export default function App() {
       if (selectedPageId === modal.pageId) {
         setSelectedPageId("");
         setSelectedPageText("");
+        setSelectedPageRevision(null);
       }
       if (loadedPageId === modal.pageId) {
         setLoadedPageId(null);
@@ -581,6 +602,18 @@ export default function App() {
       return () => document.removeEventListener("mousedown", handleClickOutside);
     }
   }, [pageMenuOpenId]);
+
+  useEffect(() => {
+    if (!notice) {
+      return undefined;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setNotice((current) => (current?.id === notice.id ? null : current));
+    }, NOTICE_AUTO_DISMISS_MS);
+
+    return () => clearTimeout(timeoutId);
+  }, [notice]);
 
   useEffect(() => {
     isBootEffectMountedRef.current = true;
@@ -675,6 +708,7 @@ export default function App() {
           await loadWorkspaceLists().catch(() => {});
           if (event.page_id === loadedPageId) {
             setSelectedPageText("");
+            setSelectedPageRevision(null);
             setLoadedPageId(null);
             setSelectedPageId("");
           }
@@ -830,6 +864,20 @@ export default function App() {
             </div>
           ) : null}
 
+          {notice ? (
+            <div className="snackbar" role="status" aria-live="polite">
+              <span>{notice.message}</span>
+              <button
+                className="snackbar-dismiss"
+                type="button"
+                aria-label="Dismiss notification"
+                onClick={() => setNotice(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
+
           <div className="workspace-body">
             <aside className="workspace-sidebar">
               <div className="sidebar-section">
@@ -883,9 +931,11 @@ export default function App() {
                   <Editor
                     pageId={loadedPageId}
                     text={selectedPageText}
-                    key={loadedPageId}
+                    revision={selectedPageRevision}
+                    key={loadedPageEditorKey}
                     pages={regularPages}
                     onNavigate={handleSelectPage}
+                    onConflict={() => void handleEditorConflict()}
                   />
                 </>
               )}
