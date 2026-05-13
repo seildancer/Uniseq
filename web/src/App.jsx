@@ -1218,14 +1218,7 @@ export default function App() {
       <main className="app-shell app-shell--workspace">
         <section className="workspace-shell">
           <header className="app-topbar" onMouseDown={handleTopbarMouseDown}>
-            <div className="topbar-brand">
-              <strong>Uniseq</strong>
-              <span>{workspace.root_path}</span>
-            </div>
-
-            <div className="topbar-tabs">
-              <span className="topbar-tab topbar-tab--placeholder">Tabs later</span>
-            </div>
+            <div className="topbar-brand" />
 
             <div className="window-controls" data-no-window-drag="true">
               <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
@@ -1262,6 +1255,7 @@ export default function App() {
                     </button>
                     <div className="topbar-menu-divider"></div>
                     <div className="topbar-menu-info">
+                      <div className="topbar-menu-path">{workspace.root_path}</div>
                       <div className="topbar-menu-info-row">
                         <span>Pages</span>
                         <span>{pages.length}</span>

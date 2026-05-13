@@ -347,16 +347,14 @@ h2 {
 .app-topbar {
   min-height: 44px;
   padding: 0 0 0 14px;
-  display: grid;
-  grid-template-columns: minmax(0, 320px) minmax(0, 1fr) auto;
+  display: flex;
   align-items: stretch;
   gap: 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 
-.topbar-brand,
-.topbar-tabs {
+.topbar-brand {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -367,8 +365,7 @@ h2 {
   font-size: 0.95rem;
 }
 
-.topbar-brand span,
-.topbar-tab {
+.topbar-brand span {
   min-width: 0;
   color: var(--muted);
   font-size: 0.9rem;
@@ -377,15 +374,10 @@ h2 {
   text-overflow: ellipsis;
 }
 
-.topbar-tab--placeholder {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px dashed var(--line);
-}
-
 .window-controls {
   display: flex;
   align-items: stretch;
+  margin-left: auto;
 }
 
 .window-control-button {
@@ -453,6 +445,13 @@ h2 {
 .topbar-menu-info {
   padding: 8px 12px;
   font-size: 0.88rem;
+}
+
+.topbar-menu-path {
+  color: var(--muted);
+  font-size: 0.82rem;
+  word-break: break-all;
+  padding-bottom: 6px;
 }
 
 .topbar-menu-info-row {
@@ -1316,10 +1315,6 @@ code {
   .app-topbar {
     grid-template-columns: minmax(0, 1fr) auto;
     padding-left: 12px;
-  }
-
-  .topbar-tabs {
-    display: none;
   }
 
   .workspace-body {
