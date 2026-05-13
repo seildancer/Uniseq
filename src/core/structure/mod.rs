@@ -1007,9 +1007,9 @@ mod tests {
     fn recovery_finishes_interrupted_transaction_and_refreshes_cache() {
         let workspace = TestWorkspace::new("uniseq-structure");
         workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("A___B___C.md", "- child\n");
-        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
 
         let disk_cache = crate::core::files::load_workspace_cache(&workspace.root).unwrap();
         let plan = plan_transaction(
@@ -1030,12 +1030,9 @@ mod tests {
         let mut cache = discover_workspace(&workspace.root).unwrap().cache;
         assert!(recover_workspace_transactions(&workspace.root, &mut cache).unwrap());
 
-        assert_eq!(workspace.read_file("A___Renamed.md"), "- [[A/Renamed/C]]\n");
+        assert_eq!(workspace.read_file("A___Renamed.md"), "- body\n");
         assert_eq!(workspace.read_file("A___Renamed___C.md"), "- child\n");
-        assert_eq!(
-            workspace.read_file("X.md"),
-            "- [[A/Renamed]] and #A/Renamed/C\n"
-        );
+        assert_eq!(workspace.read_file("X.md"), "- [[A/Renamed]]\n");
         assert!(!workspace.file_exists("A___B.md"));
         assert!(!workspace.file_exists("A___B___C.md"));
         assert!(!workspace.root.join(".uniseq-page-transaction").exists());

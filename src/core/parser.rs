@@ -659,11 +659,14 @@ mod tests {
     }
 
     #[test]
-    fn blank_line_between_outliners_does_not_create_extra_blocks() {
+    fn blank_line_between_outliners_preserves_separator_plaintext() {
         let text = "- one\n\n- two\n";
         let blocks = parse_blocks(text).unwrap();
-        assert_eq!(blocks.len(), 2);
-        assert!(blocks.iter().all(|b| b.kind == BlockKind::Outliner));
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks[0].kind, BlockKind::Outliner);
+        assert_eq!(blocks[1].kind, BlockKind::Plaintext);
+        assert_eq!(blocks[1].content_span.slice(text).unwrap(), "\n");
+        assert_eq!(blocks[2].kind, BlockKind::Outliner);
     }
 
     #[test]

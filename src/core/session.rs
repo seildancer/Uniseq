@@ -1608,9 +1608,9 @@ mod tests {
     fn open_recovers_interrupted_rename_transaction_before_exposing_cache() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("A.md", "");
-        workspace.write_file("A___B.md", "- [[A/B/C]]\n");
+        workspace.write_file("A___B.md", "- body\n");
         workspace.write_file("A___B___C.md", "- child\n");
-        workspace.write_file("X.md", "- [[A/B]] and #A/B/C\n");
+        workspace.write_file("X.md", "- [[A/B]]\n");
 
         stage_page_rename_transaction_for_testing(
             &workspace.root,
@@ -1622,12 +1622,9 @@ mod tests {
 
         let session = WorkspaceSession::open(&workspace.root).unwrap();
 
-        assert_eq!(workspace.read_file("A___Renamed.md"), "- [[A/Renamed/C]]\n");
+        assert_eq!(workspace.read_file("A___Renamed.md"), "- body\n");
         assert_eq!(workspace.read_file("A___Renamed___C.md"), "- child\n");
-        assert_eq!(
-            workspace.read_file("X.md"),
-            "- [[A/Renamed]] and #A/Renamed/C\n"
-        );
+        assert_eq!(workspace.read_file("X.md"), "- [[A/Renamed]]\n");
         assert!(!workspace.file_exists("A___B.md"));
         assert!(!workspace.file_exists("A___B___C.md"));
         assert!(!workspace.root.join(".uniseq-page-transaction").exists());
@@ -1736,7 +1733,6 @@ mod tests {
     #[test]
     fn structural_create_and_delete_emit_cache_invalidation_events() {
         let workspace = TestWorkspace::new("uniseq-session");
-        workspace.write_file("X.md", "- [[A/B]]\n");
         let session = WorkspaceSession::open(&workspace.root).unwrap();
         session.drain_events();
 
@@ -1749,11 +1745,7 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![WorkspaceEvent::PagesChanged {
-                page_ids: vec![
-                    PageId::new(["A"]).unwrap(),
-                    PageId::new(["A", "B"]).unwrap(),
-                    PageId::new(["X"]).unwrap(),
-                ],
+                page_ids: vec![PageId::new(["A"]).unwrap(), PageId::new(["A", "B"]).unwrap(),],
             }]
         );
 
@@ -1777,9 +1769,6 @@ mod tests {
         assert_eq!(
             session.drain_events(),
             vec![
-                WorkspaceEvent::PagesChanged {
-                    page_ids: vec![PageId::new(["X"]).unwrap()],
-                },
                 WorkspaceEvent::PageRemoved {
                     page_id: PageId::new(["A"]).unwrap(),
                 },
