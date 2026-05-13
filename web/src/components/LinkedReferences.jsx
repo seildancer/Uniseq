@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 function linkedRefKey(entry) {
@@ -65,7 +65,6 @@ function BlockTree({ block, highlight, depth = 0 }) {
 
 function LinkedRefRow({
   entry,
-  page,
   isEditing,
   draft,
   saving,
@@ -74,40 +73,54 @@ function LinkedRefRow({
   onDraftChange,
   onCancel,
   onSave,
-  onOpenSource,
 }) {
-  return (
-    <article className="linked-ref-row">
-      <div className="linked-ref-row-header">
-        <div>
-          <p className="linked-ref-source-label">From</p>
-          <strong className="linked-ref-source-title">{readPageLabel(page) || entry.source_page_id}</strong>
-        </div>
-        <div className="linked-ref-row-actions">
-          <button className="ghost-button" type="button" onClick={() => onOpenSource(entry.source_page_id)}>
-            Open source
-          </button>
-          {!isEditing ? (
-            <button className="secondary-button" type="button" onClick={() => onStartEdit(entry)}>
-              Edit block
-            </button>
-          ) : null}
-        </div>
-      </div>
+  const editorRef = useRef(null);
 
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+
+    editorRef.current?.focus();
+    editorRef.current?.setSelectionRange(draft.length, draft.length);
+  }, [draft.length, isEditing]);
+
+  return (
+    <article className={`linked-ref-row${isEditing ? " linked-ref-row--editing" : ""}`}>
       {!isEditing ? (
-        <BlockTree block={entry.block} highlight={entry.block_content_highlight} />
+        <div
+          className="linked-ref-preview"
+          role="button"
+          tabIndex={0}
+          onClick={() => onStartEdit(entry)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onStartEdit(entry);
+            }
+          }}
+        >
+          <BlockTree block={entry.block} highlight={entry.block_content_highlight} />
+        </div>
       ) : (
         <div className="linked-ref-editor">
-          <label className="linked-ref-editor-label" htmlFor={`linked-ref-editor-${linkedRefKey(entry)}`}>
-            Edit source block markdown
-          </label>
           <textarea
+            ref={editorRef}
             id={`linked-ref-editor-${linkedRefKey(entry)}`}
             className="linked-ref-editor-input"
             value={draft}
             onChange={(event) => onDraftChange(event.target.value)}
             spellCheck={false}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                onSave(entry);
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onCancel();
+              }
+            }}
           />
           {error ? <p className="linked-ref-editor-error">{error}</p> : null}
           <div className="linked-ref-editor-actions">
@@ -223,7 +236,13 @@ export default function LinkedReferences({
         {groupedEntries.map((group) => (
           <section key={group.sourcePageId} className="linked-refs-group">
             <div className="linked-refs-group-header">
-              <strong>{readPageLabel(pagesById.get(group.sourcePageId)) || group.sourcePageId}</strong>
+              <button
+                className="linked-refs-group-title"
+                type="button"
+                onClick={() => onNavigate(group.sourcePageId)}
+              >
+                {readPageLabel(pagesById.get(group.sourcePageId)) || group.sourcePageId}
+              </button>
               <span>{group.entries.length} mention{group.entries.length === 1 ? "" : "s"}</span>
             </div>
             <div className="linked-refs-group-body">
@@ -233,7 +252,6 @@ export default function LinkedReferences({
                   <LinkedRefRow
                     key={key}
                     entry={entry}
-                    page={pagesById.get(entry.source_page_id)}
                     isEditing={editingKey === key}
                     draft={editingKey === key ? draft : ""}
                     saving={editingKey === key && saving}
@@ -252,7 +270,6 @@ export default function LinkedReferences({
                       setError("");
                     }}
                     onSave={handleSave}
-                    onOpenSource={onNavigate}
                   />
                 );
               })}

@@ -893,9 +893,7 @@ h2 {
 
 .linked-refs-heading,
 .linked-refs-group-header,
-.linked-ref-row-header,
-.linked-ref-editor-actions,
-.linked-ref-row-actions {
+.linked-ref-editor-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -907,8 +905,7 @@ h2 {
 }
 
 .linked-refs-heading h2,
-.linked-refs-group-header strong,
-.linked-ref-source-title {
+.linked-refs-group-title {
   margin: 0;
 }
 
@@ -944,8 +941,26 @@ h2 {
   background: color-mix(in srgb, var(--bg) 72%, var(--tag-bg) 28%);
 }
 
-.linked-refs-group-header span,
-.linked-ref-source-label {
+.linked-refs-group-title {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.linked-refs-group-title:hover {
+  color: var(--tag);
+}
+
+.linked-refs-group-title:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tag) 38%, white 62%);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.linked-refs-group-header span {
   color: var(--muted);
   font-size: 0.84rem;
 }
@@ -962,15 +977,24 @@ h2 {
   border-top: 1px solid color-mix(in srgb, var(--line) 92%, transparent 8%);
 }
 
-.linked-ref-source-label {
-  margin: 0 0 3px;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+.linked-ref-preview {
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: text;
+  transition: background 120ms ease, box-shadow 120ms ease;
 }
 
-.linked-ref-row-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.linked-ref-preview:hover {
+  background: var(--hover);
+}
+
+.linked-ref-preview:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tag) 38%, white 62%);
+  outline-offset: 2px;
+}
+
+.linked-ref-row--editing {
+  background: color-mix(in srgb, var(--selected) 62%, transparent 38%);
 }
 
 .linked-ref-block,
@@ -1013,28 +1037,24 @@ h2 {
 .linked-ref-editor {
   display: grid;
   gap: 10px;
-}
-
-.linked-ref-editor-label {
-  color: var(--muted);
-  font-size: 0.84rem;
+  padding: 6px 10px 2px;
 }
 
 .linked-ref-editor-input {
   width: 100%;
-  min-height: 160px;
-  padding: 12px;
-  border-radius: 12px;
+  min-height: 140px;
+  padding: 0;
+  border-radius: 0;
   border: 1px solid var(--line);
-  background: var(--bg);
+  border-width: 0 0 1px;
+  background: transparent;
   color: var(--ink);
   font: 0.95rem/1.6 "Cascadia Code", "Consolas", monospace;
   resize: vertical;
 }
 
 .linked-ref-editor-input:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--tag) 38%, white 62%);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .linked-ref-editor-error {
