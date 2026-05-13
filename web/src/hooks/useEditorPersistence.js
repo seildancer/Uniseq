@@ -18,14 +18,20 @@ export function useEditorPersistence({
   const suppressWriteRef = useRef(false);
   const latestTextRef = useRef(text);
   const revisionRef = useRef(revision);
+  const persistedTextRef = useRef(text);
   const initializedRef = useRef(false);
 
   useEffect(() => {
     latestTextRef.current = text;
     revisionRef.current = revision;
+    persistedTextRef.current = text;
   }, [text, revision]);
 
   async function persist(cleanedText) {
+    if (cleanedText === persistedTextRef.current) {
+      return;
+    }
+
     try {
       const updated = await invoke("write_page_content", {
         pageId,
@@ -33,6 +39,7 @@ export function useEditorPersistence({
         expectedRevision: revisionRef.current,
       });
       latestTextRef.current = updated.text;
+      persistedTextRef.current = updated.text;
       revisionRef.current = updated.revision;
     } catch (error) {
       if (error?.code === "structural_conflict") {
