@@ -424,7 +424,6 @@ export default function App() {
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
-  const activeEditorFlushRef = useRef(null);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
@@ -435,7 +434,9 @@ export default function App() {
   const selectedStreamDate = readSelectedStreamDate(selection, lastStreamDate);
   const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
-  const loadedPageEditorKey = loadedPageId;
+  const loadedPageEditorKey = loadedPageId && selectedPageRevision
+    ? `${loadedPageId}:${selectedPageRevision.len_bytes}:${selectedPageRevision.content_hash}`
+    : loadedPageId;
 
   const streamPagesByDate = useMemo(() => {
     const map = new Map();
@@ -515,10 +516,12 @@ export default function App() {
   }
 
   async function handleEditorConflict() {
+    if (!loadedPageId) return;
+    await loadPageContent(loadedPageId).catch(() => {});
     setNotice({
       id: Date.now(),
       code: "stale_page_reload",
-      message: "Page changed while the editor was open. Your local edits are still in the editor.",
+      message: "Page changed while the editor was open. Reloaded the latest content.",
     });
   }
 
@@ -633,34 +636,23 @@ export default function App() {
     }
   }
 
-  async function flushActiveEditor() {
-    try {
-      await activeEditorFlushRef.current?.();
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
-  async function handleSelectPage(pageId) {
+  function handleSelectPage(pageId) {
     if (suppressPageClickRef.current) {
       suppressPageClickRef.current = false;
       return;
     }
-    await flushActiveEditor();
     setSelection({ kind: "page", pageId });
     setActionError(null);
   }
 
-  async function handleSelectStreamDual(dateName) {
-    await flushActiveEditor();
+  function handleSelectStreamDual(dateName) {
     setLastStreamDate(dateName);
     setSelection({ kind: "stream_dual", dateName });
     setActionError(null);
     void refreshStreamWorkspace();
   }
 
-  async function handleSelectStreamSingle(streamName, dateName) {
-    await flushActiveEditor();
+  function handleSelectStreamSingle(streamName, dateName) {
     setLastStreamDate(dateName);
     setSelection({ kind: "stream_single", streamName, dateName });
     setActionError(null);
@@ -1509,7 +1501,6 @@ export default function App() {
                     text={selectedPageText}
                     revision={selectedPageRevision}
                     key={loadedPageEditorKey}
-                    flushRef={activeEditorFlushRef}
                     pages={regularPages}
                     onNavigate={handleSelectPage}
                     onConflict={() => void handleEditorConflict()}

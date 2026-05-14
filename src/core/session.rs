@@ -416,7 +416,6 @@ impl WorkspaceSessionState {
         text: String,
         expected_revision: Option<super::FileFingerprint>,
     ) -> Result<PageContentSnapshot, CoreError> {
-        let old_states = self.page_event_states();
         let (location, workspace_path) = {
             let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
             if expected_revision.is_some_and(|revision| revision != page.fingerprint) {
@@ -428,12 +427,8 @@ impl WorkspaceSessionState {
         };
         let absolute_path = self.root.join(&workspace_path);
         fs::write(&absolute_path, &text).map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
-        let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, text)?;
         self.cache.refresh_page_content(new_page);
-        self.apply_snapshot_delta(&[], [(workspace_path, file_stamp)]);
-        self.emit_cache_diff(old_states);
-        self.last_watch_error = None;
         self.with_read_api(|api| api.page_content(page_id))
     }
 
@@ -442,7 +437,6 @@ impl WorkspaceSessionState {
         handle: &BlockHandle,
         replacement_markdown: String,
     ) -> Result<(), CoreError> {
-        let old_states = self.page_event_states();
         let (page_id, location, workspace_path, next_text) = {
             let page = self
                 .cache
@@ -476,12 +470,11 @@ impl WorkspaceSessionState {
         let absolute_path = self.root.join(&workspace_path);
         fs::write(&absolute_path, &next_text)
             .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
-        let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, next_text)?;
         self.cache.refresh_page_content(new_page);
-        self.apply_snapshot_delta(&[], [(workspace_path, file_stamp)]);
-        self.emit_cache_diff(old_states);
-        self.last_watch_error = None;
+        self.enqueue_event(WorkspaceEvent::PagesChanged {
+            page_ids: vec![page_id],
+        });
         Ok(())
     }
 

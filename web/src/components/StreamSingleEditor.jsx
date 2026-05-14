@@ -47,7 +47,6 @@ function VirtualStreamEditor({
   const editorGetRef = useRef(null);
 
   useVirtualStreamPersistence({
-    get: () => editorGetRef.current?.(),
     streamName,
     dateName,
     flushRef,
@@ -103,9 +102,12 @@ export default function StreamSingleEditor({
   }
 
   if (backedPageId) {
+    const editorKey = backedRevision
+      ? `${backedPageId}:${backedRevision.len_bytes}:${backedRevision.content_hash}`
+      : backedPageId;
     return (
       <BackedStreamEditor
-        key={backedPageId}
+        key={editorKey}
         pageId={backedPageId}
         text={backedText}
         revision={backedRevision}

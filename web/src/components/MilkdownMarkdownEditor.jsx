@@ -88,10 +88,7 @@ export default function MilkdownMarkdownEditor({
   onFocusChange = null,
 }) {
   useEffect(() => {
-    return () => {
-      void flushRef.current?.();
-      flushRef.current = null;
-    };
+    return () => { flushRef.current?.(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
