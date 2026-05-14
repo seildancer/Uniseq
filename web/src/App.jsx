@@ -18,6 +18,11 @@ const ROOT_PARENT_KEY = "__root__";
 const DRAG_LONG_PRESS_MS = 260;
 const DRAG_MOVE_SLOP_PX = 8;
 const AUTO_EXPAND_ON_HOVER_MS = 600;
+const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
+const SIDEBAR_MIN_WIDTH_PX = 280;
+const SIDEBAR_MAX_WIDTH_PX = 420;
+const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 
 const appWindow = getCurrentWindow();
 
@@ -420,6 +425,16 @@ export default function App() {
   const [editorRenameValue, setEditorRenameValue] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [dragState, setDragState] = useState(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+    if (!Number.isFinite(stored)) {
+      return null;
+    }
+    return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, stored));
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true",
+  );
   const dragLongPressTimerRef = useRef(null);
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
@@ -1052,7 +1067,7 @@ export default function App() {
     };
   }, [dragState, expandedPageIds, pageOrderByParent, regularPages]);
 
-  function handleTopbarMouseDown(event) {
+  function handleWindowDragMouseDown(event) {
     if (event.button !== 0) {
       return;
     }
@@ -1077,6 +1092,18 @@ export default function App() {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
     localStorage.setItem("theme", darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  useEffect(() => {
+    if (!Number.isFinite(sidebarWidth)) {
+      localStorage.removeItem(SIDEBAR_WIDTH_STORAGE_KEY);
+      return;
+    }
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? "true" : "false");
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     function handleClickOutside(event) {
@@ -1288,98 +1315,141 @@ export default function App() {
   }
 
   if (mode === "workspace" && workspace) {
+    const sidebarChrome = (
+      <div className="workspace-sidebar-chrome" onMouseDown={handleWindowDragMouseDown}>
+        <div className="workspace-sidebar-controls" data-no-window-drag="true">
+          <button
+            className="window-control-button workspace-sidebar-control-button"
+            type="button"
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            onClick={() => {
+              setSidebarCollapsed((collapsed) => {
+                const nextCollapsed = !collapsed;
+                if (nextCollapsed) {
+                  setMenuOpen(false);
+                }
+                return nextCollapsed;
+              });
+            }}
+          >
+            <svg className="workspace-sidebar-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M6 3.5v9" stroke="currentColor" strokeWidth="1.2" />
+              {sidebarCollapsed ? (
+                <path d="M9.5 8h2.5M11 6.5 12.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              ) : (
+                <path d="M12.5 8H10M11 6.5 9.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+            </svg>
+          </button>
+          <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
+            <button
+              className="window-control-button workspace-sidebar-control-button"
+              type="button"
+              aria-label="Settings"
+              aria-expanded={menuOpen}
+              title="Settings"
+              onClick={() => setMenuOpen((open) => !open)}
+            >
+              <svg className="workspace-sidebar-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                <path
+                  d="M8 2.2v1.4M8 12.4v1.4M13.8 8h-1.4M3.6 8H2.2M12.1 3.9l-1 1M4.9 11.1l-1 1M12.1 12.1l-1-1M4.9 4.9l-1-1"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+            {menuOpen && (
+              <div className="topbar-menu-dropdown">
+                <button
+                  className="topbar-menu-item"
+                  type="button"
+                  onClick={() => {
+                    void loadWorkspaceLists();
+                    setMenuOpen(false);
+                  }}
+                >
+                  Refresh
+                </button>
+                <button
+                  className="topbar-menu-item"
+                  type="button"
+                  onClick={() => {
+                    setDarkMode((d) => !d);
+                    setMenuOpen(false);
+                  }}
+                >
+                  {darkMode ? "Light mode" : "Dark mode"}
+                </button>
+                <div className="topbar-menu-divider"></div>
+                <div className="topbar-menu-info">
+                  <div className="topbar-menu-path">{workspace.root_path}</div>
+                  <div className="topbar-menu-info-row">
+                    <span>Pages</span>
+                    <span>{pages.length}</span>
+                  </div>
+                  <div className="topbar-menu-info-row">
+                    <span>Watcher</span>
+                    <span>{workspace.watcher_status.mode ?? "starting"}</span>
+                  </div>
+                </div>
+                <div className="topbar-menu-divider"></div>
+                <button
+                  className="topbar-menu-item topbar-menu-item--danger"
+                  type="button"
+                  onClick={() => {
+                    void handleCloseWorkspace();
+                    setMenuOpen(false);
+                  }}
+                >
+                  Close workspace
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+
+    const panelChrome = (
+      <div className="editor-panel-chrome" onMouseDown={handleWindowDragMouseDown}>
+        <div className="editor-panel-drag-region" />
+        <div className="window-controls" data-no-window-drag="true">
+          <button
+            className="window-control-button"
+            type="button"
+            aria-label="Minimize window"
+            onClick={handleMinimizeWindow}
+          >
+            -
+          </button>
+          <button
+            className="window-control-button"
+            type="button"
+            aria-label="Maximize window"
+            onClick={handleToggleMaximizeWindow}
+          >
+            []
+          </button>
+          <button
+            className="window-control-button window-control-button--close"
+            type="button"
+            aria-label="Close window"
+            onClick={handleCloseWindow}
+          >
+            x
+          </button>
+        </div>
+      </div>
+    );
+
     return (
       <main className="app-shell app-shell--workspace">
         <section className="workspace-shell">
-          <header className="app-topbar" onMouseDown={handleTopbarMouseDown}>
-            <div className="topbar-brand" />
-
-            <div className="window-controls" data-no-window-drag="true">
-              <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
-                <button
-                  className="window-control-button"
-                  type="button"
-                  aria-label="Menu"
-                  aria-expanded={menuOpen}
-                  onClick={() => setMenuOpen((open) => !open)}
-                >
-                  ...
-                </button>
-                {menuOpen && (
-                  <div className="topbar-menu-dropdown">
-                    <button
-                      className="topbar-menu-item"
-                      type="button"
-                      onClick={() => {
-                        void loadWorkspaceLists();
-                        setMenuOpen(false);
-                      }}
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      className="topbar-menu-item"
-                      type="button"
-                      onClick={() => {
-                        setDarkMode((d) => !d);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      {darkMode ? "Light mode" : "Dark mode"}
-                    </button>
-                    <div className="topbar-menu-divider"></div>
-                    <div className="topbar-menu-info">
-                      <div className="topbar-menu-path">{workspace.root_path}</div>
-                      <div className="topbar-menu-info-row">
-                        <span>Pages</span>
-                        <span>{pages.length}</span>
-                      </div>
-                      <div className="topbar-menu-info-row">
-                        <span>Watcher</span>
-                        <span>{workspace.watcher_status.mode ?? "starting"}</span>
-                      </div>
-                    </div>
-                    <div className="topbar-menu-divider"></div>
-                    <button
-                      className="topbar-menu-item topbar-menu-item--danger"
-                      type="button"
-                      onClick={() => {
-                        void handleCloseWorkspace();
-                        setMenuOpen(false);
-                      }}
-                    >
-                      Close workspace
-                    </button>
-                  </div>
-                )}
-              </div>
-              <button
-                className="window-control-button"
-                type="button"
-                aria-label="Minimize window"
-                onClick={handleMinimizeWindow}
-              >
-                -
-              </button>
-              <button
-                className="window-control-button"
-                type="button"
-                aria-label="Maximize window"
-                onClick={handleToggleMaximizeWindow}
-              >
-                []
-              </button>
-              <button
-                className="window-control-button window-control-button--close"
-                type="button"
-                aria-label="Close window"
-                onClick={handleCloseWindow}
-              >
-                x
-              </button>
-            </div>
-          </header>
-
           {visibleError ? (
             <div className="error-banner" role="alert">
               <span>{formatError(visibleError)}</span>
@@ -1400,7 +1470,16 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="workspace-body">
+          <div
+            className={`workspace-body${sidebarCollapsed ? " workspace-body--sidebar-collapsed" : ""}`}
+            style={{
+              "--workspace-sidebar-width": sidebarCollapsed
+                ? `${SIDEBAR_COLLAPSED_WIDTH_PX}px`
+                : Number.isFinite(sidebarWidth)
+                  ? `${sidebarWidth}px`
+                  : undefined,
+            }}
+          >
             <StreamWorkspace
               streamSelection={streamSelection}
               selectedStreamDate={selectedStreamDate}
@@ -1410,6 +1489,13 @@ export default function App() {
               streamReloadToken={streamReloadToken}
               diaryBlurEnabled={diaryBlurEnabled}
               onDiaryBlurToggle={() => setDiaryBlurEnabled((enabled) => !enabled)}
+              onSidebarWidthChange={(width) => {
+                setSidebarCollapsed(false);
+                setSidebarWidth(width);
+              }}
+              sidebarCollapsed={sidebarCollapsed}
+              sidebarChrome={sidebarChrome}
+              panelChrome={panelChrome}
               pageSidebarContent={
                 <div className="sidebar-section sidebar-section--pages">
                   <div className="section-heading">
@@ -1438,89 +1524,90 @@ export default function App() {
               }
               fallbackEditor={
                 <section className="editor-panel">
+                  {panelChrome}
                   {loadedPage ? (
-                <>
-                  <p className="eyebrow">Editor</p>
-                  {loadedPageIsRegular ? (
-                    <form
-                      className="editor-title-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        void handleEditorRenameSave();
-                      }}
-                    >
-                      <input
-                        ref={editorTitleInputRef}
-                        className="editor-title-input"
-                        type="text"
-                        value={editorRenameValue}
-                        size={Math.max(editorRenameValue.length, 1)}
-                        onFocus={() => setActionError(null)}
-                        onChange={(event) => setEditorRenameValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
+                    <div className="editor-panel-content">
+                      <p className="eyebrow">Editor</p>
+                      {loadedPageIsRegular ? (
+                        <form
+                          className="editor-title-form"
+                          onSubmit={(event) => {
                             event.preventDefault();
-                            resetEditorRenameValue();
-                            editorTitleInputRef.current?.blur();
-                          }
-                        }}
-                      />
-                      <div className="editor-title-actions">
-                        <button
-                          className="primary-button"
-                          type="submit"
-                          disabled={
-                            busyAction === "rename" ||
-                            !editorRenameValue.trim() ||
-                            editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
-                          }
-                        >
-                          {busyAction === "rename" ? "Saving..." : "Save"}
-                        </button>
-                        <button
-                          className="secondary-button"
-                          type="button"
-                          onClick={() => {
-                            resetEditorRenameValue();
-                            editorTitleInputRef.current?.blur();
+                            void handleEditorRenameSave();
                           }}
-                          disabled={busyAction === "rename"}
                         >
-                          Cancel
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <h1 className="editor-title-static">
-                      {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
-                    </h1>
-                  )}
-                  <p className="body-copy">{loadedPage.workspace_path}</p>
-                  <Editor
-                    pageId={loadedPageId}
-                    text={selectedPageText}
-                    revision={selectedPageRevision}
-                    key={loadedPageEditorKey}
-                    pages={regularPages}
-                    onNavigate={handleSelectPage}
-                    onConflict={() => void handleEditorConflict()}
-                  />
-                  {loadedPageIsRegular ? (
-                    <LinkedReferences
-                      entries={linkedRefs}
-                      pages={pages}
-                      diaryBlurEnabled={diaryBlurEnabled}
-                      onNavigate={(sourcePageId) => {
-                        const sourcePage = pagesById.get(sourcePageId);
-                        if (sourcePage && readStreamName(sourcePage.location) === null) {
-                          handleSelectPage(sourcePageId);
-                        }
-                      }}
-                      onReload={() => loadPageLinkedRefs(loadedPageId)}
-                      onNotice={(message) => showNotice(message, "linked_refs_reload")}
-                    />
-                  ) : null}
-                </>
+                          <input
+                            ref={editorTitleInputRef}
+                            className="editor-title-input"
+                            type="text"
+                            value={editorRenameValue}
+                            size={Math.max(editorRenameValue.length, 1)}
+                            onFocus={() => setActionError(null)}
+                            onChange={(event) => setEditorRenameValue(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                resetEditorRenameValue();
+                                editorTitleInputRef.current?.blur();
+                              }
+                            }}
+                          />
+                          <div className="editor-title-actions">
+                            <button
+                              className="primary-button"
+                              type="submit"
+                              disabled={
+                                busyAction === "rename" ||
+                                !editorRenameValue.trim() ||
+                                editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
+                              }
+                            >
+                              {busyAction === "rename" ? "Saving..." : "Save"}
+                            </button>
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              onClick={() => {
+                                resetEditorRenameValue();
+                                editorTitleInputRef.current?.blur();
+                              }}
+                              disabled={busyAction === "rename"}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <h1 className="editor-title-static">
+                          {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
+                        </h1>
+                      )}
+                      <p className="body-copy">{loadedPage.workspace_path}</p>
+                      <Editor
+                        pageId={loadedPageId}
+                        text={selectedPageText}
+                        revision={selectedPageRevision}
+                        key={loadedPageEditorKey}
+                        pages={regularPages}
+                        onNavigate={handleSelectPage}
+                        onConflict={() => void handleEditorConflict()}
+                      />
+                      {loadedPageIsRegular ? (
+                        <LinkedReferences
+                          entries={linkedRefs}
+                          pages={pages}
+                          diaryBlurEnabled={diaryBlurEnabled}
+                          onNavigate={(sourcePageId) => {
+                            const sourcePage = pagesById.get(sourcePageId);
+                            if (sourcePage && readStreamName(sourcePage.location) === null) {
+                              handleSelectPage(sourcePageId);
+                            }
+                          }}
+                          onReload={() => loadPageLinkedRefs(loadedPageId)}
+                          onNotice={(message) => showNotice(message, "linked_refs_reload")}
+                        />
+                      ) : null}
+                    </div>
                   ) : null}
                 </section>
               }
@@ -1760,4 +1847,5 @@ export default function App() {
     </main>
   );
 }
+
 
