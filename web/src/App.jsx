@@ -717,6 +717,24 @@ export default function App() {
     }
   }
 
+  async function handleCreatePage(title) {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const pageId = `pages:${trimmed}`;
+    setBusyAction("create");
+    setActionError(null);
+    try {
+      await invoke("create_page", { pageId });
+      await loadWorkspaceLists();
+      setSelection({ kind: "page", pageId });
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   function handleSelectStreamDual(dateName) {
     setLastStreamDate(dateName);
     setSelection({ kind: "stream_dual", dateName });
@@ -1612,6 +1630,17 @@ export default function App() {
                 <div className="sidebar-section sidebar-section--pages">
                   <div className="section-heading">
                     <h2>Pages</h2>
+                    <button
+                      type="button"
+                      className="stream-add-btn"
+                      title="New page"
+                      onClick={() => {
+                        setRenameValue("");
+                        setModal({ type: "new_page" });
+                      }}
+                    >
+                      +
+                    </button>
                   </div>
 
                   <div className="sidebar-section-scroll">
@@ -1846,6 +1875,47 @@ export default function App() {
                       onClick={() => void handleConfirmMove(moveTarget)}
                     >
                       {busyAction === "move" ? "Moving..." : "Move"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "new_page" && (
+                <>
+                  <h3>New page</h3>
+                  <div className="field">
+                    <input
+                      type="text"
+                      value={renameValue}
+                      placeholder="Page name"
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleCreatePage(renameValue);
+                        }
+                        if (e.key === "Escape") {
+                          closeModal();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="modal-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={closeModal}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={busyAction === "create" || !renameValue.trim()}
+                      onClick={() => void handleCreatePage(renameValue)}
+                    >
+                      {busyAction === "create" ? "Creating..." : "Create"}
                     </button>
                   </div>
                 </>
