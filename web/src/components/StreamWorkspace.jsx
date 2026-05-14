@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
 import StreamSingleList from "./StreamSingleList.jsx";
@@ -28,6 +29,7 @@ export default function StreamWorkspace({
   panelChrome,
 }) {
   const sidebarRef = useRef(null);
+  const editorScrollRef = useRef(null);
   const resizeStateRef = useRef(null);
 
   useEffect(() => {
@@ -84,6 +86,7 @@ export default function StreamWorkspace({
           streamPagesByDate={streamPagesByDate}
           pages={regularPages}
           reloadToken={streamReloadToken}
+          scrollContainerRef={editorScrollRef}
           onNavigate={onNavigatePage}
           onError={onError}
           onRefresh={onRefresh}
@@ -96,6 +99,7 @@ export default function StreamWorkspace({
           streamPagesByDate={streamPagesByDate}
           pages={regularPages}
           reloadToken={streamReloadToken}
+          scrollContainerRef={editorScrollRef}
           onNavigate={onNavigatePage}
           onError={onError}
           onRefresh={onRefresh}
@@ -178,8 +182,8 @@ export default function StreamWorkspace({
 
       {streamSelection ? (
         <section className="editor-panel editor-panel--stream">
-          {panelChrome}
-          <div className="editor-panel-scroll">
+          {panelChrome(breadcrumbItemsForStreamSelection(streamSelection))}
+          <div ref={editorScrollRef} className="editor-panel-scroll">
             {streamEditor}
           </div>
         </section>

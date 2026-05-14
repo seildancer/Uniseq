@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import MilkdownMarkdownEditor from "./MilkdownMarkdownEditor";
 import { useEditorPersistence } from "../hooks/useEditorPersistence";
 import { useStreamDocumentState } from "../hooks/useStreamDocumentState";
@@ -79,6 +79,7 @@ export default function StreamSingleEditor({
   onError,
   onRefresh,
   onFocusChange,
+  onReadyChange,
 }) {
   const {
     backedPageId,
@@ -97,8 +98,12 @@ export default function StreamSingleEditor({
     onRefresh,
   });
 
+  useEffect(() => {
+    onReadyChange?.(!loading);
+  }, [loading, onReadyChange]);
+
   if (loading) {
-    return <div className="stream-editor-placeholder">Loading...</div>;
+    return null;
   }
 
   if (backedPageId) {

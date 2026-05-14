@@ -1,15 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
-import { buildRecentStreamDateWindow, formatDateLabel } from "../utils/streamDates.js";
+import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
+import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import { PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
-
-const STREAM_DAY_WINDOW = 9;
 
 export default function StreamDualEditor({
   selectedDate,
   streamPagesByDate,
   pages,
   reloadToken,
+  scrollContainerRef,
   onNavigate,
   onError,
   onRefresh,
@@ -17,12 +17,26 @@ export default function StreamDualEditor({
 }) {
   const [mobileTab, setMobileTab] = useState(PRIMARY_STREAM_LEFT);
   const [focusedEditor, setFocusedEditor] = useState(null);
+  const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const restoreDateAfterBlurRef = useRef(null);
-  const visibleDates = useMemo(
-    () => buildRecentStreamDateWindow(selectedDate, STREAM_DAY_WINDOW),
-    [selectedDate],
+  const latestDateName = useMemo(
+    () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
+    [selectedDate, streamPagesByDate],
   );
+  const { visibleDates } = useLazyStreamDateRange({
+    selectedDate,
+    latestDateName,
+    scrollContainerRef,
+    disabled: Boolean(focusedEditor),
+  });
+  const pendingSelectedScrollRef = useRef(selectedDate);
+  const lastSelectedDateRef = useRef(selectedDate);
+
+  if (lastSelectedDateRef.current !== selectedDate) {
+    lastSelectedDateRef.current = selectedDate;
+    pendingSelectedScrollRef.current = selectedDate;
+  }
 
   useEffect(() => {
     if (focusedEditor && !visibleDates.includes(focusedEditor.dateName)) {
@@ -30,12 +44,20 @@ export default function StreamDualEditor({
     }
   }, [focusedEditor, visibleDates]);
 
-  useEffect(() => {
-    dayRefs.current.get(selectedDate)?.scrollIntoView({
+  useLayoutEffect(() => {
+    if (focusedEditor) {
+      return;
+    }
+    const dateName = pendingSelectedScrollRef.current;
+    if (!dateName || !visibleDates.includes(dateName)) {
+      return;
+    }
+    pendingSelectedScrollRef.current = null;
+    dayRefs.current.get(dateName)?.scrollIntoView({
       block: "start",
       behavior: "smooth",
     });
-  }, [selectedDate]);
+  }, [focusedEditor, selectedDate, visibleDates]);
 
   useLayoutEffect(() => {
     if (focusedEditor) {
@@ -73,6 +95,18 @@ export default function StreamDualEditor({
     editor.focus();
   }
 
+  function handleEditorReadyChange(editorKey, ready) {
+    setEditorReadyByKey((current) => {
+      if (current.get(editorKey) === ready) {
+        return current;
+      }
+
+      const next = new Map(current);
+      next.set(editorKey, ready);
+      return next;
+    });
+  }
+
   return (
     <div className="stream-dual-wrap">
       <div className="stream-dual-tabs">
@@ -94,6 +128,8 @@ export default function StreamDualEditor({
 
       <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
+          const diaryEditorKey = `${PRIMARY_STREAM_LEFT}/${dateName}`;
+          const journalsEditorKey = `${PRIMARY_STREAM_RIGHT}/${dateName}`;
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
           const diaryPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_LEFT)
             ? streamPageId(PRIMARY_STREAM_LEFT, dateName)
@@ -103,6 +139,9 @@ export default function StreamDualEditor({
             : null;
           const isSelected = selectedDate === dateName;
           const isEmpty = !diaryPageId && !journalsPageId;
+          const isDiaryReady = editorReadyByKey.get(diaryEditorKey) ?? !diaryPageId;
+          const isJournalsReady = editorReadyByKey.get(journalsEditorKey) ?? !journalsPageId;
+          const isReady = isDiaryReady && isJournalsReady;
           const shouldBlurDiary = diaryBlurEnabled && Boolean(diaryPageId) && !focusedStreamName;
 
           return (
@@ -115,7 +154,7 @@ export default function StreamDualEditor({
                   dayRefs.current.delete(dateName);
                 }
               }}
-              className={`stream-day-entry${focusedStreamName ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}`}
+              className={`stream-day-entry${focusedStreamName ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}${isReady ? " stream-day-entry--ready" : " stream-day-entry--loading"}`}
             >
               <div className="stream-day-entry-header">
                 <h2 className="stream-day-entry-title">{formatDateLabel(dateName)}</h2>
@@ -139,6 +178,7 @@ export default function StreamDualEditor({
                         onNavigate={onNavigate}
                         onError={onError}
                         onRefresh={onRefresh}
+                        onReadyChange={(ready) => handleEditorReadyChange(diaryEditorKey, ready)}
                         onFocusChange={(focused) => {
                           if (focused) {
                             enterFocusMode(dateName, PRIMARY_STREAM_LEFT);
@@ -172,6 +212,7 @@ export default function StreamDualEditor({
                         onNavigate={onNavigate}
                         onError={onError}
                         onRefresh={onRefresh}
+                        onReadyChange={(ready) => handleEditorReadyChange(journalsEditorKey, ready)}
                         onFocusChange={(focused) => {
                           if (focused) {
                             enterFocusMode(dateName, PRIMARY_STREAM_RIGHT);

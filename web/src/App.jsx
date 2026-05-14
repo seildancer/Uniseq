@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Editor from "./Editor.jsx";
+import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
 import { todayDateName } from "./utils/streamDates.js";
@@ -1509,39 +1510,44 @@ export default function App() {
       </div>
     );
 
-    const panelChrome = (
-      <div className="editor-panel-chrome" onMouseDown={handleWindowDragMouseDown}>
-        <div className="editor-panel-drag-region" />
-        {showDesktopWindowControls ? (
-          <div className="window-controls" data-no-window-drag="true">
-            <button
-              className="window-control-button"
-              type="button"
-              aria-label="Minimize window"
-              onClick={handleMinimizeWindow}
-            >
-              <WindowMinimizeIcon />
-            </button>
-            <button
-              className="window-control-button"
-              type="button"
-              aria-label={windowIsMaximized ? "Restore window" : "Maximize window"}
-              onClick={handleToggleMaximizeWindow}
-            >
-              {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
-            </button>
-            <button
-              className="window-control-button window-control-button--close"
-              type="button"
-              aria-label="Close window"
-              onClick={handleCloseWindow}
-            >
-              <WindowCloseIcon />
-            </button>
+    function renderPanelChrome(breadcrumbItems = []) {
+      return (
+        <div className="editor-panel-chrome" onMouseDown={handleWindowDragMouseDown}>
+          <div className="editor-panel-chrome-main">
+            <EditorBreadcrumb items={breadcrumbItems} />
+            <div className="editor-panel-drag-region" />
           </div>
-        ) : null}
-      </div>
-    );
+          {showDesktopWindowControls ? (
+            <div className="window-controls" data-no-window-drag="true">
+              <button
+                className="window-control-button"
+                type="button"
+                aria-label="Minimize window"
+                onClick={handleMinimizeWindow}
+              >
+                <WindowMinimizeIcon />
+              </button>
+              <button
+                className="window-control-button"
+                type="button"
+                aria-label={windowIsMaximized ? "Restore window" : "Maximize window"}
+                onClick={handleToggleMaximizeWindow}
+              >
+                {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+              </button>
+              <button
+                className="window-control-button window-control-button--close"
+                type="button"
+                aria-label="Close window"
+                onClick={handleCloseWindow}
+              >
+                <WindowCloseIcon />
+              </button>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
 
     return (
       <main className="app-shell app-shell--workspace">
@@ -1591,7 +1597,7 @@ export default function App() {
               }}
               sidebarCollapsed={sidebarCollapsed}
               sidebarChrome={sidebarChrome}
-              panelChrome={panelChrome}
+              panelChrome={renderPanelChrome}
               pageSidebarContent={
                 <div className="sidebar-section sidebar-section--pages">
                   <div className="section-heading">
@@ -1622,11 +1628,10 @@ export default function App() {
               }
               fallbackEditor={
                 <section className="editor-panel">
-                  {panelChrome}
+                  {renderPanelChrome(loadedPage ? breadcrumbItemsForPageId(loadedPage.page_id) : [])}
                   <div className="editor-panel-scroll">
                     {loadedPage ? (
                       <div className="editor-panel-content">
-                        <p className="eyebrow">Editor</p>
                         {loadedPageIsRegular ? (
                           <form
                             className="editor-title-form"
@@ -1681,7 +1686,6 @@ export default function App() {
                             {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
                           </h1>
                         )}
-                        <p className="body-copy">{loadedPage.workspace_path}</p>
                         <Editor
                           pageId={loadedPageId}
                           text={selectedPageText}

@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
-import { buildRecentStreamDateWindow, formatDateLabel } from "../utils/streamDates.js";
+import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
+import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import { PRIMARY_STREAM_LEFT, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
-
-const STREAM_DAY_WINDOW = 9;
 
 export default function StreamSingleList({
   streamName,
@@ -11,18 +10,33 @@ export default function StreamSingleList({
   streamPagesByDate,
   pages,
   reloadToken,
+  scrollContainerRef,
   onNavigate,
   onError,
   onRefresh,
   diaryBlurEnabled = true,
 }) {
   const [focusedDateName, setFocusedDateName] = useState(null);
+  const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const restoreDateAfterBlurRef = useRef(null);
-  const visibleDates = useMemo(
-    () => buildRecentStreamDateWindow(selectedDate, STREAM_DAY_WINDOW),
-    [selectedDate],
+  const latestDateName = useMemo(
+    () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
+    [selectedDate, streamPagesByDate],
   );
+  const { visibleDates } = useLazyStreamDateRange({
+    selectedDate,
+    latestDateName,
+    scrollContainerRef,
+    disabled: Boolean(focusedDateName),
+  });
+  const pendingSelectedScrollRef = useRef(selectedDate);
+  const lastSelectedDateRef = useRef(selectedDate);
+
+  if (lastSelectedDateRef.current !== selectedDate) {
+    lastSelectedDateRef.current = selectedDate;
+    pendingSelectedScrollRef.current = selectedDate;
+  }
 
   useEffect(() => {
     if (focusedDateName && !visibleDates.includes(focusedDateName)) {
@@ -30,12 +44,20 @@ export default function StreamSingleList({
     }
   }, [focusedDateName, visibleDates]);
 
-  useEffect(() => {
-    dayRefs.current.get(selectedDate)?.scrollIntoView({
+  useLayoutEffect(() => {
+    if (focusedDateName) {
+      return;
+    }
+    const dateName = pendingSelectedScrollRef.current;
+    if (!dateName || !visibleDates.includes(dateName)) {
+      return;
+    }
+    pendingSelectedScrollRef.current = null;
+    dayRefs.current.get(dateName)?.scrollIntoView({
       block: "start",
       behavior: "smooth",
     });
-  }, [selectedDate]);
+  }, [focusedDateName, selectedDate, visibleDates]);
 
   useLayoutEffect(() => {
     if (focusedDateName) {
@@ -73,15 +95,29 @@ export default function StreamSingleList({
     editor.focus();
   }
 
+  function handleEditorReadyChange(editorKey, ready) {
+    setEditorReadyByKey((current) => {
+      if (current.get(editorKey) === ready) {
+        return current;
+      }
+
+      const next = new Map(current);
+      next.set(editorKey, ready);
+      return next;
+    });
+  }
+
   return (
     <div className={`stream-day-list${focusedDateName ? " stream-day-list--has-focus" : ""}`}>
       {visibleDates.map((dateName) => {
+        const editorKey = `${streamName}/${dateName}`;
         const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
           ? streamPageId(streamName, dateName)
           : null;
         const isFocused = focusedDateName === dateName;
         const isSelected = selectedDate === dateName;
         const isEmpty = !existingPageId;
+        const isReady = editorReadyByKey.get(editorKey) ?? !existingPageId;
         const shouldBlurDiary = diaryBlurEnabled && Boolean(existingPageId) && streamName === PRIMARY_STREAM_LEFT && !isFocused;
 
         return (
@@ -94,7 +130,7 @@ export default function StreamSingleList({
                 dayRefs.current.delete(dateName);
               }
             }}
-            className={`stream-day-entry${isFocused ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}`}
+            className={`stream-day-entry${isFocused ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}${isReady ? " stream-day-entry--ready" : " stream-day-entry--loading"}`}
           >
             <div className="stream-day-entry-header">
               <h2 className="stream-day-entry-title">{formatDateLabel(dateName)}</h2>
@@ -112,6 +148,7 @@ export default function StreamSingleList({
                     onNavigate={onNavigate}
                     onError={onError}
                     onRefresh={onRefresh}
+                    onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
                     onFocusChange={(focused) => {
                       if (focused) {
                         enterFocusMode(dateName);

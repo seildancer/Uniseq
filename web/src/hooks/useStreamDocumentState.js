@@ -10,6 +10,7 @@ export function useStreamDocumentState({
   onRefresh,
 }) {
   const loadSeqRef = useRef(0);
+  const loadedPageIdRef = useRef(null);
   const [backedPageId, setBackedPageId] = useState(existingPageId);
   const [backedText, setBackedText] = useState("");
   const [backedRevision, setBackedRevision] = useState(null);
@@ -17,9 +18,16 @@ export function useStreamDocumentState({
 
   useEffect(() => {
     setBackedPageId(existingPageId ?? null);
-    if (!existingPageId) {
+    if (!existingPageId || existingPageId !== loadedPageIdRef.current) {
       setBackedText("");
       setBackedRevision(null);
+    }
+    if (existingPageId && existingPageId !== loadedPageIdRef.current) {
+      setLoading(true);
+    }
+    if (!existingPageId) {
+      loadedPageIdRef.current = null;
+      setLoading(false);
     }
   }, [existingPageId]);
 
@@ -29,13 +37,17 @@ export function useStreamDocumentState({
       return;
     }
 
-    setLoading(true);
+    const isColdLoad = loadedPageIdRef.current !== backedPageId;
+    if (isColdLoad) {
+      setLoading(true);
+    }
     const seq = ++loadSeqRef.current;
     invoke("page_content", { pageId: backedPageId })
       .then((result) => {
         if (seq !== loadSeqRef.current) {
           return;
         }
+        loadedPageIdRef.current = backedPageId;
         setBackedText(result.text);
         setBackedRevision(result.revision);
         setLoading(false);
@@ -46,6 +58,7 @@ export function useStreamDocumentState({
         }
         setLoading(false);
         if (error?.code === "missing_page") {
+          loadedPageIdRef.current = null;
           setBackedPageId(null);
           return;
         }
@@ -54,9 +67,11 @@ export function useStreamDocumentState({
   }, [backedPageId, reloadToken, onError]);
 
   function handleFirstWrite({ pageId, text, revision }) {
+    loadedPageIdRef.current = pageId;
     setBackedPageId(pageId);
     setBackedText(text);
     setBackedRevision(revision);
+    setLoading(false);
     void onRefresh?.();
   }
 
