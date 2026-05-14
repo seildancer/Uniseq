@@ -28,8 +28,9 @@ function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, 
   );
 }
 
-export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict }) {
-  const flushRef = useRef(null);
+export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict, flushRef: externalFlushRef = null }) {
+  const localFlushRef = useRef(null);
+  const flushRef = externalFlushRef ?? localFlushRef;
 
   return (
     <PageEditorInner

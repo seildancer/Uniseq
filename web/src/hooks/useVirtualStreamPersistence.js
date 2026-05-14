@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getMarkdown } from "@milkdown/utils";
 import { cleanEditorMarkdownForPersistence } from "../utils/stripBreak";
 
 const WRITE_DEBOUNCE_MS = 300;
 
 export function useVirtualStreamPersistence({
+  get,
   streamName,
   dateName,
   flushRef,
@@ -60,8 +62,11 @@ export function useVirtualStreamPersistence({
   useEffect(() => {
     flushRef.current = () => {
       clearTimeout(debounceRef.current);
-      const cleaned = cleanEditorMarkdownForPersistence(latestTextRef.current);
-      void persist(cleaned);
+      const editor = get();
+      const markdown = editor ? editor.action(getMarkdown()) : latestTextRef.current;
+      const cleaned = cleanEditorMarkdownForPersistence(markdown);
+      latestTextRef.current = cleaned;
+      return persist(cleaned);
     };
     return () => {
       clearTimeout(debounceRef.current);
