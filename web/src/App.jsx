@@ -451,7 +451,7 @@ export default function App() {
   const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
   const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
-  const [selection, setSelection] = useState(() => ({ kind: "page", pageId: "" }));
+  const [selection, setSelection] = useState(() => ({ kind: "stream_dual", dateName: todayDateName() }));
   const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
   const [streamReloadToken, setStreamReloadToken] = useState(0);
   const [selectedPageText, setSelectedPageText] = useState("");
