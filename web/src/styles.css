@@ -334,6 +334,14 @@ h2 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  position: relative;
+}
+
+.section-heading .stream-add-btn {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .workspace-shell {
@@ -794,8 +802,10 @@ h2 {
 }
 
 .stream-menu-wrap {
-  position: relative;
-  flex: 0 0 auto;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .stream-menu-btn {
@@ -808,8 +818,6 @@ h2 {
   border-radius: 4px;
   background: none;
   color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.1s;
@@ -1001,6 +1009,7 @@ h2 {
   display: flex;
   align-items: center;
   gap: 6px;
+  position: relative;
 }
 
 .stream-list-btn {
@@ -1018,6 +1027,10 @@ h2 {
 
 .stream-list-btn--with-toggle {
   min-width: 0;
+}
+
+.stream-list-item--with-menu .stream-list-btn {
+  padding-right: 28px;
 }
 
 .stream-blur-toggle {
