@@ -21,7 +21,6 @@ const AUTO_EXPAND_ON_HOVER_MS = 600;
 const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const SIDEBAR_MIN_WIDTH_PX = 280;
-const SIDEBAR_MAX_WIDTH_PX = 420;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 
 const appWindow = getCurrentWindow();
@@ -430,7 +429,7 @@ export default function App() {
     if (!Number.isFinite(stored)) {
       return null;
     }
-    return Math.min(SIDEBAR_MAX_WIDTH_PX, Math.max(SIDEBAR_MIN_WIDTH_PX, stored));
+    return Math.max(SIDEBAR_MIN_WIDTH_PX, stored);
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true",
@@ -1352,19 +1351,24 @@ export default function App() {
               title="Settings"
               onClick={() => setMenuOpen((open) => !open)}
             >
-              <svg className="workspace-sidebar-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.2" />
+              <svg
+                className="workspace-sidebar-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
                 <path
-                  d="M8 2.2v1.4M8 12.4v1.4M13.8 8h-1.4M3.6 8H2.2M12.1 3.9l-1 1M4.9 11.1l-1 1M12.1 12.1l-1-1M4.9 4.9l-1-1"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinecap="round"
+                  d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
                 />
+                <circle cx="12" cy="12" r="3" />
               </svg>
             </button>
             {menuOpen && (
-              <div className="topbar-menu-dropdown">
+              <div className="topbar-settings">
                 <button
                   className="topbar-menu-item"
                   type="button"
@@ -1502,113 +1506,117 @@ export default function App() {
                     <h2>Pages</h2>
                   </div>
 
-                  {regularPages.length === 0 ? (
-                    <p className="empty-state">No regular pages yet.</p>
-                  ) : (
-                    <PageTree
-                      nodes={pageTree}
-                      expandedPageIds={expandedPageIds}
-                      selectedPageId={selectedPageId}
-                      onSelectPage={handleSelectPage}
-                      onTogglePageTree={handleTogglePageTree}
-                      pageMenuOpenId={pageMenuOpenId}
-                      onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
-                      onRename={openRenameModal}
-                      onMove={openMoveModal}
-                      onDelete={openDeleteModal}
-                      dragState={dragState?.active ? dragState : null}
-                      onDragItemPointerDown={handleDragItemPointerDown}
-                    />
-                  )}
+                  <div className="sidebar-section-scroll">
+                    {regularPages.length === 0 ? (
+                      <p className="empty-state">No regular pages yet.</p>
+                    ) : (
+                      <PageTree
+                        nodes={pageTree}
+                        expandedPageIds={expandedPageIds}
+                        selectedPageId={selectedPageId}
+                        onSelectPage={handleSelectPage}
+                        onTogglePageTree={handleTogglePageTree}
+                        pageMenuOpenId={pageMenuOpenId}
+                        onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
+                        onRename={openRenameModal}
+                        onMove={openMoveModal}
+                        onDelete={openDeleteModal}
+                        dragState={dragState?.active ? dragState : null}
+                        onDragItemPointerDown={handleDragItemPointerDown}
+                      />
+                    )}
+                  </div>
                 </div>
               }
               fallbackEditor={
                 <section className="editor-panel">
                   {panelChrome}
-                  {loadedPage ? (
-                    <div className="editor-panel-content">
-                      <p className="eyebrow">Editor</p>
-                      {loadedPageIsRegular ? (
-                        <form
-                          className="editor-title-form"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void handleEditorRenameSave();
-                          }}
-                        >
-                          <input
-                            ref={editorTitleInputRef}
-                            className="editor-title-input"
-                            type="text"
-                            value={editorRenameValue}
-                            size={Math.max(editorRenameValue.length, 1)}
-                            onFocus={() => setActionError(null)}
-                            onChange={(event) => setEditorRenameValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                resetEditorRenameValue();
-                                editorTitleInputRef.current?.blur();
+                  <div className="editor-panel-scroll">
+                    {loadedPage ? (
+                      <div className="editor-panel-content">
+                        <p className="eyebrow">Editor</p>
+                        {loadedPageIsRegular ? (
+                          <form
+                            className="editor-title-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void handleEditorRenameSave();
+                            }}
+                          >
+                            <input
+                              ref={editorTitleInputRef}
+                              className="editor-title-input"
+                              type="text"
+                              value={editorRenameValue}
+                              size={Math.max(editorRenameValue.length, 1)}
+                              onFocus={() => setActionError(null)}
+                              onChange={(event) => setEditorRenameValue(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  resetEditorRenameValue();
+                                  editorTitleInputRef.current?.blur();
+                                }
+                              }}
+                            />
+                            <div className="editor-title-actions">
+                              <button
+                                className="primary-button"
+                                type="submit"
+                                disabled={
+                                  busyAction === "rename" ||
+                                  !editorRenameValue.trim() ||
+                                  editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
+                                }
+                              >
+                                {busyAction === "rename" ? "Saving..." : "Save"}
+                              </button>
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                onClick={() => {
+                                  resetEditorRenameValue();
+                                  editorTitleInputRef.current?.blur();
+                                }}
+                                disabled={busyAction === "rename"}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <h1 className="editor-title-static">
+                            {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
+                          </h1>
+                        )}
+                        <p className="body-copy">{loadedPage.workspace_path}</p>
+                        <Editor
+                          pageId={loadedPageId}
+                          text={selectedPageText}
+                          revision={selectedPageRevision}
+                          key={loadedPageEditorKey}
+                          pages={regularPages}
+                          onNavigate={handleSelectPage}
+                          onConflict={() => void handleEditorConflict()}
+                        />
+                        {loadedPageIsRegular ? (
+                          <LinkedReferences
+                            entries={linkedRefs}
+                            pages={pages}
+                            diaryBlurEnabled={diaryBlurEnabled}
+                            onNavigate={(sourcePageId) => {
+                              const sourcePage = pagesById.get(sourcePageId);
+                              if (sourcePage && readStreamName(sourcePage.location) === null) {
+                                handleSelectPage(sourcePageId);
                               }
                             }}
+                            onReload={() => loadPageLinkedRefs(loadedPageId)}
+                            onNotice={(message) => showNotice(message, "linked_refs_reload")}
                           />
-                          <div className="editor-title-actions">
-                            <button
-                              className="primary-button"
-                              type="submit"
-                              disabled={
-                                busyAction === "rename" ||
-                                !editorRenameValue.trim() ||
-                                editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
-                              }
-                            >
-                              {busyAction === "rename" ? "Saving..." : "Save"}
-                            </button>
-                            <button
-                              className="secondary-button"
-                              type="button"
-                              onClick={() => {
-                                resetEditorRenameValue();
-                                editorTitleInputRef.current?.blur();
-                              }}
-                              disabled={busyAction === "rename"}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </form>
-                      ) : (
-                        <h1 className="editor-title-static">
-                          {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
-                        </h1>
-                      )}
-                      <p className="body-copy">{loadedPage.workspace_path}</p>
-                      <Editor
-                        pageId={loadedPageId}
-                        text={selectedPageText}
-                        revision={selectedPageRevision}
-                        key={loadedPageEditorKey}
-                        pages={regularPages}
-                        onNavigate={handleSelectPage}
-                        onConflict={() => void handleEditorConflict()}
-                      />
-                      {loadedPageIsRegular ? (
-                        <LinkedReferences
-                          entries={linkedRefs}
-                          pages={pages}
-                          diaryBlurEnabled={diaryBlurEnabled}
-                          onNavigate={(sourcePageId) => {
-                            const sourcePage = pagesById.get(sourcePageId);
-                            if (sourcePage && readStreamName(sourcePage.location) === null) {
-                              handleSelectPage(sourcePageId);
-                            }
-                          }}
-                          onReload={() => loadPageLinkedRefs(loadedPageId)}
-                          onNotice={(message) => showNotice(message, "linked_refs_reload")}
-                        />
-                      ) : null}
-                    </div>
-                  ) : null}
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </section>
               }
               onSelectStreamDual={handleSelectStreamDual}

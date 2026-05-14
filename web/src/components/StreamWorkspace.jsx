@@ -5,7 +5,6 @@ import StreamSingleList from "./StreamSingleList.jsx";
 import { PRIMARY_STREAM_LEFT } from "../utils/streamWorkspace.js";
 
 const SIDEBAR_MIN_WIDTH_PX = 280;
-const SIDEBAR_MAX_WIDTH_PX = 420;
 
 export default function StreamWorkspace({
   streamSelection,
@@ -58,10 +57,7 @@ export default function StreamWorkspace({
 
     const sidebarLeft = sidebarRef.current.getBoundingClientRect().left;
     const handlePointerMove = (moveEvent) => {
-      const nextWidth = Math.min(
-        SIDEBAR_MAX_WIDTH_PX,
-        Math.max(SIDEBAR_MIN_WIDTH_PX, moveEvent.clientX - sidebarLeft),
-      );
+      const nextWidth = Math.max(SIDEBAR_MIN_WIDTH_PX, moveEvent.clientX - sidebarLeft);
       onSidebarWidthChange(nextWidth);
     };
     const handlePointerUp = () => {
@@ -116,58 +112,62 @@ export default function StreamWorkspace({
         className={`workspace-sidebar${sidebarCollapsed ? " workspace-sidebar--collapsed" : ""}`}
       >
         {sidebarChrome}
-        <div className="sidebar-section sidebar-section--streams">
-          <div className="section-heading">
-            <button
-              type="button"
-              className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
-              onClick={() => onSelectStreamDual(selectedStreamDate)}
-            >
-              Streams
-            </button>
+        <div className="sidebar-content">
+          <div className="sidebar-section sidebar-section--streams">
+            <div className="section-heading">
+              <button
+                type="button"
+                className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
+                onClick={() => onSelectStreamDual(selectedStreamDate)}
+              >
+                Streams
+              </button>
+            </div>
+
+            <div className="sidebar-section-scroll">
+              {streamNames.length > 0 ? (
+                <ul className="stream-list">
+                  {streamNames.map((streamName) => {
+                    const isDiary = streamName === PRIMARY_STREAM_LEFT;
+
+                    return (
+                      <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}`}>
+                        <button
+                          type="button"
+                          className={`stream-list-btn${streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
+                            ? " stream-list-btn--active"
+                            : ""
+                            }${isDiary ? " stream-list-btn--with-toggle" : ""}`}
+                          onClick={() => onSelectStreamSingle(streamName, selectedStreamDate)}
+                        >
+                          {streamName}
+                        </button>
+                        {isDiary ? (
+                          <button
+                            type="button"
+                            className={`stream-blur-toggle${diaryBlurEnabled ? " stream-blur-toggle--active" : ""}`}
+                            aria-pressed={diaryBlurEnabled}
+                            title={diaryBlurEnabled ? "Diary blur is on" : "Diary blur is off"}
+                            onClick={onDiaryBlurToggle}
+                          >
+                            blur
+                          </button>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+
+              <SidebarCalendar
+                selectedDate={selectedStreamDate}
+                streamPagesByDate={streamPagesByDate}
+                onSelectDate={onSelectStreamDual}
+              />
+            </div>
           </div>
-
-          {streamNames.length > 0 ? (
-            <ul className="stream-list">
-              {streamNames.map((streamName) => {
-                const isDiary = streamName === PRIMARY_STREAM_LEFT;
-
-                return (
-                  <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}`}>
-                    <button
-                      type="button"
-                      className={`stream-list-btn${streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
-                          ? " stream-list-btn--active"
-                          : ""
-                        }${isDiary ? " stream-list-btn--with-toggle" : ""}`}
-                      onClick={() => onSelectStreamSingle(streamName, selectedStreamDate)}
-                    >
-                      {streamName}
-                    </button>
-                    {isDiary ? (
-                      <button
-                        type="button"
-                        className={`stream-blur-toggle${diaryBlurEnabled ? " stream-blur-toggle--active" : ""}`}
-                        aria-pressed={diaryBlurEnabled}
-                        title={diaryBlurEnabled ? "Diary blur is on" : "Diary blur is off"}
-                        onClick={onDiaryBlurToggle}
-                      >
-                        blur
-                      </button>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-
-          <SidebarCalendar
-            selectedDate={selectedStreamDate}
-            streamPagesByDate={streamPagesByDate}
-            onSelectDate={onSelectStreamDual}
-          />
+          {pageSidebarContent}
         </div>
-        {pageSidebarContent}
       </aside>
 
       <div
@@ -179,7 +179,9 @@ export default function StreamWorkspace({
       {streamSelection ? (
         <section className="editor-panel editor-panel--stream">
           {panelChrome}
-          {streamEditor}
+          <div className="editor-panel-scroll">
+            {streamEditor}
+          </div>
         </section>
       ) : fallbackEditor}
     </>
