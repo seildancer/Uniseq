@@ -1006,10 +1006,47 @@ h2 {
 }
 
 .stream-list-item {
+  position: relative;
+}
+
+.stream-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
-  position: relative;
+  min-height: 32px;
+  border-radius: 8px;
+}
+
+.stream-row:hover {
+  background: var(--hover);
+}
+
+.stream-row--active {
+  background: var(--selected);
+}
+
+.stream-row--dragged {
+  opacity: 0.56;
+}
+
+.stream-row--drop-before::before,
+.stream-row--drop-after::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: #8a6542;
+  border-radius: 999px;
+}
+
+.stream-row--drop-before::before {
+  top: 0;
+}
+
+.stream-row--drop-after::after {
+  bottom: 0;
 }
 
 .stream-list-btn {
@@ -1022,7 +1059,8 @@ h2 {
   color: var(--ink);
   font-size: 0.9rem;
   text-align: left;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
 }
 
 .stream-list-btn--with-toggle {
@@ -1061,12 +1099,15 @@ h2 {
 }
 
 .stream-list-btn:hover {
-  background: var(--hover);
+  background: transparent;
 }
 
 .stream-list-btn--active {
-  background: var(--selected);
   font-weight: 500;
+}
+
+.stream-list-btn:active {
+  cursor: grabbing;
 }
 
 /* Stream editor */

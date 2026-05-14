@@ -61,13 +61,39 @@ export function hasExtraStreams(streamNamesForDate) {
   return false;
 }
 
-export function orderStreamNamesForDisplay(streamNames) {
+export function orderStreamNamesForDisplay(streamNames, preferredOrder = []) {
   const names = Array.isArray(streamNames) ? [...streamNames] : [];
-  const primaryNames = PRIMARY_STREAM_NAMES.filter((streamName) => names.includes(streamName));
-  const extraNames = names.filter((streamName) => !PRIMARY_STREAM_NAMES.includes(streamName));
-  return [...primaryNames, ...extraNames];
+  const seen = new Set();
+  const ordered = [];
+
+  for (const streamName of preferredOrder) {
+    if (names.includes(streamName) && !seen.has(streamName)) {
+      ordered.push(streamName);
+      seen.add(streamName);
+    }
+  }
+
+  for (const streamName of PRIMARY_STREAM_NAMES) {
+    if (names.includes(streamName) && !seen.has(streamName)) {
+      ordered.push(streamName);
+      seen.add(streamName);
+    }
+  }
+
+  for (const streamName of names) {
+    if (!seen.has(streamName)) {
+      ordered.push(streamName);
+      seen.add(streamName);
+    }
+  }
+
+  return ordered;
 }
 
 export function isDiaryStream(streamName) {
   return streamName === DIARY_STREAM;
+}
+
+export function readDualStreamNames(streamNames, preferredOrder) {
+  return orderStreamNamesForDisplay(streamNames, preferredOrder).slice(0, 2);
 }

@@ -4,7 +4,12 @@ import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorB
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
 import { todayDateName } from "./utils/streamDates.js";
-import { readSelectedStreamDate, shouldBumpStreamReloadToken } from "./utils/streamWorkspace.js";
+import {
+  orderStreamNamesForDisplay,
+  readDualStreamNames,
+  readSelectedStreamDate,
+  shouldBumpStreamReloadToken,
+} from "./utils/streamWorkspace.js";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,6 +29,7 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
+const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
 
 const appWindow = getCurrentWindow();
 
@@ -450,6 +456,7 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
+  const [streamOrder, setStreamOrder] = useState([]);
   const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
   const [selection, setSelection] = useState(() => ({ kind: "stream_dual", dateName: todayDateName() }));
   const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
@@ -498,6 +505,14 @@ export default function App() {
   const selectedPageId = selection.kind === "page" ? selection.pageId : "";
   const streamSelection = selection.kind === "page" ? null : selection;
   const selectedStreamDate = readSelectedStreamDate(selection, lastStreamDate);
+  const orderedStreamNames = useMemo(
+    () => orderStreamNamesForDisplay(streamNames, streamOrder),
+    [streamNames, streamOrder],
+  );
+  const dualStreamNames = useMemo(
+    () => readDualStreamNames(streamNames, streamOrder),
+    [streamNames, streamOrder],
+  );
   const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
   const loadedPageEditorKey = loadedPageId && selectedPageRevision
@@ -537,6 +552,10 @@ export default function App() {
     setPages(allPages);
     setStreamNames(allStreamNames);
     setPageOrderByParent(order.sibling_order_by_parent ?? {});
+  }
+
+  function streamOrderStorageKey(rootPath) {
+    return `${STREAM_ORDER_STORAGE_KEY_PREFIX}${rootPath}`;
   }
 
   const loadPageContentSeqRef = useRef(0);
@@ -673,6 +692,7 @@ export default function App() {
     setPages([]);
     setPageOrderByParent({});
     setStreamNames([]);
+    setStreamOrder([]);
     setSelection({ kind: "page", pageId: "" });
     setLastStreamDate(todayDateName());
     setStreamReloadToken(0);
@@ -734,6 +754,10 @@ export default function App() {
     } catch (error) {
       setActionError(normalizeError(error));
     }
+  }
+
+  function handleReorderStreams(nextOrderedStreamNames) {
+    setStreamOrder(nextOrderedStreamNames);
   }
 
   async function handleCreatePage(title) {
@@ -1231,6 +1255,41 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    if (!workspace?.root_path) {
+      setStreamOrder([]);
+      return;
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem(streamOrderStorageKey(workspace.root_path)) ?? "[]");
+      setStreamOrder(Array.isArray(stored) ? stored.filter((value) => typeof value === "string") : []);
+    } catch {
+      setStreamOrder([]);
+    }
+  }, [workspace?.root_path]);
+
+  useEffect(() => {
+    if (!workspace?.root_path || streamNames.length === 0) {
+      return;
+    }
+
+    const normalizedOrder = orderStreamNamesForDisplay(streamNames, streamOrder);
+    const hasChanged =
+      normalizedOrder.length !== streamOrder.length
+      || normalizedOrder.some((streamName, index) => streamName !== streamOrder[index]);
+
+    if (hasChanged) {
+      setStreamOrder(normalizedOrder);
+      return;
+    }
+
+    localStorage.setItem(
+      streamOrderStorageKey(workspace.root_path),
+      JSON.stringify(normalizedOrder),
+    );
+  }, [streamNames, streamOrder, workspace?.root_path]);
+
+  useEffect(() => {
     if (!Number.isFinite(sidebarWidth)) {
       localStorage.removeItem(SIDEBAR_WIDTH_STORAGE_KEY);
       return;
@@ -1632,7 +1691,8 @@ export default function App() {
             <StreamWorkspace
               streamSelection={streamSelection}
               selectedStreamDate={selectedStreamDate}
-              streamNames={streamNames}
+              orderedStreamNames={orderedStreamNames}
+              dualStreamNames={dualStreamNames}
               streamPagesByDate={streamPagesByDate}
               regularPages={regularPages}
               streamReloadToken={streamReloadToken}
@@ -1777,6 +1837,7 @@ export default function App() {
               onSelectStreamSingle={handleSelectStreamSingle}
               onCreateStream={handleCreateStream}
               onDeleteStream={handleDeleteStream}
+              onReorderStreams={handleReorderStreams}
               onNavigatePage={handleSelectPage}
               onError={(error) => setActionError(normalizeError(error))}
               onRefresh={() => void refreshStreamWorkspace(true)}

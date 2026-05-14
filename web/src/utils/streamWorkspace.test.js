@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   isDiaryStream,
   orderStreamNamesForDisplay,
+  readDualStreamNames,
   readSelectedStreamDate,
   selectionForCalendarDate,
   shouldBumpStreamReloadToken,
@@ -54,6 +55,14 @@ test("primary streams display journals before diary while preserving diary seman
   assert.deepEqual(
     orderStreamNamesForDisplay(["diary", "journals", "logs"]),
     ["journals", "diary", "logs"],
+  );
+  assert.deepEqual(
+    orderStreamNamesForDisplay(["diary", "journals", "logs"], ["logs", "diary"]),
+    ["logs", "diary", "journals"],
+  );
+  assert.deepEqual(
+    readDualStreamNames(["diary", "journals", "logs"], ["logs", "diary", "journals"]),
+    ["logs", "diary"],
   );
   assert.equal(isDiaryStream("diary"), true);
   assert.equal(isDiaryStream("journals"), false);

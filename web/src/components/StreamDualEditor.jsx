@@ -3,15 +3,14 @@ import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
 import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import {
-  DIARY_STREAM,
-  PRIMARY_STREAM_LEFT,
-  PRIMARY_STREAM_RIGHT,
+  isDiaryStream,
   streamPageExists,
   streamPageId,
 } from "../utils/streamWorkspace.js";
 
 export default function StreamDualEditor({
   selectedDate,
+  dualStreamNames,
   streamPagesByDate,
   pages,
   reloadToken,
@@ -21,7 +20,7 @@ export default function StreamDualEditor({
   onRefresh,
   diaryBlurEnabled = true,
 }) {
-  const [mobileTab, setMobileTab] = useState(PRIMARY_STREAM_LEFT);
+  const [mobileTab, setMobileTab] = useState(() => dualStreamNames[0] ?? null);
   const [focusedEditor, setFocusedEditor] = useState(null);
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
@@ -49,6 +48,19 @@ export default function StreamDualEditor({
       setFocusedEditor(null);
     }
   }, [focusedEditor, visibleDates]);
+
+  useEffect(() => {
+    if (mobileTab && dualStreamNames.includes(mobileTab)) {
+      return;
+    }
+    setMobileTab(dualStreamNames[0] ?? null);
+  }, [dualStreamNames, mobileTab]);
+
+  useEffect(() => {
+    if (focusedEditor && !dualStreamNames.includes(focusedEditor.streamName)) {
+      setFocusedEditor(null);
+    }
+  }, [dualStreamNames, focusedEditor]);
 
   useLayoutEffect(() => {
     if (focusedEditor) {
@@ -115,43 +127,46 @@ export default function StreamDualEditor({
 
   return (
     <div className="stream-dual-wrap">
-      <div className="stream-dual-tabs">
-        <button
-          type="button"
-          className={`stream-dual-tab${mobileTab === PRIMARY_STREAM_LEFT ? " stream-dual-tab--active" : ""}`}
-          onClick={() => setMobileTab(PRIMARY_STREAM_LEFT)}
-        >
-          {PRIMARY_STREAM_LEFT}
-        </button>
-        <button
-          type="button"
-          className={`stream-dual-tab${mobileTab === PRIMARY_STREAM_RIGHT ? " stream-dual-tab--active" : ""}`}
-          onClick={() => setMobileTab(PRIMARY_STREAM_RIGHT)}
-        >
-          {PRIMARY_STREAM_RIGHT}
-        </button>
-      </div>
+      {dualStreamNames.length > 0 ? (
+        <div className="stream-dual-tabs">
+          {dualStreamNames.map((streamName) => (
+            <button
+              key={streamName}
+              type="button"
+              className={`stream-dual-tab${mobileTab === streamName ? " stream-dual-tab--active" : ""}`}
+              onClick={() => setMobileTab(streamName)}
+            >
+              {streamName}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
-          const leftEditorKey = `${PRIMARY_STREAM_LEFT}/${dateName}`;
-          const rightEditorKey = `${PRIMARY_STREAM_RIGHT}/${dateName}`;
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
-          const leftPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_LEFT)
-            ? streamPageId(PRIMARY_STREAM_LEFT, dateName)
-            : null;
-          const rightPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_RIGHT)
-            ? streamPageId(PRIMARY_STREAM_RIGHT, dateName)
-            : null;
           const isSelected = selectedDate === dateName;
-          const isEmpty = !leftPageId && !rightPageId;
-          const isLeftReady = editorReadyByKey.get(leftEditorKey) ?? !leftPageId;
-          const isRightReady = editorReadyByKey.get(rightEditorKey) ?? !rightPageId;
-          const isReady = isLeftReady && isRightReady;
-          const shouldBlurRight = diaryBlurEnabled
-            && PRIMARY_STREAM_RIGHT === DIARY_STREAM
-            && Boolean(rightPageId)
-            && focusedStreamName !== PRIMARY_STREAM_RIGHT;
+          const paneStates = dualStreamNames.map((streamName) => {
+            const editorKey = `${streamName}/${dateName}`;
+            const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
+              ? streamPageId(streamName, dateName)
+              : null;
+            const isReady = editorReadyByKey.get(editorKey) ?? !existingPageId;
+            const shouldBlur = diaryBlurEnabled
+              && isDiaryStream(streamName)
+              && Boolean(existingPageId)
+              && focusedStreamName !== streamName;
+
+            return {
+              streamName,
+              editorKey,
+              existingPageId,
+              isReady,
+              shouldBlur,
+            };
+          });
+          const isEmpty = paneStates.every((pane) => !pane.existingPageId);
+          const isReady = paneStates.every((pane) => pane.isReady);
 
           return (
             <section
@@ -171,74 +186,43 @@ export default function StreamDualEditor({
 
               <div className="stream-day-entry-body">
                 <div className="stream-dual-pane">
-                  <div
-                    className={`stream-dual-panel${mobileTab !== PRIMARY_STREAM_LEFT ? " stream-dual-panel--hidden-mobile" : ""}${focusedStreamName === PRIMARY_STREAM_LEFT ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== PRIMARY_STREAM_LEFT ? " stream-dual-panel--compressed" : ""}`}
-                    onMouseDown={focusPaneEditor}
-                  >
-                    <p className="stream-panel-label">{PRIMARY_STREAM_LEFT}</p>
-                    <div className="stream-editor-pane">
-                      <StreamSingleEditor
-                        key={`${PRIMARY_STREAM_LEFT}/${dateName}`}
-                        streamName={PRIMARY_STREAM_LEFT}
-                        dateName={dateName}
-                        existingPageId={leftPageId}
-                        pages={pages}
-                        reloadToken={reloadToken}
-                        onNavigate={onNavigate}
-                        onError={onError}
-                        onRefresh={onRefresh}
-                        onReadyChange={(ready) => handleEditorReadyChange(leftEditorKey, ready)}
-                        onFocusChange={(focused) => {
-                          if (focused) {
-                            enterFocusMode(dateName, PRIMARY_STREAM_LEFT);
-                            setMobileTab(PRIMARY_STREAM_LEFT);
-                            return;
-                          }
-                          setFocusedEditor((current) => {
-                            if (current?.dateName === dateName && current?.streamName === PRIMARY_STREAM_LEFT) {
-                              restoreDateAfterBlurRef.current = dateName;
-                              return null;
+                  {paneStates.map(({ streamName, editorKey, existingPageId, shouldBlur }) => (
+                    <div
+                      key={editorKey}
+                      className={`stream-dual-panel${mobileTab !== streamName ? " stream-dual-panel--hidden-mobile" : ""}${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
+                      onMouseDown={focusPaneEditor}
+                    >
+                      <p className="stream-panel-label">{streamName}</p>
+                      <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
+                        <StreamSingleEditor
+                          key={editorKey}
+                          streamName={streamName}
+                          dateName={dateName}
+                          existingPageId={existingPageId}
+                          pages={pages}
+                          reloadToken={reloadToken}
+                          onNavigate={onNavigate}
+                          onError={onError}
+                          onRefresh={onRefresh}
+                          onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
+                          onFocusChange={(focused) => {
+                            if (focused) {
+                              enterFocusMode(dateName, streamName);
+                              setMobileTab(streamName);
+                              return;
                             }
-                            return current;
-                          });
-                        }}
-                      />
+                            setFocusedEditor((current) => {
+                              if (current?.dateName === dateName && current?.streamName === streamName) {
+                                restoreDateAfterBlurRef.current = dateName;
+                                return null;
+                              }
+                              return current;
+                            });
+                          }}
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div
-                    className={`stream-dual-panel${mobileTab !== PRIMARY_STREAM_RIGHT ? " stream-dual-panel--hidden-mobile" : ""}${focusedStreamName === PRIMARY_STREAM_RIGHT ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== PRIMARY_STREAM_RIGHT ? " stream-dual-panel--compressed" : ""}`}
-                    onMouseDown={focusPaneEditor}
-                  >
-                    <p className="stream-panel-label">{PRIMARY_STREAM_RIGHT}</p>
-                    <div className={`stream-editor-pane${shouldBlurRight ? " stream-editor-pane--privacy-blurred" : ""}`}>
-                      <StreamSingleEditor
-                        key={`${PRIMARY_STREAM_RIGHT}/${dateName}`}
-                        streamName={PRIMARY_STREAM_RIGHT}
-                        dateName={dateName}
-                        existingPageId={rightPageId}
-                        pages={pages}
-                        reloadToken={reloadToken}
-                        onNavigate={onNavigate}
-                        onError={onError}
-                        onRefresh={onRefresh}
-                        onReadyChange={(ready) => handleEditorReadyChange(rightEditorKey, ready)}
-                        onFocusChange={(focused) => {
-                          if (focused) {
-                            enterFocusMode(dateName, PRIMARY_STREAM_RIGHT);
-                            setMobileTab(PRIMARY_STREAM_RIGHT);
-                            return;
-                          }
-                          setFocusedEditor((current) => {
-                            if (current?.dateName === dateName && current?.streamName === PRIMARY_STREAM_RIGHT) {
-                              restoreDateAfterBlurRef.current = dateName;
-                              return null;
-                            }
-                            return current;
-                          });
-                        }}
-                      />
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
             </section>
