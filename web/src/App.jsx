@@ -1439,7 +1439,7 @@ export default function App() {
     if (!regularPages.some((page) => page.page_id === selectedPageId)) {
       setSelection({ kind: "page", pageId: regularPages[0].page_id });
     }
-  }, [mode, pages, selectedPageId, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, pages, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load blocks when the selected page changes.
   // `selectedPageId` is a string ??React compares it by value, so this fires exactly once per navigation.
