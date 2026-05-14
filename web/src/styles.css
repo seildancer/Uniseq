@@ -344,6 +344,40 @@ h2 {
   background: var(--bg);
 }
 
+/* App chrome should not be text-selectable; editors and real inputs opt back in below. */
+.workspace-shell,
+.workspace-shell button,
+.workspace-shell label,
+.workspace-shell summary,
+.workspace-shell svg,
+.workspace-shell img,
+.workspace-shell .app-topbar,
+.workspace-shell .workspace-sidebar,
+.workspace-shell .sidebar-section,
+.workspace-shell .topbar-menu-dropdown,
+.workspace-shell .window-controls,
+.workspace-shell .editor-panel > :not(.milkdown-editor) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.workspace-shell img,
+.workspace-shell svg {
+  -webkit-user-drag: none;
+}
+
+.workspace-shell input,
+.workspace-shell textarea,
+.workspace-shell select,
+.workspace-shell option,
+.workspace-shell .milkdown-editor,
+.workspace-shell .milkdown-editor *,
+.workspace-shell .ProseMirror,
+.workspace-shell .ProseMirror * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .app-topbar {
   min-height: 44px;
   padding: 0 0 0 14px;
