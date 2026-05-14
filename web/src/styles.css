@@ -2138,7 +2138,7 @@ code {
     rgba(255, 255, 255, 0.30) 40%,
     transparent 100%
   );
-  clip-path: polygon(100% 100%, 100% 0, 0 100%);
+  clip-path: path("M 14 0 A 14 14 0 0 1 0 14 L 14 14 Z");
   pointer-events: none;
 }
 
