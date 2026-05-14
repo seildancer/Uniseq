@@ -3,7 +3,7 @@ import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
 import StreamSingleList from "./StreamSingleList.jsx";
-import { PRIMARY_STREAM_LEFT } from "../utils/streamWorkspace.js";
+import { isDiaryStream, orderStreamNamesForDisplay } from "../utils/streamWorkspace.js";
 
 const SIDEBAR_MIN_WIDTH_PX = 280;
 
@@ -131,8 +131,8 @@ export default function StreamWorkspace({
             <div className="sidebar-section-scroll">
               {streamNames.length > 0 ? (
                 <ul className="stream-list">
-                  {streamNames.map((streamName) => {
-                    const isDiary = streamName === PRIMARY_STREAM_LEFT;
+                  {orderStreamNamesForDisplay(streamNames).map((streamName) => {
+                    const isDiary = isDiaryStream(streamName);
 
                     return (
                       <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}`}>

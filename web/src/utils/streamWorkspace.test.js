@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  isDiaryStream,
+  orderStreamNamesForDisplay,
   readSelectedStreamDate,
   shouldBumpStreamReloadToken,
   streamPageExists,
@@ -30,6 +32,15 @@ test("streamPageId and streamPageExists resolve single-stream backing ids", () =
   assert.equal(streamPageId("diary", "2026_05_14"), "stream:diary/2026_05_14");
   assert.equal(streamPageExists(streamPagesByDate, "2026_05_14", "diary"), true);
   assert.equal(streamPageExists(streamPagesByDate, "2026_05_14", "logs"), false);
+});
+
+test("primary streams display journals before diary while preserving diary semantics", () => {
+  assert.deepEqual(
+    orderStreamNamesForDisplay(["diary", "journals", "logs"]),
+    ["journals", "diary", "logs"],
+  );
+  assert.equal(isDiaryStream("diary"), true);
+  assert.equal(isDiaryStream("journals"), false);
 });
 
 test("shouldBumpStreamReloadToken only reacts to stream-affecting events while stream UI is active", () => {

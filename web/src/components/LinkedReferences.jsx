@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import BlockEditor from "../BlockEditor";
-import { PRIMARY_STREAM_LEFT } from "../utils/streamWorkspace.js";
+import { isDiaryStream } from "../utils/streamWorkspace.js";
 
 function readPageLabel(page) {
   if (!page) {
@@ -81,7 +81,7 @@ export default function LinkedReferences({
       <div className="linked-refs-list">
         {groupedEntries.map((group) => {
           const label = readPageLabel(pagesById.get(group.sourcePageId));
-          const isDiarySource = label.streamName === PRIMARY_STREAM_LEFT;
+          const isDiarySource = isDiaryStream(label.streamName);
 
           return (
             <section key={group.sourcePageId} className="linked-refs-source">

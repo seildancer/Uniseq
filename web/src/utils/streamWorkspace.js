@@ -1,5 +1,7 @@
-export const PRIMARY_STREAM_LEFT = "diary";
-export const PRIMARY_STREAM_RIGHT = "journals";
+export const DIARY_STREAM = "diary";
+export const JOURNALS_STREAM = "journals";
+export const PRIMARY_STREAM_LEFT = JOURNALS_STREAM;
+export const PRIMARY_STREAM_RIGHT = DIARY_STREAM;
 export const PRIMARY_STREAM_NAMES = [PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT];
 
 export function streamPageId(streamName, dateName) {
@@ -49,4 +51,15 @@ export function hasExtraStreams(streamNamesForDate) {
   }
 
   return false;
+}
+
+export function orderStreamNamesForDisplay(streamNames) {
+  const names = Array.isArray(streamNames) ? [...streamNames] : [];
+  const primaryNames = PRIMARY_STREAM_NAMES.filter((streamName) => names.includes(streamName));
+  const extraNames = names.filter((streamName) => !PRIMARY_STREAM_NAMES.includes(streamName));
+  return [...primaryNames, ...extraNames];
+}
+
+export function isDiaryStream(streamName) {
+  return streamName === DIARY_STREAM;
 }

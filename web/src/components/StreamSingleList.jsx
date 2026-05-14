@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
 import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
-import { PRIMARY_STREAM_LEFT, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
+import { isDiaryStream, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
 
 export default function StreamSingleList({
   streamName,
@@ -118,7 +118,7 @@ export default function StreamSingleList({
         const isSelected = selectedDate === dateName;
         const isEmpty = !existingPageId;
         const isReady = editorReadyByKey.get(editorKey) ?? !existingPageId;
-        const shouldBlurDiary = diaryBlurEnabled && Boolean(existingPageId) && streamName === PRIMARY_STREAM_LEFT && !isFocused;
+        const shouldBlurDiary = diaryBlurEnabled && Boolean(existingPageId) && isDiaryStream(streamName) && !isFocused;
 
         return (
           <section

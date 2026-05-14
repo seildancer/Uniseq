@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { monthFromDateName, todayDateName, yearFromDateName } from "../utils/streamDates.js";
-import { hasExtraStreams, PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT } from "../utils/streamWorkspace.js";
+import { DIARY_STREAM, hasExtraStreams, JOURNALS_STREAM, PRIMARY_STREAM_NAMES } from "../utils/streamWorkspace.js";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -116,8 +116,8 @@ export default function SidebarCalendar({ selectedDate, streamPagesByDate, onSel
       <div className="stream-calendar-grid">
         {days.map((day) => {
           const streamNames = streamPagesByDate.get(day.dateName);
-          const hasDiary = streamNames?.has(PRIMARY_STREAM_LEFT) ?? false;
-          const hasJournals = streamNames?.has(PRIMARY_STREAM_RIGHT) ?? false;
+          const hasDiary = streamNames?.has(DIARY_STREAM) ?? false;
+          const hasJournals = streamNames?.has(JOURNALS_STREAM) ?? false;
           const hasExtra = hasExtraStreams(streamNames);
           const isSelected = day.dateName === selectedDate;
           const isToday = day.dateName === today;
@@ -138,8 +138,15 @@ export default function SidebarCalendar({ selectedDate, streamPagesByDate, onSel
               <span className="stream-calendar-day-num">{day.dayOfMonth}</span>
               {hasAny ? (
                 <span className="stream-calendar-markers">
-                  {hasDiary ? <span className="stream-calendar-dot stream-calendar-dot--diary" /> : null}
-                  {hasJournals ? <span className="stream-calendar-dot stream-calendar-dot--journals" /> : null}
+                  {PRIMARY_STREAM_NAMES.map((streamName) => {
+                    if (streamName === JOURNALS_STREAM && hasJournals) {
+                      return <span key={streamName} className="stream-calendar-dot stream-calendar-dot--journals" />;
+                    }
+                    if (streamName === DIARY_STREAM && hasDiary) {
+                      return <span key={streamName} className="stream-calendar-dot stream-calendar-dot--diary" />;
+                    }
+                    return null;
+                  })}
                   {hasExtra ? <span className="stream-calendar-dot stream-calendar-dot--extra" /> : null}
                 </span>
               ) : null}

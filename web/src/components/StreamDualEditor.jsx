@@ -2,7 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
 import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
-import { PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
+import {
+  DIARY_STREAM,
+  PRIMARY_STREAM_LEFT,
+  PRIMARY_STREAM_RIGHT,
+  streamPageExists,
+  streamPageId,
+} from "../utils/streamWorkspace.js";
 
 export default function StreamDualEditor({
   selectedDate,
@@ -128,21 +134,24 @@ export default function StreamDualEditor({
 
       <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
-          const diaryEditorKey = `${PRIMARY_STREAM_LEFT}/${dateName}`;
-          const journalsEditorKey = `${PRIMARY_STREAM_RIGHT}/${dateName}`;
+          const leftEditorKey = `${PRIMARY_STREAM_LEFT}/${dateName}`;
+          const rightEditorKey = `${PRIMARY_STREAM_RIGHT}/${dateName}`;
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
-          const diaryPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_LEFT)
+          const leftPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_LEFT)
             ? streamPageId(PRIMARY_STREAM_LEFT, dateName)
             : null;
-          const journalsPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_RIGHT)
+          const rightPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_RIGHT)
             ? streamPageId(PRIMARY_STREAM_RIGHT, dateName)
             : null;
           const isSelected = selectedDate === dateName;
-          const isEmpty = !diaryPageId && !journalsPageId;
-          const isDiaryReady = editorReadyByKey.get(diaryEditorKey) ?? !diaryPageId;
-          const isJournalsReady = editorReadyByKey.get(journalsEditorKey) ?? !journalsPageId;
-          const isReady = isDiaryReady && isJournalsReady;
-          const shouldBlurDiary = diaryBlurEnabled && Boolean(diaryPageId) && !focusedStreamName;
+          const isEmpty = !leftPageId && !rightPageId;
+          const isLeftReady = editorReadyByKey.get(leftEditorKey) ?? !leftPageId;
+          const isRightReady = editorReadyByKey.get(rightEditorKey) ?? !rightPageId;
+          const isReady = isLeftReady && isRightReady;
+          const shouldBlurRight = diaryBlurEnabled
+            && PRIMARY_STREAM_RIGHT === DIARY_STREAM
+            && Boolean(rightPageId)
+            && !focusedStreamName;
 
           return (
             <section
@@ -167,18 +176,18 @@ export default function StreamDualEditor({
                     onMouseDown={focusPaneEditor}
                   >
                     <p className="stream-panel-label">{PRIMARY_STREAM_LEFT}</p>
-                    <div className={`stream-editor-pane${shouldBlurDiary ? " stream-editor-pane--privacy-blurred" : ""}`}>
+                    <div className="stream-editor-pane">
                       <StreamSingleEditor
                         key={`${PRIMARY_STREAM_LEFT}/${dateName}`}
                         streamName={PRIMARY_STREAM_LEFT}
                         dateName={dateName}
-                        existingPageId={diaryPageId}
+                        existingPageId={leftPageId}
                         pages={pages}
                         reloadToken={reloadToken}
                         onNavigate={onNavigate}
                         onError={onError}
                         onRefresh={onRefresh}
-                        onReadyChange={(ready) => handleEditorReadyChange(diaryEditorKey, ready)}
+                        onReadyChange={(ready) => handleEditorReadyChange(leftEditorKey, ready)}
                         onFocusChange={(focused) => {
                           if (focused) {
                             enterFocusMode(dateName, PRIMARY_STREAM_LEFT);
@@ -201,18 +210,18 @@ export default function StreamDualEditor({
                     onMouseDown={focusPaneEditor}
                   >
                     <p className="stream-panel-label">{PRIMARY_STREAM_RIGHT}</p>
-                    <div className="stream-editor-pane">
+                    <div className={`stream-editor-pane${shouldBlurRight ? " stream-editor-pane--privacy-blurred" : ""}`}>
                       <StreamSingleEditor
                         key={`${PRIMARY_STREAM_RIGHT}/${dateName}`}
                         streamName={PRIMARY_STREAM_RIGHT}
                         dateName={dateName}
-                        existingPageId={journalsPageId}
+                        existingPageId={rightPageId}
                         pages={pages}
                         reloadToken={reloadToken}
                         onNavigate={onNavigate}
                         onError={onError}
                         onRefresh={onRefresh}
-                        onReadyChange={(ready) => handleEditorReadyChange(journalsEditorKey, ready)}
+                        onReadyChange={(ready) => handleEditorReadyChange(rightEditorKey, ready)}
                         onFocusChange={(focused) => {
                           if (focused) {
                             enterFocusMode(dateName, PRIMARY_STREAM_RIGHT);
