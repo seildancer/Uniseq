@@ -15,6 +15,11 @@ function detectTagTrigger(text) {
   return null;
 }
 
+function isSelectionInsideCode(state) {
+  const { $from } = state.selection;
+  return $from.marks().some((mark) => mark.type.name === "code") || $from.parent.type.name === "code_block";
+}
+
 export default function AutocompleteEditor({
   get,
   pages,
@@ -30,6 +35,7 @@ export default function AutocompleteEditor({
     const editor = get();
     if (!editor) return null;
     const view = editor.action((ctx) => ctx.get(editorViewCtx));
+    if (isSelectionInsideCode(view.state)) return null;
     const { from } = view.state.selection;
     const $from = view.state.selection.$from;
     const blockStart = $from.start($from.depth);

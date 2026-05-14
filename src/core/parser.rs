@@ -284,6 +284,11 @@ fn extract_inline_page_refs(
     let mut offset = 0;
 
     while offset < line.len() {
+        if let Some(consumed) = consume_inline_code_span(line, offset) {
+            offset += consumed;
+            continue;
+        }
+
         let tail = &line[offset..];
 
         if let Some((consumed, page_ref)) = parse_bracket_ref(tail, line_start + offset)? {
@@ -306,6 +311,17 @@ fn extract_inline_page_refs(
     }
 
     Ok(())
+}
+
+fn consume_inline_code_span(line: &str, offset: usize) -> Option<usize> {
+    let tail = &line[offset..];
+    if !tail.starts_with('`') {
+        return None;
+    }
+
+    let fence_len = tail.chars().take_while(|ch| *ch == '`').count();
+    let closing = tail[fence_len..].find(&"`".repeat(fence_len))?;
+    Some(fence_len + closing + fence_len)
 }
 
 fn parse_bracket_ref(
@@ -619,6 +635,22 @@ mod tests {
         let blocks = parse_blocks(text).unwrap();
 
         assert_eq!(ref_targets(&blocks[0]), vec!["A", "D"]);
+    }
+
+    #[test]
+    fn ignores_references_inside_inline_code_spans() {
+        let text = "- before `#A [[B]]` after #C and [[D]]\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(ref_targets(&blocks[0]), vec!["C", "D"]);
+    }
+
+    #[test]
+    fn ignores_references_inside_multi_backtick_code_spans() {
+        let text = "- before ``#A`` after #B\n";
+        let blocks = parse_blocks(text).unwrap();
+
+        assert_eq!(ref_targets(&blocks[0]), vec!["B"]);
     }
 
     #[test]

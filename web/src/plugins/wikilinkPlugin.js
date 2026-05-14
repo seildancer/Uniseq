@@ -11,6 +11,10 @@ export function resetWikilinkFocus() {
   hasFocus = false;
 }
 
+function isCodeTextNode(node, parent) {
+  return node.marks?.some((mark) => mark.type.name === "code") || parent?.type?.name === "code_block";
+}
+
 export default function createWikilinkPlugin(navigateRef, pagesRef) {
   return new Plugin({
     key: wikilinkKey,
@@ -18,8 +22,9 @@ export default function createWikilinkPlugin(navigateRef, pagesRef) {
       decorations(state) {
         const decos = [];
         const { from, to } = state.selection;
-        state.doc.descendants((node, pos) => {
+        state.doc.descendants((node, pos, parent) => {
           if (!node.isText) return;
+          if (isCodeTextNode(node, parent)) return;
           const text = node.text;
           // [[PageRef]] — hide brackets unless cursor is inside
           const bracketRegex = /\[\[([^\]]+)\]\]/g;
