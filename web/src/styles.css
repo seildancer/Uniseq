@@ -793,6 +793,73 @@ h2 {
   border-color: var(--accent);
 }
 
+.stream-menu-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.stream-menu-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s;
+  padding: 0;
+}
+
+.stream-list-item:hover .stream-menu-btn,
+.stream-menu-btn--open {
+  opacity: 1;
+}
+
+.stream-menu-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.stream-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 2px);
+  z-index: 100;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 130px;
+  box-shadow: var(--shadow);
+}
+
+.stream-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.stream-dropdown-item:hover {
+  background: var(--hover);
+}
+
+.stream-dropdown-item--danger {
+  color: var(--warn);
+}
+
 /* Calendar */
 .stream-calendar {
   user-select: none;

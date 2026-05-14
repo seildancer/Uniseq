@@ -6,6 +6,7 @@ import StreamSingleList from "./StreamSingleList.jsx";
 import {
   isDiaryStream,
   orderStreamNamesForDisplay,
+  PRIMARY_STREAM_NAMES,
   selectionForCalendarDate,
 } from "../utils/streamWorkspace.js";
 
@@ -28,6 +29,7 @@ export default function StreamWorkspace({
   onSelectStreamDual,
   onSelectStreamSingle,
   onCreateStream,
+  onDeleteStream,
   onNavigatePage,
   onError,
   onRefresh,
@@ -39,6 +41,8 @@ export default function StreamWorkspace({
   const createInputRef = useRef(null);
   const [isCreating, setIsCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [streamMenuOpenFor, setStreamMenuOpenFor] = useState(null);
+  const [deleteConfirmStream, setDeleteConfirmStream] = useState(null);
 
   useEffect(() => {
     return () => {
@@ -108,6 +112,31 @@ export default function StreamWorkspace({
     if (name) {
       await onCreateStream?.(name);
     }
+  }
+
+  useEffect(() => {
+    if (!streamMenuOpenFor) return;
+    function handleClickOutside(event) {
+      if (!event.target.closest(".stream-menu-wrap")) {
+        setStreamMenuOpenFor(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [streamMenuOpenFor]);
+
+  async function handleConfirmDeleteStream() {
+    const streamName = deleteConfirmStream;
+    setDeleteConfirmStream(null);
+    await onDeleteStream?.(streamName);
+  }
+
+  function streamNoteCount(sName) {
+    let count = 0;
+    for (const set of streamPagesByDate.values()) {
+      if (set.has(sName)) count++;
+    }
+    return count;
   }
 
   function handleCalendarSelect(dateName) {
@@ -182,9 +211,11 @@ export default function StreamWorkspace({
                 <ul className="stream-list">
                   {orderStreamNamesForDisplay(streamNames).map((streamName) => {
                     const isDiary = isDiaryStream(streamName);
+                    const isPrimary = PRIMARY_STREAM_NAMES.includes(streamName);
+                    const isMenuOpen = streamMenuOpenFor === streamName;
 
                     return (
-                      <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}`}>
+                      <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}${!isPrimary ? " stream-list-item--with-menu" : ""}${isMenuOpen ? " stream-list-item--menu-open" : ""}`}>
                         <button
                           type="button"
                           className={`stream-list-btn${streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
@@ -205,6 +236,37 @@ export default function StreamWorkspace({
                           >
                             blur
                           </button>
+                        ) : null}
+                        {!isPrimary ? (
+                          <div className="stream-menu-wrap">
+                            <button
+                              type="button"
+                              className={`stream-menu-btn${isMenuOpen ? " stream-menu-btn--open" : ""}`}
+                              aria-label="Stream options"
+                              aria-expanded={isMenuOpen}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setStreamMenuOpenFor((current) => current === streamName ? null : streamName);
+                              }}
+                            >
+                              ...
+                            </button>
+                            {isMenuOpen && (
+                              <div className="stream-dropdown">
+                                <button
+                                  type="button"
+                                  className="stream-dropdown-item stream-dropdown-item--danger"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setStreamMenuOpenFor(null);
+                                    setDeleteConfirmStream(streamName);
+                                  }}
+                                >
+                                  Delete stream
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         ) : null}
                       </li>
                     );
@@ -255,6 +317,33 @@ export default function StreamWorkspace({
           </div>
         </section>
       ) : fallbackEditor}
+
+      {deleteConfirmStream && (
+        <div className="modal-overlay" onClick={() => setDeleteConfirmStream(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Delete stream</h3>
+            <p>
+              Delete <strong>{deleteConfirmStream}</strong> and all {streamNoteCount(deleteConfirmStream)} {streamNoteCount(deleteConfirmStream) === 1 ? "note" : "notes"}? This cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setDeleteConfirmStream(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => void handleConfirmDeleteStream()}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

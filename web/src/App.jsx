@@ -717,6 +717,21 @@ export default function App() {
     }
   }
 
+  async function handleDeleteStream(streamName) {
+    try {
+      await invoke("delete_stream", { streamName });
+      await loadWorkspaceLists();
+      if (
+        streamSelection?.kind === "stream_single" &&
+        streamSelection.streamName === streamName
+      ) {
+        handleSelectStreamDual(selectedStreamDate);
+      }
+    } catch (error) {
+      setActionError(normalizeError(error));
+    }
+  }
+
   async function handleCreatePage(title) {
     const trimmed = title.trim();
     if (!trimmed) return;
@@ -1757,6 +1772,7 @@ export default function App() {
               onSelectStreamDual={handleSelectStreamDual}
               onSelectStreamSingle={handleSelectStreamSingle}
               onCreateStream={handleCreateStream}
+              onDeleteStream={handleDeleteStream}
               onNavigatePage={handleSelectPage}
               onError={(error) => setActionError(normalizeError(error))}
               onRefresh={() => void refreshStreamWorkspace(true)}

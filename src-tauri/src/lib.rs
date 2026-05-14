@@ -88,6 +88,11 @@ struct CleanupResultDto {
     removed_page_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct DeleteStreamResultDto {
+    deleted_page_count: usize,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct IncomingPageRefDto {
     target_page_id: String,
@@ -366,6 +371,44 @@ impl WorkspaceController {
         self.session()?
             .apply_stream_page_delete(StreamPageDelete { stream_name, date_name })
             .map_err(ErrorDto::from)
+    }
+
+    fn delete_stream(&self, stream_name: String) -> CommandResult<DeleteStreamResultDto> {
+        let stream_name_parsed = PageName::new(&stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+
+        let all_pages = self.session()?.all_pages();
+        let mut deleted_count = 0;
+
+        for page in &all_pages {
+            let page_stream_name = match &page.location {
+                PageLocation::Stream { stream_name: sn } => sn,
+                PageLocation::Pages => continue,
+            };
+            if page_stream_name.as_str() != stream_name_parsed.as_str() {
+                continue;
+            }
+            let date_name_str = page.page_id.leaf_name().as_str().to_owned();
+            if let Ok(date_name) = PageName::new(&date_name_str) {
+                if self
+                    .session()?
+                    .apply_stream_page_delete(StreamPageDelete {
+                        stream_name: stream_name_parsed.clone(),
+                        date_name,
+                    })
+                    .is_ok()
+                {
+                    deleted_count += 1;
+                }
+            }
+        }
+
+        let workspace_root = self.session()?.workspace_root();
+        let stream_dir = workspace_root.join(stream_name_parsed.as_str());
+        let _ = fs::remove_dir(&stream_dir);
+
+        Ok(DeleteStreamResultDto { deleted_page_count: deleted_count })
     }
 
     fn cleanup_empty_stream_pages(
@@ -1172,6 +1215,14 @@ fn delete_stream_page(
 }
 
 #[tauri::command]
+fn delete_stream(
+    state: State<'_, AppState>,
+    stream_name: String,
+) -> CommandResult<DeleteStreamResultDto> {
+    state.controller.lock().unwrap().delete_stream(stream_name)
+}
+
+#[tauri::command]
 fn cleanup_empty_stream_pages(
     state: State<'_, AppState>,
     older_than_days: u64,
@@ -1364,6 +1415,7 @@ pub fn run() {
             stop_watching,
             open_url,
             create_stream_page,
+            delete_stream,
             delete_stream_page,
             cleanup_empty_stream_pages,
             refresh_stream_workspace,
