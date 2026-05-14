@@ -60,6 +60,10 @@ function pageLabel(page) {
   return page.title || readPageLeafName(page.page_id) || page.page_id;
 }
 
+function searchResultLabel(result) {
+  return result?.title || readPageLeafName(result?.page_id) || result?.page_id || "";
+}
+
 function parentOrderKey(parentPageId) {
   return parentPageId ?? ROOT_PARENT_KEY;
 }
@@ -217,6 +221,19 @@ function formatError(error) {
   }
 
   return error.path ? `${error.message} (${error.path})` : error.message;
+}
+
+function describeSearchMatch(matchedField) {
+  switch (matchedField) {
+    case "title":
+      return "Title";
+    case "page_id":
+      return "Page";
+    case "content":
+      return "Content";
+    default:
+      return "";
+  }
 }
 
 function readStreamName(location) {
@@ -472,6 +489,9 @@ export default function App() {
   const [expandedPageIds, setExpandedPageIds] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
   const [pageMenuOpenId, setPageMenuOpenId] = useState(null);
   const [modal, setModal] = useState(null);
   const [renameValue, setRenameValue] = useState("");
@@ -551,6 +571,16 @@ export default function App() {
     setPages(allPages);
     setStreamNames(allStreamNames);
     setPageOrderByParent(order.sibling_order_by_parent ?? {});
+  }
+
+  function openSearchResult(result) {
+    const streamName = readStreamName(result.location);
+    if (streamName) {
+      handleSelectStreamSingle(streamName, readPageLeafName(result.page_id));
+    } else {
+      handleSelectPage(result.page_id);
+    }
+    closeModal();
   }
 
   function streamOrderStorageKey(rootPath) {
@@ -703,6 +733,9 @@ export default function App() {
     setActionError(null);
     setExpandedPageIds({});
     setDragState(null);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchLoading(false);
     setMode("onboarding");
   }
 
@@ -828,6 +861,9 @@ export default function App() {
     setModal(null);
     setRenameValue("");
     setMoveTarget("");
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchLoading(false);
   }
 
   async function renamePage(pageId, newTitle, onSuccess) {
@@ -1521,6 +1557,45 @@ export default function App() {
     resetEditorRenameValue(loadedPage);
   }, [loadedPageId, loadedPage?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const searchRequestSeqRef = useRef(0);
+
+  useEffect(() => {
+    if (mode !== "workspace" || !workspace || modal?.type !== "search") {
+      return undefined;
+    }
+
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
+      setSearchResults([]);
+      setSearchLoading(false);
+      return undefined;
+    }
+
+    const requestSeq = ++searchRequestSeqRef.current;
+    setSearchLoading(true);
+    const timeoutId = window.setTimeout(() => {
+      invoke("search_pages", {
+        pageQuery: trimmedQuery,
+        limit: 50,
+      })
+        .then((results) => {
+          if (requestSeq === searchRequestSeqRef.current) {
+            setSearchResults(Array.isArray(results) ? results : []);
+            setSearchLoading(false);
+          }
+        })
+        .catch((error) => {
+          if (requestSeq === searchRequestSeqRef.current) {
+            setSearchResults([]);
+            setSearchLoading(false);
+            setActionError(normalizeError(error));
+          }
+        });
+    }, 140);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [mode, workspace, modal, searchQuery]);
+
   const visibleError =
     startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
 
@@ -1564,6 +1639,32 @@ export default function App() {
               )}
             </svg>
           </button>
+          <div className="topbar-menu" data-no-window-drag="true">
+            <button
+              className="window-control-button workspace-sidebar-control-button"
+              type="button"
+              aria-label="Search"
+              title="Search"
+              onClick={() => {
+                setMenuOpen(false);
+                setModal({ type: "search" });
+              }}
+            >
+              <svg
+                className="workspace-sidebar-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="6" />
+                <path d="m20 20-4.2-4.2" />
+              </svg>
+            </button>
+          </div>
           <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
             <button
               className="window-control-button workspace-sidebar-control-button"
@@ -1571,7 +1672,9 @@ export default function App() {
               aria-label="Settings"
               aria-expanded={menuOpen}
               title="Settings"
-              onClick={() => setMenuOpen((open) => !open)}
+              onClick={() => {
+                setMenuOpen((open) => !open);
+              }}
             >
               <svg
                 className="workspace-sidebar-icon"
@@ -1891,7 +1994,10 @@ export default function App() {
 
         {modal && (
           <div className="modal-overlay" onClick={closeModal}>
-            <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div
+              className={`modal${modal.type === "search" ? " modal--search" : ""}`}
+              onClick={(e) => e.stopPropagation()}
+            >
               {modal.type === "rename" && (
                 <>
                   <h3>Rename page</h3>
@@ -2069,6 +2175,73 @@ export default function App() {
                       onClick={() => void handleCreatePage(renameValue)}
                     >
                       {busyAction === "create" ? "Creating..." : "Create"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "search" && (
+                <>
+                  <h3>Search</h3>
+                  <div className="field">
+                    <input
+                      className="topbar-search-input"
+                      type="search"
+                      value={searchQuery}
+                      placeholder="Search pages and content"
+                      autoFocus
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && searchResults.length > 0) {
+                          e.preventDefault();
+                          openSearchResult(searchResults[0]);
+                        }
+                        if (e.key === "Escape") {
+                          closeModal();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="modal-list topbar-search-results">
+                    {!searchQuery.trim() ? (
+                      <p className="topbar-search-empty">Search titles, page ids, and note content.</p>
+                    ) : searchLoading ? (
+                      <p className="topbar-search-empty">Searching...</p>
+                    ) : searchResults.length === 0 ? (
+                      <p className="topbar-search-empty">No results.</p>
+                    ) : (
+                      searchResults.map((result) => {
+                        const streamName = readStreamName(result.location);
+                        return (
+                          <button
+                            key={`${result.page_id}:${result.matched_field}:${result.snippet ?? ""}`}
+                            className="topbar-search-result"
+                            type="button"
+                            onClick={() => openSearchResult(result)}
+                          >
+                            <div className="topbar-search-result-head">
+                              <span className="topbar-search-result-title">{searchResultLabel(result)}</span>
+                              <span className="topbar-search-result-match">
+                                {describeSearchMatch(result.matched_field)}
+                              </span>
+                            </div>
+                            <div className="topbar-search-result-meta">
+                              {streamName ? (
+                                <span className="topbar-search-result-stream">{streamName}</span>
+                              ) : null}
+                              <span className="topbar-search-result-id">{result.page_id}</span>
+                            </div>
+                            {result.snippet ? (
+                              <div className="topbar-search-result-snippet">{result.snippet}</div>
+                            ) : null}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                  <div className="modal-actions">
+                    <button className="secondary-button" type="button" onClick={closeModal}>
+                      Close
                     </button>
                   </div>
                 </>

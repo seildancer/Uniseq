@@ -24,7 +24,7 @@ pub use parser::parse_blocks;
 pub use read::{
     BlockHandle, BlockSnapshot, FlatBlockSnapshot, IncomingPageRefSnapshot, LinkedRefEntry,
     OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail, PageSummary, RefHighlightSnapshot,
-    WorkspaceReadApi,
+    SearchMatchField, SearchResult, WorkspaceReadApi,
 };
 pub use session::{WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession};
 pub use span::SourceSpan;

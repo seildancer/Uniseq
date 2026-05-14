@@ -10,8 +10,8 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 
 use super::{
     BlockHandle, BlockSnapshot, CoreError, IncomingPageRefSnapshot, LinkedRefEntry,
-    OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail, PageId, PageSummary, WorkspaceCache,
-    WorkspaceReadApi,
+    OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail, PageId, PageSummary, SearchResult,
+    WorkspaceCache, WorkspaceReadApi,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
@@ -206,6 +206,13 @@ impl WorkspaceSession {
             .read()
             .unwrap()
             .with_read_api(|read_api| read_api.page_content(page_id))
+    }
+
+    pub fn search_pages(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+        self.state
+            .read()
+            .unwrap()
+            .with_read_api(|read_api| read_api.search_pages(query, limit))
     }
 
     pub fn write_and_reparse(

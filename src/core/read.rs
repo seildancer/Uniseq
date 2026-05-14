@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::cmp::Reverse;
 
 use super::{
     Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan,
@@ -38,6 +39,22 @@ pub struct PageDetail {
     pub incoming_refs: Vec<IncomingPageRefSnapshot>,
     pub outgoing_refs: Vec<OutgoingPageRefSnapshot>,
     pub outgoing_ref_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchResult {
+    pub page_id: PageId,
+    pub title: String,
+    pub location: PageLocation,
+    pub matched_field: SearchMatchField,
+    pub snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SearchMatchField {
+    Title,
+    PageId,
+    Content,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +146,40 @@ impl<'a> WorkspaceReadApi<'a> {
             outgoing_refs: outgoing_ref_snapshots(self.cache, page),
             outgoing_ref_count: page.outgoing_refs().count(),
         })
+    }
+
+    pub fn search_pages(&self, query: &str, limit: usize) -> Vec<SearchResult> {
+        let normalized_query = query.trim().to_lowercase();
+        if normalized_query.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+
+        let mut matches = self
+            .cache
+            .pages()
+            .values()
+            .filter_map(|page| search_result_for_page(page, &normalized_query))
+            .collect::<Vec<_>>();
+
+        matches.sort_by(|left, right| {
+            left.score
+                .cmp(&right.score)
+                .then_with(|| left.match_position.cmp(&right.match_position))
+                .then_with(|| left.title.as_str().cmp(right.title.as_str()))
+                .then_with(|| left.page_id.cmp(&right.page_id))
+        });
+
+        matches
+            .into_iter()
+            .take(limit)
+            .map(|entry| SearchResult {
+                page_id: entry.page_id,
+                title: entry.title,
+                location: entry.location,
+                matched_field: entry.matched_field,
+                snippet: entry.snippet,
+            })
+            .collect()
     }
 
     pub fn child_pages(&self, page_id: &PageId) -> Result<Vec<PageSummary>, CoreError> {
@@ -242,6 +293,17 @@ impl<'a> WorkspaceReadApi<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RankedSearchResult {
+    page_id: PageId,
+    title: String,
+    location: PageLocation,
+    matched_field: SearchMatchField,
+    snippet: Option<String>,
+    score: Reverse<u8>,
+    match_position: usize,
+}
+
 fn flat_blocks(page: &Page) -> Result<Vec<FlatBlockSnapshot>, CoreError> {
     let mut result = Vec::new();
     for block in &page.blocks {
@@ -265,6 +327,83 @@ fn collect_flat(
         collect_flat(page, child, depth + 1, result)?;
     }
     Ok(())
+}
+
+fn search_result_for_page(page: &Page, normalized_query: &str) -> Option<RankedSearchResult> {
+    let title_lower = page.title.to_lowercase();
+    if title_lower == normalized_query {
+        return Some(RankedSearchResult {
+            page_id: page.page_id.clone(),
+            title: page.title.clone(),
+            location: page.location.clone(),
+            matched_field: SearchMatchField::Title,
+            snippet: None,
+            score: Reverse(6),
+            match_position: 0,
+        });
+    }
+
+    if let Some(position) = title_lower.find(normalized_query) {
+        return Some(RankedSearchResult {
+            page_id: page.page_id.clone(),
+            title: page.title.clone(),
+            location: page.location.clone(),
+            matched_field: SearchMatchField::Title,
+            snippet: None,
+            score: Reverse(if position == 0 { 5 } else { 4 }),
+            match_position: position,
+        });
+    }
+
+    let page_id_string = page.page_id.to_string();
+    let page_id_lower = page_id_string.to_lowercase();
+    if let Some(position) = page_id_lower.find(normalized_query) {
+        return Some(RankedSearchResult {
+            page_id: page.page_id.clone(),
+            title: page.title.clone(),
+            location: page.location.clone(),
+            matched_field: SearchMatchField::PageId,
+            snippet: None,
+            score: Reverse(3),
+            match_position: position,
+        });
+    }
+
+    let text_lower = page.text.to_lowercase();
+    text_lower
+        .find(normalized_query)
+        .map(|position| RankedSearchResult {
+            page_id: page.page_id.clone(),
+            title: page.title.clone(),
+            location: page.location.clone(),
+            matched_field: SearchMatchField::Content,
+            snippet: Some(build_search_snippet(&page.text, position, normalized_query.len())),
+            score: Reverse(2),
+            match_position: position,
+        })
+}
+
+fn build_search_snippet(text: &str, match_start: usize, match_len: usize) -> String {
+    let chars = text.char_indices().collect::<Vec<_>>();
+    let char_count = text.chars().count();
+    let start_char = text[..match_start].chars().count().saturating_sub(30);
+    let match_end_char = text[..match_start + match_len].chars().count();
+    let end_char = (match_end_char + 30).min(char_count);
+
+    let start_byte = if start_char == 0 {
+        0
+    } else {
+        chars[start_char].0
+    };
+    let end_byte = if end_char >= char_count {
+        text.len()
+    } else {
+        chars[end_char].0
+    };
+
+    let prefix = if start_byte > 0 { "..." } else { "" };
+    let suffix = if end_byte < text.len() { "..." } else { "" };
+    format!("{prefix}{}{suffix}", text[start_byte..end_byte].replace(['\r', '\n'], " "))
 }
 
 fn incoming_ref_snapshots(
@@ -399,6 +538,18 @@ mod tests {
     fn parsed_page(id: &[&str], text: &str) -> Page {
         Page::new(PageId::new(id.iter().copied()).unwrap(), text)
             .with_blocks(parse_blocks(text).unwrap())
+    }
+
+    fn stream_page(stream_name: &str, date_name: &str, text: &str) -> Page {
+        let stream_name = crate::PageName::new(stream_name).unwrap();
+        let date_name = crate::PageName::new(date_name).unwrap();
+        Page::new_in_location(
+            PageId::stream(stream_name.clone(), date_name.clone()).unwrap(),
+            crate::PageLocation::Stream { stream_name },
+            text,
+        )
+        .unwrap()
+        .with_blocks(parse_blocks(text).unwrap())
     }
 
     #[test]
@@ -583,5 +734,57 @@ mod tests {
             block.handle.source_page_revision,
             FileFingerprint::from_text(text)
         );
+    }
+
+    #[test]
+    fn search_pages_ranks_title_then_page_id_then_content_and_applies_limit() {
+        let cache = WorkspaceCache::from_pages([
+            parsed_page(&["Alpha"], "misc\n"),
+            parsed_page(&["Beta"], "Alpha appears in content\n"),
+            stream_page("alpha_stream", "2026_05_08", "other\n"),
+        ]);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+
+        let results = read_api.search_pages("alpha", 2);
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].page_id, PageId::new(["Alpha"]).unwrap());
+        assert_eq!(results[0].matched_field, SearchMatchField::Title);
+        assert_eq!(
+            results[1].page_id,
+            PageId::stream(
+                crate::PageName::new("alpha_stream").unwrap(),
+                crate::PageName::new("2026_05_08").unwrap()
+            )
+            .unwrap()
+        );
+        assert_eq!(results[1].matched_field, SearchMatchField::PageId);
+    }
+
+    #[test]
+    fn search_pages_is_case_insensitive_and_returns_content_snippets() {
+        let cache = WorkspaceCache::from_pages([stream_page(
+            "journal",
+            "2026_05_07",
+            "Line one\nNeedle inside content body for snippet coverage.\nLine three",
+        )]);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+
+        let results = read_api.search_pages("nEeDlE", 10);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].matched_field, SearchMatchField::Content);
+        let snippet = results[0].snippet.as_ref().unwrap();
+        assert!(snippet.to_lowercase().contains("needle inside content body"));
+        assert!(!snippet.contains('\n'));
+    }
+
+    #[test]
+    fn search_pages_returns_empty_for_blank_queries() {
+        let cache = WorkspaceCache::from_pages([parsed_page(&["Alpha"], "")]);
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+
+        assert!(read_api.search_pages("   ", 10).is_empty());
+        assert!(read_api.search_pages("Alpha", 0).is_empty());
     }
 }

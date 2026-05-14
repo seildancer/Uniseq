@@ -13,9 +13,9 @@ use uniseq_backend::{
     BlockHandle, BlockSnapshot, CoreError, FileFingerprint, FlatBlockSnapshot,
     IncomingPageRefSnapshot, LinkedRefEntry, OutgoingPageRefSnapshot, PageContentSnapshot,
     PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName, PageRename,
-    PageSummary, RefHighlightSnapshot, SourceSpan, StreamPageCreate, StreamPageDelete,
-    WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession, create_workspace_root,
-    prepare_workspace_root,
+    PageSummary, RefHighlightSnapshot, SearchMatchField, SearchResult, SourceSpan,
+    StreamPageCreate, StreamPageDelete, WatcherFallbackReason, WatcherMode, WorkspaceEvent,
+    WorkspaceSession, create_workspace_root, prepare_workspace_root,
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -142,6 +142,15 @@ struct LinkedRefEntryDto {
     ref_span: SourceSpanDto,
     block: BlockSnapshotDto,
     block_content_highlight: Option<RefHighlightDto>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct SearchResultDto {
+    page_id: String,
+    title: String,
+    location: PageLocationDto,
+    matched_field: String,
+    snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -324,6 +333,20 @@ impl WorkspaceController {
             .page_content(&page_id)
             .map(PageContentDto::from)
             .map_err(ErrorDto::from)
+    }
+
+    fn search_pages(
+        &self,
+        page_query: String,
+        limit: Option<usize>,
+    ) -> CommandResult<Vec<SearchResultDto>> {
+        let limit = limit.unwrap_or(50);
+        Ok(self
+            .session()?
+            .search_pages(&page_query, limit)
+            .into_iter()
+            .map(SearchResultDto::from)
+            .collect())
     }
 
     fn write_page_content(
@@ -912,6 +935,22 @@ impl From<LinkedRefEntry> for LinkedRefEntryDto {
     }
 }
 
+impl From<SearchResult> for SearchResultDto {
+    fn from(value: SearchResult) -> Self {
+        Self {
+            page_id: page_id_to_string(&value.page_id),
+            title: value.title,
+            location: PageLocationDto::from(&value.location),
+            matched_field: match value.matched_field {
+                SearchMatchField::Title => "title".to_owned(),
+                SearchMatchField::PageId => "page_id".to_owned(),
+                SearchMatchField::Content => "content".to_owned(),
+            },
+            snippet: value.snippet,
+        }
+    }
+}
+
 impl From<FileFingerprint> for FileFingerprintDto {
     fn from(value: FileFingerprint) -> Self {
         Self {
@@ -1206,6 +1245,19 @@ fn page_content(state: State<'_, AppState>, page_id: String) -> CommandResult<Pa
 }
 
 #[tauri::command]
+fn search_pages(
+    state: State<'_, AppState>,
+    page_query: String,
+    limit: Option<usize>,
+) -> CommandResult<Vec<SearchResultDto>> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .search_pages(page_query, limit)
+}
+
+#[tauri::command]
 fn write_page_content(
     state: State<'_, AppState>,
     page_id: String,
@@ -1442,6 +1494,7 @@ pub fn run() {
             page_summary,
             page_detail,
             page_content,
+            search_pages,
             write_page_content,
             create_page,
             rename_page,
@@ -1841,6 +1894,33 @@ mod tests {
         let pages = controller.all_pages().unwrap();
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0].page_id, "pages:A");
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn search_pages_returns_ranked_results_from_open_workspace() {
+        let root = unique_temp_dir("uniseq-desktop-search");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        write_workspace_file(&root, "pages/Alpha.md", "misc");
+        write_workspace_file(&root, "pages/Beta.md", "alpha in content");
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let results = controller
+            .search_pages("alpha".to_owned(), Some(10))
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].page_id, "pages:Alpha");
+        assert_eq!(results[0].matched_field, "title");
+        assert_eq!(results[1].page_id, "pages:Beta");
+        assert_eq!(results[1].matched_field, "content");
+        assert!(results[1].snippet.as_ref().is_some_and(|snippet| snippet.contains("alpha")));
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
