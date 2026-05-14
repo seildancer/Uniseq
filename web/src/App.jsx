@@ -22,8 +22,17 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
+const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
 
 const appWindow = getCurrentWindow();
+
+function shouldShowDesktopWindowControls() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+
+  return !window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches;
+}
 
 function readPageLeafName(pageId) {
   if (typeof pageId !== "string") {
@@ -392,6 +401,40 @@ function PageTree({
   );
 }
 
+function WindowMinimizeIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M2 6.5h8" />
+    </svg>
+  );
+}
+
+function WindowMaximizeIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <rect x="2.25" y="2.25" width="7.5" height="7.5" rx="0.6" />
+    </svg>
+  );
+}
+
+function WindowRestoreIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M4.25 2.25h5.5v5.5" />
+      <path d="M7.75 4.25h-5.5v5.5h5.5z" />
+    </svg>
+  );
+}
+
+function WindowCloseIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M3 3l6 6" />
+      <path d="M9 3l-6 6" />
+    </svg>
+  );
+}
+
 export default function App() {
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
@@ -424,6 +467,10 @@ export default function App() {
   const [editorRenameValue, setEditorRenameValue] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [dragState, setDragState] = useState(null);
+  const [windowIsMaximized, setWindowIsMaximized] = useState(false);
+  const [showDesktopWindowControls, setShowDesktopWindowControls] = useState(
+    () => shouldShowDesktopWindowControls(),
+  );
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
     if (!Number.isFinite(stored)) {
@@ -977,11 +1024,50 @@ export default function App() {
 
   async function handleToggleMaximizeWindow() {
     await appWindow.toggleMaximize();
+    setWindowIsMaximized(await appWindow.isMaximized());
   }
 
   async function handleCloseWindow() {
     await appWindow.close();
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return undefined;
+    }
+
+    const mediaQuery = window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY);
+    const handleChange = (event) => {
+      setShowDesktopWindowControls(!event.matches);
+    };
+
+    setShowDesktopWindowControls(!mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncWindowMaximizedState() {
+      const maximized = await appWindow.isMaximized();
+      if (!cancelled) {
+        setWindowIsMaximized(maximized);
+      }
+    }
+
+    void syncWindowMaximizedState();
+    const unlistenPromise = appWindow.onResized(() => {
+      void syncWindowMaximizedState();
+    });
+
+    return () => {
+      cancelled = true;
+      void unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, []);
 
   useEffect(() => {
     if (!dragState) {
@@ -1067,6 +1153,10 @@ export default function App() {
   }, [dragState, expandedPageIds, pageOrderByParent, regularPages]);
 
   function handleWindowDragMouseDown(event) {
+    if (!showDesktopWindowControls) {
+      return;
+    }
+
     if (event.button !== 0) {
       return;
     }
@@ -1422,32 +1512,34 @@ export default function App() {
     const panelChrome = (
       <div className="editor-panel-chrome" onMouseDown={handleWindowDragMouseDown}>
         <div className="editor-panel-drag-region" />
-        <div className="window-controls" data-no-window-drag="true">
-          <button
-            className="window-control-button"
-            type="button"
-            aria-label="Minimize window"
-            onClick={handleMinimizeWindow}
-          >
-            -
-          </button>
-          <button
-            className="window-control-button"
-            type="button"
-            aria-label="Maximize window"
-            onClick={handleToggleMaximizeWindow}
-          >
-            []
-          </button>
-          <button
-            className="window-control-button window-control-button--close"
-            type="button"
-            aria-label="Close window"
-            onClick={handleCloseWindow}
-          >
-            x
-          </button>
-        </div>
+        {showDesktopWindowControls ? (
+          <div className="window-controls" data-no-window-drag="true">
+            <button
+              className="window-control-button"
+              type="button"
+              aria-label="Minimize window"
+              onClick={handleMinimizeWindow}
+            >
+              <WindowMinimizeIcon />
+            </button>
+            <button
+              className="window-control-button"
+              type="button"
+              aria-label={windowIsMaximized ? "Restore window" : "Maximize window"}
+              onClick={handleToggleMaximizeWindow}
+            >
+              {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+            </button>
+            <button
+              className="window-control-button window-control-button--close"
+              type="button"
+              aria-label="Close window"
+              onClick={handleCloseWindow}
+            >
+              <WindowCloseIcon />
+            </button>
+          </div>
+        ) : null}
       </div>
     );
 

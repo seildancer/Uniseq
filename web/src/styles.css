@@ -383,11 +383,39 @@ h2 {
 }
 
 .window-control-button {
-  width: 46px;
+  width: 48px;
+  min-width: 48px;
+  padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.window-control-icon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.window-control-button:hover {
+  background: color-mix(in srgb, var(--line) 62%, transparent);
+  color: var(--ink);
+}
+
+.window-control-button:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--line) 82%, transparent);
+  color: var(--ink);
 }
 
 .window-control-button--close:hover {
@@ -395,10 +423,15 @@ h2 {
   color: #ffffff;
 }
 
+.window-control-button--close:focus-visible {
+  background: #d94b4b;
+  color: #ffffff;
+}
+
 .topbar-menu {
   position: relative;
-  display: flex;
-  align-items: stretch;
+  display: inline-flex;
+  align-items: center;
 }
 
 .topbar-settings {
@@ -512,16 +545,19 @@ h2 {
 .workspace-sidebar-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
 .workspace-sidebar-control-button {
   width: 36px;
+  min-width: 36px;
   height: 36px;
+  padding: 0;
   border-radius: 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 36px;
 }
 
 .workspace-sidebar-control-button:hover {
