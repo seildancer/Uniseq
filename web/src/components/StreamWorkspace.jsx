@@ -1,8 +1,7 @@
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
-import StreamSingleEditor from "./StreamSingleEditor.jsx";
-import { formatDateLabel } from "../utils/streamDates.js";
-import { streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
+import StreamSingleList from "./StreamSingleList.jsx";
+import { PRIMARY_STREAM_LEFT } from "../utils/streamWorkspace.js";
 
 export default function StreamWorkspace({
   streamSelection,
@@ -11,6 +10,8 @@ export default function StreamWorkspace({
   streamPagesByDate,
   regularPages,
   streamReloadToken,
+  diaryBlurEnabled,
+  onDiaryBlurToggle,
   pageSidebarContent,
   fallbackEditor,
   onSelectStreamDual,
@@ -23,30 +24,26 @@ export default function StreamWorkspace({
     ? (
         streamSelection.kind === "stream_dual" ? (
           <StreamDualEditor
-            key={selectedStreamDate}
-            dateName={selectedStreamDate}
+            selectedDate={selectedStreamDate}
             streamPagesByDate={streamPagesByDate}
             pages={regularPages}
             reloadToken={streamReloadToken}
             onNavigate={onNavigatePage}
             onError={onError}
             onRefresh={onRefresh}
+            diaryBlurEnabled={diaryBlurEnabled}
           />
         ) : (
-          <StreamSingleEditor
-            key={`${streamSelection.streamName}/${selectedStreamDate}`}
+          <StreamSingleList
             streamName={streamSelection.streamName}
-            dateName={selectedStreamDate}
-            existingPageId={
-              streamPageExists(streamPagesByDate, selectedStreamDate, streamSelection.streamName)
-                ? streamPageId(streamSelection.streamName, selectedStreamDate)
-                : null
-            }
+            selectedDate={selectedStreamDate}
+            streamPagesByDate={streamPagesByDate}
             pages={regularPages}
             reloadToken={streamReloadToken}
             onNavigate={onNavigatePage}
             onError={onError}
             onRefresh={onRefresh}
+            diaryBlurEnabled={diaryBlurEnabled}
           />
         )
       )
@@ -59,7 +56,7 @@ export default function StreamWorkspace({
           <div className="section-heading">
             <button
               type="button"
-              className={`stream-section-title${streamSelection.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
+              className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
               onClick={() => onSelectStreamDual(selectedStreamDate)}
             >
               Streams
@@ -74,21 +71,36 @@ export default function StreamWorkspace({
 
           {streamNames.length > 0 ? (
             <ul className="stream-list">
-              {streamNames.map((streamName) => (
-                <li key={streamName} className="stream-list-item">
-                  <button
-                    type="button"
-                    className={`stream-list-btn${
-                      streamSelection.kind === "stream_single" && streamSelection.streamName === streamName
-                        ? " stream-list-btn--active"
-                        : ""
-                    }`}
-                    onClick={() => onSelectStreamSingle(streamName, selectedStreamDate)}
-                  >
-                    {streamName}
-                  </button>
-                </li>
-              ))}
+              {streamNames.map((streamName) => {
+                const isDiary = streamName === PRIMARY_STREAM_LEFT;
+
+                return (
+                  <li key={streamName} className={`stream-list-item${isDiary ? " stream-list-item--with-toggle" : ""}`}>
+                    <button
+                      type="button"
+                      className={`stream-list-btn${
+                        streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
+                          ? " stream-list-btn--active"
+                          : ""
+                      }${isDiary ? " stream-list-btn--with-toggle" : ""}`}
+                      onClick={() => onSelectStreamSingle(streamName, selectedStreamDate)}
+                    >
+                      {streamName}
+                    </button>
+                    {isDiary ? (
+                      <button
+                        type="button"
+                        className={`stream-blur-toggle${diaryBlurEnabled ? " stream-blur-toggle--active" : ""}`}
+                        aria-pressed={diaryBlurEnabled}
+                        title={diaryBlurEnabled ? "Diary blur is on" : "Diary blur is off"}
+                        onClick={onDiaryBlurToggle}
+                      >
+                        blur
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>
           ) : null}
         </div>
@@ -96,11 +108,7 @@ export default function StreamWorkspace({
       </aside>
 
       {streamSelection ? (
-        <section className="editor-panel">
-          <p className="eyebrow">
-            {streamSelection.kind === "stream_single" ? streamSelection.streamName : "Streams"}
-          </p>
-          <h1 className="editor-title-static">{formatDateLabel(selectedStreamDate)}</h1>
+        <section className="editor-panel editor-panel--stream">
           {streamEditor}
         </section>
       ) : fallbackEditor}

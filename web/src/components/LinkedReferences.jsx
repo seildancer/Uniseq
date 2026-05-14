@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import BlockEditor from "../BlockEditor";
+import { PRIMARY_STREAM_LEFT } from "../utils/streamWorkspace.js";
 
 function readPageLabel(page) {
   if (!page) {
@@ -33,7 +34,9 @@ export default function LinkedReferences({
   onNavigate,
   onReload,
   onNotice,
+  diaryBlurEnabled = true,
 }) {
+  const [focusedRefKey, setFocusedRefKey] = useState(null);
   const pagesById = useMemo(() => new Map(pages.map((page) => [page.page_id, page])), [pages]);
   const sourcePageSortTitle = (sourcePageId) => {
     const page = pagesById.get(sourcePageId);
@@ -76,46 +79,57 @@ export default function LinkedReferences({
         <span className="linked-refs-count">{entries.length}</span>
       </div>
       <div className="linked-refs-list">
-        {groupedEntries.map((group) => (
-          <section key={group.sourcePageId} className="linked-refs-source">
-            <div className="linked-refs-source-meta">
-              <button className="linked-refs-group-title" type="button" onClick={() => onNavigate(group.sourcePageId)}>
-                {(() => {
-                  const label = readPageLabel(pagesById.get(group.sourcePageId));
-                  return (
-                    <>
-                      <span>{label.title || group.sourcePageId}</span>
-                      {label.streamName ? (
-                        <span className="linked-refs-stream-pill">{label.streamName}</span>
-                      ) : null}
-                    </>
-                  );
-                })()}
-              </button>
-              <span>{group.entries.length} mention{group.entries.length === 1 ? "" : "s"}</span>
-            </div>
-            {group.entries.map((entry) => (
-              <div
-                className="linked-ref-row"
-                key={[
+        {groupedEntries.map((group) => {
+          const label = readPageLabel(pagesById.get(group.sourcePageId));
+          const isDiarySource = label.streamName === PRIMARY_STREAM_LEFT;
+
+          return (
+            <section key={group.sourcePageId} className="linked-refs-source">
+              <div className="linked-refs-source-meta">
+                <button className="linked-refs-group-title" type="button" onClick={() => onNavigate(group.sourcePageId)}>
+                  <span>{label.title || group.sourcePageId}</span>
+                  {label.streamName ? (
+                    <span className="linked-refs-stream-pill">{label.streamName}</span>
+                  ) : null}
+                </button>
+                <span>{group.entries.length} mention{group.entries.length === 1 ? "" : "s"}</span>
+              </div>
+              {group.entries.map((entry) => {
+                const refKey = [
                   entry.source_page_id,
                   entry.block.handle.block_span.start,
                   entry.block.handle.block_span.end,
                   entry.ref_span.start,
                   entry.ref_span.end,
-                ].join(":")}
-              >
-                <BlockEditor
-                  entry={entry}
-                  pages={pages}
-                  onNavigate={onNavigate}
-                  onReload={onReload}
-                  onNotice={onNotice}
-                />
-              </div>
-            ))}
-          </section>
-        ))}
+                ].join(":");
+                const shouldBlurReference = diaryBlurEnabled && isDiarySource && focusedRefKey !== refKey;
+
+                return (
+                  <div
+                    className={`linked-ref-row${shouldBlurReference ? " linked-ref-row--privacy-blurred" : ""}`}
+                    key={refKey}
+                  >
+                    <BlockEditor
+                      entry={entry}
+                      pages={pages}
+                      onNavigate={onNavigate}
+                      onReload={onReload}
+                      onNotice={onNotice}
+                      onFocusChange={(focused) => {
+                        setFocusedRefKey((current) => {
+                          if (focused) {
+                            return refKey;
+                          }
+                          return current === refKey ? null : current;
+                        });
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </section>
+          );
+        })}
       </div>
     </section>
   );

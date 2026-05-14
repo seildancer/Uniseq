@@ -15,7 +15,13 @@ function detectTagTrigger(text) {
   return null;
 }
 
-export default function AutocompleteEditor({ get, pages, children, className = "milkdown-editor" }) {
+export default function AutocompleteEditor({
+  get,
+  pages,
+  children,
+  className = "milkdown-editor",
+  onFocusChange = null,
+}) {
   const [autocomplete, setAutocomplete] = useState(null);
   const activeItemRef = useRef(null);
   const suppressNextCheckRef = useRef(false);
@@ -79,6 +85,18 @@ export default function AutocompleteEditor({ get, pages, children, className = "
     suppressNextCheckRef.current = true;
   }
 
+  function focusEditorFromChrome(event) {
+    if (event.target.closest?.(".ProseMirror")) {
+      return;
+    }
+    const editor = get();
+    if (!editor) {
+      return;
+    }
+    const view = editor.action((ctx) => ctx.get(editorViewCtx));
+    view.focus();
+  }
+
   useEffect(() => {
     activeItemRef.current?.scrollIntoView({ block: "nearest" });
   }, [autocomplete?.activeIdx]);
@@ -86,6 +104,14 @@ export default function AutocompleteEditor({ get, pages, children, className = "
   return (
     <div
       className={className}
+      onMouseDown={focusEditorFromChrome}
+      onFocusCapture={() => onFocusChange?.(true)}
+      onBlurCapture={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget)) {
+          return;
+        }
+        onFocusChange?.(false);
+      }}
       onKeyDownCapture={(e) => {
         if (!autocomplete) return;
         if (e.key === "ArrowDown") {

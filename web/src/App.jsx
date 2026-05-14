@@ -398,6 +398,7 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
+  const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
   const [selection, setSelection] = useState(() => ({ kind: "page", pageId: "" }));
   const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
   const [streamReloadToken, setStreamReloadToken] = useState(0);
@@ -1407,6 +1408,8 @@ export default function App() {
               streamPagesByDate={streamPagesByDate}
               regularPages={regularPages}
               streamReloadToken={streamReloadToken}
+              diaryBlurEnabled={diaryBlurEnabled}
+              onDiaryBlurToggle={() => setDiaryBlurEnabled((enabled) => !enabled)}
               pageSidebarContent={
                 <div className="sidebar-section sidebar-section--pages">
                   <div className="section-heading">
@@ -1506,6 +1509,7 @@ export default function App() {
                     <LinkedReferences
                       entries={linkedRefs}
                       pages={pages}
+                      diaryBlurEnabled={diaryBlurEnabled}
                       onNavigate={(sourcePageId) => {
                         const sourcePage = pagesById.get(sourcePageId);
                         if (sourcePage && readStreamName(sourcePage.location) === null) {

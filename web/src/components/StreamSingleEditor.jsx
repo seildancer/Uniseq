@@ -4,7 +4,7 @@ import { useEditorPersistence } from "../hooks/useEditorPersistence";
 import { useStreamDocumentState } from "../hooks/useStreamDocumentState";
 import { useVirtualStreamPersistence } from "../hooks/useVirtualStreamPersistence";
 
-function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConflict }) {
+function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConflict, onFocusChange }) {
   const flushRef = useRef(null);
   const onMarkdownUpdatedRef = useRef(null);
   const editorGetRef = useRef(null);
@@ -28,6 +28,7 @@ function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConfl
       flushRef={flushRef}
       onMarkdownUpdatedRef={onMarkdownUpdatedRef}
       editorGetRef={editorGetRef}
+      onFocusChange={onFocusChange}
     />
   );
 }
@@ -39,6 +40,7 @@ function VirtualStreamEditor({
   onNavigate,
   onError,
   onFirstWrite,
+  onFocusChange,
 }) {
   const flushRef = useRef(null);
   const onMarkdownUpdatedRef = useRef(null);
@@ -62,6 +64,7 @@ function VirtualStreamEditor({
       flushRef={flushRef}
       onMarkdownUpdatedRef={onMarkdownUpdatedRef}
       editorGetRef={editorGetRef}
+      onFocusChange={onFocusChange}
     />
   );
 }
@@ -75,6 +78,7 @@ export default function StreamSingleEditor({
   onNavigate,
   onError,
   onRefresh,
+  onFocusChange,
 }) {
   const {
     backedPageId,
@@ -110,6 +114,7 @@ export default function StreamSingleEditor({
         pages={pages}
         onNavigate={onNavigate}
         onConflict={handleConflictReload}
+        onFocusChange={onFocusChange}
       />
     );
   }
@@ -123,6 +128,7 @@ export default function StreamSingleEditor({
       onNavigate={onNavigate}
       onError={onError}
       onFirstWrite={handleFirstWrite}
+      onFocusChange={onFocusChange}
     />
   );
 }

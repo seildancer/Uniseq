@@ -1,3 +1,4 @@
 /target/
 /web/dist/
 /web/node_modules/
+/web/vite-dev*.log

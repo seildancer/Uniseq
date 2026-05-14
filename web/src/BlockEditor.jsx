@@ -8,6 +8,7 @@ export default function BlockEditor({
   onNavigate,
   onReload,
   onNotice,
+  onFocusChange,
 }) {
   const flushRef = useRef(null);
   const onMarkdownUpdatedRef = useRef(null);
@@ -43,6 +44,7 @@ export default function BlockEditor({
         flushRef={flushRef}
         onMarkdownUpdatedRef={onMarkdownUpdatedRef}
         editorGetRef={editorGetRef}
+        onFocusChange={onFocusChange}
         className="milkdown-editor milkdown-editor--linked-ref"
       />
     </div>

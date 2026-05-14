@@ -26,6 +26,7 @@ function MilkdownMarkdownEditorInner({
   onMarkdownUpdatedRef,
   className,
   editorGetRef,
+  onFocusChange,
 }) {
   const navigateRef = useRef(onNavigate);
   const pagesRef = useRef(pages);
@@ -69,7 +70,7 @@ function MilkdownMarkdownEditorInner({
   }
 
   return (
-    <AutocompleteEditor get={get} pages={pages} className={className}>
+    <AutocompleteEditor get={get} pages={pages} className={className} onFocusChange={onFocusChange}>
       <Milkdown />
     </AutocompleteEditor>
   );
@@ -84,6 +85,7 @@ export default function MilkdownMarkdownEditor({
   onMarkdownUpdatedRef,
   className = "milkdown-editor",
   editorGetRef = null,
+  onFocusChange = null,
 }) {
   useEffect(() => {
     return () => { flushRef.current?.(); };
@@ -99,6 +101,7 @@ export default function MilkdownMarkdownEditor({
         onMarkdownUpdatedRef={onMarkdownUpdatedRef}
         className={className}
         editorGetRef={editorGetRef}
+        onFocusChange={onFocusChange}
       />
     </MilkdownProvider>
   );
