@@ -151,7 +151,7 @@ export default function StreamDualEditor({
           const shouldBlurRight = diaryBlurEnabled
             && PRIMARY_STREAM_RIGHT === DIARY_STREAM
             && Boolean(rightPageId)
-            && !focusedStreamName;
+            && focusedStreamName !== PRIMARY_STREAM_RIGHT;
 
           return (
             <section
