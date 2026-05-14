@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Editor from "./Editor.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
+import SidebarCalendar from "./components/SidebarCalendar.jsx";
+import StreamDualEditor from "./components/StreamDualEditor.jsx";
+import StreamSingleEditor from "./components/StreamSingleEditor.jsx";
+import { formatDateLabel, todayDateName } from "./utils/streamDates.js";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -395,7 +399,7 @@ export default function App() {
   const [pages, setPages] = useState([]);
   const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
-  const [selectedPageId, setSelectedPageId] = useState("");
+  const [selection, setSelection] = useState(() => ({ kind: "page", pageId: "" }));
   const [selectedPageText, setSelectedPageText] = useState("");
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [linkedRefs, setLinkedRefs] = useState([]);
@@ -423,11 +427,27 @@ export default function App() {
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
   const regularPagesById = new Map(regularPages.map((page) => [page.page_id, page]));
   const pagesById = new Map(pages.map((page) => [page.page_id, page]));
+  const selectedPageId = selection.kind === "page" ? selection.pageId : "";
+  const streamSelection = selection.kind === "page" ? null : selection;
+  const selectedStreamDate = streamSelection?.dateName ?? todayDateName();
   const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
   const loadedPageEditorKey = loadedPageId && selectedPageRevision
     ? `${loadedPageId}:${selectedPageRevision.len_bytes}:${selectedPageRevision.content_hash}`
     : loadedPageId;
+
+  const streamPagesByDate = useMemo(() => {
+    const map = new Map();
+    for (const page of pages) {
+      const sName = readStreamName(page.location);
+      if (!sName) continue;
+      const dName = readPageLeafName(page.page_id);
+      const list = map.get(dName) ?? [];
+      list.push(sName);
+      map.set(dName, list);
+    }
+    return map;
+  }, [pages]);
   const createDisabled =
     busyAction === "create" ||
     !createState.parentPath ||
@@ -585,10 +605,11 @@ export default function App() {
     setPages([]);
     setPageOrderByParent({});
     setStreamNames([]);
-    setSelectedPageId("");
+    setSelection({ kind: "page", pageId: "" });
     setSelectedPageText("");
     setSelectedPageRevision(null);
     setLinkedRefs([]);
+    setLoadedPageId(null);
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -596,13 +617,41 @@ export default function App() {
     setMode("onboarding");
   }
 
+  async function runStreamCleanup() {
+    try {
+      const result = await invoke("cleanup_empty_stream_pages", { olderThanDays: 7 });
+      if (result.removed_page_ids.length > 0) {
+        await loadWorkspaceLists();
+      }
+    } catch {
+      // Stream cleanup is best-effort and should not block navigation.
+    }
+  }
+
+  async function refreshStreamWorkspace() {
+    await loadWorkspaceLists();
+    await runStreamCleanup();
+  }
+
   function handleSelectPage(pageId) {
     if (suppressPageClickRef.current) {
       suppressPageClickRef.current = false;
       return;
     }
-    setSelectedPageId(pageId);
+    setSelection({ kind: "page", pageId });
     setActionError(null);
+  }
+
+  function handleSelectStreamDual(dateName) {
+    setSelection({ kind: "stream_dual", dateName });
+    setActionError(null);
+    void runStreamCleanup();
+  }
+
+  function handleSelectStreamSingle(streamName, dateName) {
+    setSelection({ kind: "stream_single", streamName, dateName });
+    setActionError(null);
+    void runStreamCleanup();
   }
 
   function handleTogglePageTree(pageId) {
@@ -653,7 +702,11 @@ export default function App() {
       await invoke("rename_page", { pageId, newTitle: trimmedTitle });
       const newPageId = renamedPageIdForTitle(pageId, trimmedTitle);
       setPageOrderByParent((current) => remapPageOrderEntries(current, pageId, newPageId));
-      setSelectedPageId((current) => remapSubtreePageId(current, pageId, newPageId));
+      setSelection((current) => (
+        current.kind === "page"
+          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, pageId, newPageId) }
+          : current
+      ));
       setLoadedPageId((current) => remapSubtreePageId(current, pageId, newPageId));
       await loadWorkspaceLists();
       onSuccess?.(newPageId);
@@ -696,7 +749,11 @@ export default function App() {
         ? newParentPageId + "/" + leafName
         : "pages:" + leafName;
       setPageOrderByParent((current) => remapPageOrderEntries(current, modal.pageId, newPageId));
-      setSelectedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
+      setSelection((current) => (
+        current.kind === "page"
+          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, modal.pageId, newPageId) }
+          : current
+      ));
       setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
       closeModal();
@@ -715,7 +772,7 @@ export default function App() {
       await invoke("delete_page", { pageId: modal.pageId });
       setPageOrderByParent((current) => removePageOrderEntries(current, modal.pageId));
       if (isPageInSubtree(selectedPageId, modal.pageId)) {
-        setSelectedPageId("");
+        setSelection({ kind: "page", pageId: "" });
         setSelectedPageText("");
         setSelectedPageRevision(null);
       }
@@ -833,7 +890,11 @@ export default function App() {
           newParentPageId: newParentPageId ?? null,
         });
         setPageOrderByParent((current) => remapPageOrderEntries(current, sourcePageId, newPageId));
-        setSelectedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
+      setSelection((current) => (
+        current.kind === "page"
+          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, sourcePageId, newPageId) }
+          : current
+      ));
         setLoadedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
       }
 
@@ -1100,16 +1161,20 @@ export default function App() {
       return;
     }
 
+    if (streamSelection !== null) {
+      return;
+    }
+
     if (regularPages.length === 0) {
-      setSelectedPageId("");
+      setSelection({ kind: "page", pageId: "" });
       setSelectedPageText("");
       return;
     }
 
     if (!regularPages.some((page) => page.page_id === selectedPageId)) {
-      setSelectedPageId(regularPages[0].page_id);
+      setSelection({ kind: "page", pageId: regularPages[0].page_id });
     }
-  }, [mode, pages]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, pages, selectedPageId, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load blocks when the selected page changes.
   // `selectedPageId` is a string — React compares it by value, so this fires exactly once per navigation.
@@ -1151,14 +1216,14 @@ export default function App() {
             await loadPageLinkedRefs(loadedPageId).catch(() => {});
           }
         } else if (event.type === "page_removed") {
-          await loadWorkspaceLists().catch(() => {});
-          if (event.page_id === loadedPageId) {
-            setSelectedPageText("");
-            setSelectedPageRevision(null);
-            setLinkedRefs([]);
-            setLoadedPageId(null);
-            setSelectedPageId("");
-          }
+            await loadWorkspaceLists().catch(() => {});
+            if (event.page_id === loadedPageId) {
+              setSelectedPageText("");
+              setSelectedPageRevision(null);
+              setLinkedRefs([]);
+              setLoadedPageId(null);
+              setSelection({ kind: "page", pageId: "" });
+            }
           if (linkedRefs.some((entry) => entry.source_page_id === event.page_id)) {
             await loadPageLinkedRefs(loadedPageId).catch(() => {});
           }
@@ -1328,18 +1393,38 @@ export default function App() {
 
           <div className="workspace-body">
             <aside className="workspace-sidebar">
-              <div className="sidebar-section">
+              <div className="sidebar-section sidebar-section--streams">
                 <div className="section-heading">
-                  <h2>Streams</h2>
+                    <button
+                      type="button"
+                      className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
+                      onClick={() => handleSelectStreamDual(selectedStreamDate)}
+                    >
+                      Streams
+                    </button>
                 </div>
 
-                {streamNames.length === 0 ? (
-                  <p className="empty-state">No stream pages yet.</p>
-                ) : (
+                <SidebarCalendar
+                  selectedDate={selectedStreamDate}
+                  streamPagesByDate={streamPagesByDate}
+                  onSelectDate={(dateName) => handleSelectStreamDual(dateName)}
+                />
+
+                {streamNames.length > 0 && (
                   <ul className="stream-list">
                     {streamNames.map((streamName) => (
                       <li key={streamName} className="stream-list-item">
-                        <span className="stream-list-label">{streamName}</span>
+                        <button
+                          type="button"
+                          className={`stream-list-btn${
+                            streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
+                              ? " stream-list-btn--active"
+                              : ""
+                          }`}
+                          onClick={() => handleSelectStreamSingle(streamName, selectedStreamDate)}
+                        >
+                          {streamName}
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -1373,7 +1458,40 @@ export default function App() {
             </aside>
 
             <section className="editor-panel">
-              {loadedPage && (
+              {streamSelection ? (
+                <>
+                  <p className="eyebrow">
+                    {streamSelection.kind === "stream_single" ? streamSelection.streamName : "Streams"}
+                  </p>
+                  <h1 className="editor-title-static">{formatDateLabel(selectedStreamDate)}</h1>
+                  {streamSelection.kind === "stream_dual" ? (
+                    <StreamDualEditor
+                      key={selectedStreamDate}
+                      dateName={selectedStreamDate}
+                      streamPagesByDate={streamPagesByDate}
+                      pages={regularPages}
+                      onNavigate={handleSelectPage}
+                      onError={(error) => setActionError(normalizeError(error))}
+                      onRefresh={() => void refreshStreamWorkspace()}
+                    />
+                  ) : (
+                    <StreamSingleEditor
+                      key={`${streamSelection.streamName}/${selectedStreamDate}`}
+                      streamName={streamSelection.streamName}
+                      dateName={selectedStreamDate}
+                      existingPageId={
+                        (streamPagesByDate.get(selectedStreamDate) ?? []).includes(streamSelection.streamName)
+                          ? `stream:${streamSelection.streamName}/${selectedStreamDate}`
+                          : null
+                      }
+                      pages={regularPages}
+                      onNavigate={handleSelectPage}
+                      onError={(error) => setActionError(normalizeError(error))}
+                      onRefresh={() => void refreshStreamWorkspace()}
+                    />
+                  )}
+                </>
+              ) : loadedPage ? (
                 <>
                   <p className="eyebrow">Editor</p>
                   {loadedPageIsRegular ? (
@@ -1455,7 +1573,7 @@ export default function App() {
                     />
                   ) : null}
                 </>
-              )}
+              ) : null}
             </section>
           </div>
 

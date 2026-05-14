@@ -12,7 +12,10 @@
       "Bash(Select-Object Name)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\" -Recurse -File)",
       "Bash(Select-Object -ExpandProperty FullName)",
-      "Bash(Sort-Object)"
+      "Bash(Sort-Object)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Force)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(cargo check *)"
     ]
   }
 }

@@ -13,8 +13,9 @@ use uniseq_backend::{
     BlockHandle, BlockSnapshot, CoreError, FileFingerprint, FlatBlockSnapshot,
     IncomingPageRefSnapshot, LinkedRefEntry, OutgoingPageRefSnapshot, PageContentSnapshot,
     PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName, PageRename,
-    PageSummary, RefHighlightSnapshot, SourceSpan, WatcherFallbackReason, WatcherMode,
-    WorkspaceEvent, WorkspaceSession, create_workspace_root, prepare_workspace_root,
+    PageSummary, RefHighlightSnapshot, SourceSpan, StreamPageCreate, StreamPageDelete,
+    WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceSession, create_workspace_root,
+    prepare_workspace_root,
 };
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -80,6 +81,11 @@ struct PageContentDto {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct PageOrderDto {
     sibling_order_by_parent: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CleanupResultDto {
+    removed_page_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -298,6 +304,125 @@ impl WorkspaceController {
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
         self.session()?
             .write_and_reparse(&page_id, text, expected_revision.map(FileFingerprint::from))
+            .map(PageContentDto::from)
+            .map_err(ErrorDto::from)
+    }
+
+    fn create_stream_page(
+        &self,
+        stream_name: String,
+        date_name: String,
+    ) -> CommandResult<PageSummaryDto> {
+        let stream_name = PageName::new(&stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let date_name = PageName::new(&date_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let page_id = PageId::stream(stream_name.clone(), date_name.clone())
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        self.session()?
+            .apply_stream_page_create(StreamPageCreate { stream_name, date_name })
+            .map_err(ErrorDto::from)?;
+        self.session()?
+            .page_summary(&page_id)
+            .map(PageSummaryDto::from)
+            .map_err(ErrorDto::from)
+    }
+
+    fn delete_stream_page(
+        &self,
+        stream_name: String,
+        date_name: String,
+    ) -> CommandResult<()> {
+        let stream_name = PageName::new(&stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let date_name = PageName::new(&date_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        self.session()?
+            .apply_stream_page_delete(StreamPageDelete { stream_name, date_name })
+            .map_err(ErrorDto::from)
+    }
+
+    fn cleanup_empty_stream_pages(
+        &self,
+        older_than_days: u64,
+    ) -> CommandResult<CleanupResultDto> {
+        let all_pages = self.session()?.all_pages();
+        let mut removed_page_ids = Vec::new();
+
+        for page_summary in all_pages {
+            let stream_name = match &page_summary.location {
+                PageLocation::Stream { stream_name } => stream_name.clone(),
+                PageLocation::Pages => continue,
+            };
+
+            let date_name_str = page_summary.page_id.leaf_name().as_str().to_owned();
+            let age_days = match days_since_date_name(&date_name_str) {
+                Some(age) => age,
+                None => continue,
+            };
+            if age_days < older_than_days {
+                continue;
+            }
+
+            let content = match self.session()?.page_content(&page_summary.page_id) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !content.text.trim().is_empty() {
+                continue;
+            }
+
+            let date_name = match PageName::new(&date_name_str) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if self
+                .session()?
+                .apply_stream_page_delete(StreamPageDelete {
+                    stream_name,
+                    date_name,
+                })
+                .is_ok()
+            {
+                removed_page_ids.push(page_id_to_string(&page_summary.page_id));
+            }
+        }
+
+        Ok(CleanupResultDto { removed_page_ids })
+    }
+
+    fn write_virtual_stream_page(
+        &self,
+        stream_name: String,
+        date_name: String,
+        text: String,
+    ) -> CommandResult<PageContentDto> {
+        if text.trim().is_empty() {
+            return Err(ErrorDto {
+                code: "empty_stream_write",
+                message: "stream page was not created because the write is empty".to_owned(),
+                path: None,
+            });
+        }
+        let stream_name = PageName::new(&stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let date_name = PageName::new(&date_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let page_id = PageId::stream(stream_name.clone(), date_name.clone())
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        self.session()?
+            .apply_stream_page_create(StreamPageCreate { stream_name, date_name })
+            .map_err(ErrorDto::from)?;
+        self.session()?
+            .write_and_reparse(&page_id, text, None)
             .map(PageContentDto::from)
             .map_err(ErrorDto::from)
     }
@@ -996,6 +1121,58 @@ fn write_page_content(
 }
 
 #[tauri::command]
+fn create_stream_page(
+    state: State<'_, AppState>,
+    stream_name: String,
+    date_name: String,
+) -> CommandResult<PageSummaryDto> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .create_stream_page(stream_name, date_name)
+}
+
+#[tauri::command]
+fn delete_stream_page(
+    state: State<'_, AppState>,
+    stream_name: String,
+    date_name: String,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .delete_stream_page(stream_name, date_name)
+}
+
+#[tauri::command]
+fn cleanup_empty_stream_pages(
+    state: State<'_, AppState>,
+    older_than_days: u64,
+) -> CommandResult<CleanupResultDto> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .cleanup_empty_stream_pages(older_than_days)
+}
+
+#[tauri::command]
+fn write_virtual_stream_page(
+    state: State<'_, AppState>,
+    stream_name: String,
+    date_name: String,
+    text: String,
+) -> CommandResult<PageContentDto> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .write_virtual_stream_page(stream_name, date_name, text)
+}
+
+#[tauri::command]
 fn create_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()> {
     state.controller.lock().unwrap().create_page(page_id)
 }
@@ -1148,7 +1325,11 @@ pub fn run() {
             take_last_watch_error,
             start_watching,
             stop_watching,
-            open_url
+            open_url,
+            create_stream_page,
+            delete_stream_page,
+            cleanup_empty_stream_pages,
+            write_virtual_stream_page
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
@@ -1215,6 +1396,29 @@ fn moved_page_id_string(page_id: &PageId, destination_parent_page_id: Option<&Pa
     destination_parent_page_id
         .map(|parent| format!("{}/{}", page_id_to_string(parent), leaf_name))
         .unwrap_or_else(|| format!("pages:{leaf_name}"))
+}
+
+fn days_since_date_name(date_name: &str) -> Option<u64> {
+    let bytes = date_name.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'_' || bytes[7] != b'_' {
+        return None;
+    }
+    let year: i64 = std::str::from_utf8(&bytes[0..4]).ok()?.parse().ok()?;
+    let month: i64 = std::str::from_utf8(&bytes[5..7]).ok()?.parse().ok()?;
+    let day: i64 = std::str::from_utf8(&bytes[8..10]).ok()?.parse().ok()?;
+    // Julian Day Number
+    let a = (14 - month) / 12;
+    let y = year + 4800 - a;
+    let m = month + 12 * a - 3;
+    let jdn = day + (153 * m + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
+    // Unix epoch 1970-01-01 = JDN 2440588
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let today_jdn = (secs / 86400) as i64 + 2440588;
+    let age = today_jdn - jdn;
+    (age >= 0).then_some(age as u64)
 }
 
 fn page_order_store_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -1618,6 +1822,84 @@ mod tests {
         assert!(root.join("uniseq").is_dir());
         assert!(root.join("journals").is_dir());
         assert!(root.join("diary").is_dir());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_stream_write_rejects_empty_content_without_creating_a_file() {
+        let root = unique_temp_dir("uniseq-desktop-virtual-stream-empty");
+        fs::create_dir_all(root.join("pages")).unwrap();
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let error = controller
+            .write_virtual_stream_page(
+                "diary".to_owned(),
+                "2026_05_14".to_owned(),
+                " \n\t".to_owned(),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "empty_stream_write");
+        assert!(!root.join("diary").join("2026_05_14.md").exists());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn virtual_stream_write_creates_and_persists_stream_content() {
+        let root = unique_temp_dir("uniseq-desktop-virtual-stream-write");
+        fs::create_dir_all(root.join("pages")).unwrap();
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let written = controller
+            .write_virtual_stream_page(
+                "diary".to_owned(),
+                "2026_05_14".to_owned(),
+                "- first line\n".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(written.text, "- first line\n");
+        assert_eq!(
+            fs::read_to_string(root.join("diary").join("2026_05_14.md")).unwrap(),
+            "- first line\n"
+        );
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleanup_empty_stream_pages_removes_only_old_empty_stream_files() {
+        let root = unique_temp_dir("uniseq-desktop-stream-cleanup");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        write_workspace_file(&root, "diary/2020_01_01.md", "   \n");
+        write_workspace_file(&root, "journals/2020_01_01.md", "- keep\n");
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let result = controller.cleanup_empty_stream_pages(7).unwrap();
+        assert_eq!(
+            result.removed_page_ids,
+            vec!["stream:diary/2020_01_01".to_owned()]
+        );
+        assert!(!root.join("diary").join("2020_01_01.md").exists());
+        assert_eq!(
+            fs::read_to_string(root.join("journals").join("2020_01_01.md")).unwrap(),
+            "- keep\n"
+        );
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);

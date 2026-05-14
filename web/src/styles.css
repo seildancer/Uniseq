@@ -552,22 +552,272 @@ h2 {
   padding: 0;
 }
 
-.stream-list {
-  display: grid;
-  gap: 6px;
+.sidebar-section--streams {
+  overflow-y: auto;
 }
 
-.stream-list-item {
-  min-height: 30px;
-  padding: 6px 8px;
-  border-radius: 8px;
+.stream-section-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  line-height: 1.2;
+}
+
+.stream-section-title:hover {
+  color: var(--accent);
+}
+
+.stream-section-title--active {
+  color: var(--accent);
+}
+
+/* Calendar */
+.stream-calendar {
+  user-select: none;
+}
+
+.stream-calendar-nav {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.stream-calendar-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  padding: 0;
+}
+
+.stream-calendar-nav-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.stream-calendar-month-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink);
+  flex: 1;
+  text-align: center;
+}
+
+.stream-calendar-day-headers {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 2px;
+}
+
+.stream-calendar-day-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  padding: 2px 0;
+}
+
+.stream-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+
+.stream-calendar-day {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 2px 0;
+  border-radius: 6px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  gap: 2px;
+}
+
+.stream-calendar-day:hover {
+  background: var(--hover);
+}
+
+.stream-calendar-day--other .stream-calendar-day-num {
+  opacity: 0.3;
+}
+
+.stream-calendar-day--selected {
+  background: var(--accent);
+}
+
+.stream-calendar-day--selected .stream-calendar-day-num {
+  color: var(--accent-ink);
+}
+
+.stream-calendar-day--today .stream-calendar-day-num {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.stream-calendar-day-num {
+  font-size: 0.78rem;
+  color: var(--ink);
+  line-height: 1;
+}
+
+.stream-calendar-markers {
+  display: flex;
+  gap: 2px;
   align-items: center;
 }
 
-.stream-list-label {
+.stream-calendar-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.stream-calendar-dot--diary {
+  background: #3d7060;
+}
+
+.stream-calendar-dot--journals {
+  background: #5568a8;
+}
+
+.stream-calendar-dot--extra {
+  background: #8a6542;
+}
+
+/* Stream list */
+.stream-list {
+  display: grid;
+  gap: 2px;
+}
+
+.stream-list-item {
+  display: flex;
+}
+
+.stream-list-btn {
+  flex: 1;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: none;
+  background: none;
   color: var(--ink);
-  font-size: 0.94rem;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stream-list-btn:hover {
+  background: var(--hover);
+}
+
+.stream-list-btn--active {
+  background: var(--selected);
+  font-weight: 500;
+}
+
+/* Stream editor */
+.stream-dual-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.stream-dual-tabs {
+  display: none;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.stream-dual-tab {
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.stream-dual-tab--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.stream-dual-pane {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+}
+
+.stream-dual-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.stream-panel-label {
+  margin: 0 0 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.stream-editor-placeholder {
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 8px 0;
+}
+
+.stream-editor-empty {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+
+.stream-editor-empty-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 900px) {
+  .stream-dual-tabs {
+    display: flex;
+  }
+
+  .stream-dual-pane {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-dual-panel--hidden-mobile {
+    display: none;
+  }
 }
 
 .page-tree {
