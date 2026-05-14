@@ -71,6 +71,7 @@ export default function StreamSingleEditor({
   dateName,
   existingPageId,
   pages,
+  reloadToken,
   onNavigate,
   onError,
   onRefresh,
@@ -87,6 +88,7 @@ export default function StreamSingleEditor({
     streamName,
     dateName,
     existingPageId,
+    reloadToken,
     onError,
     onRefresh,
   });

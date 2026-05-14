@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Editor from "./Editor.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
-import SidebarCalendar from "./components/SidebarCalendar.jsx";
-import StreamDualEditor from "./components/StreamDualEditor.jsx";
-import StreamSingleEditor from "./components/StreamSingleEditor.jsx";
-import { formatDateLabel, todayDateName } from "./utils/streamDates.js";
+import StreamWorkspace from "./components/StreamWorkspace.jsx";
+import { todayDateName } from "./utils/streamDates.js";
+import { readSelectedStreamDate, shouldBumpStreamReloadToken } from "./utils/streamWorkspace.js";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -322,7 +321,7 @@ function PageTree({
                       aria-expanded={isMenuOpen}
                       onClick={() => onPageMenuToggle(page.page_id)}
                     >
-                      ⋯
+                      ...
                     </button>
                     {isMenuOpen && (
                       <div className="page-tree-dropdown">
@@ -400,6 +399,8 @@ export default function App() {
   const [pageOrderByParent, setPageOrderByParent] = useState({});
   const [streamNames, setStreamNames] = useState([]);
   const [selection, setSelection] = useState(() => ({ kind: "page", pageId: "" }));
+  const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
+  const [streamReloadToken, setStreamReloadToken] = useState(0);
   const [selectedPageText, setSelectedPageText] = useState("");
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [linkedRefs, setLinkedRefs] = useState([]);
@@ -429,7 +430,7 @@ export default function App() {
   const pagesById = new Map(pages.map((page) => [page.page_id, page]));
   const selectedPageId = selection.kind === "page" ? selection.pageId : "";
   const streamSelection = selection.kind === "page" ? null : selection;
-  const selectedStreamDate = streamSelection?.dateName ?? todayDateName();
+  const selectedStreamDate = readSelectedStreamDate(selection, lastStreamDate);
   const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
   const loadedPageEditorKey = loadedPageId && selectedPageRevision
@@ -442,9 +443,9 @@ export default function App() {
       const sName = readStreamName(page.location);
       if (!sName) continue;
       const dName = readPageLeafName(page.page_id);
-      const list = map.get(dName) ?? [];
-      list.push(sName);
-      map.set(dName, list);
+      const set = map.get(dName) ?? new Set();
+      set.add(sName);
+      map.set(dName, set);
     }
     return map;
   }, [pages]);
@@ -606,6 +607,8 @@ export default function App() {
     setPageOrderByParent({});
     setStreamNames([]);
     setSelection({ kind: "page", pageId: "" });
+    setLastStreamDate(todayDateName());
+    setStreamReloadToken(0);
     setSelectedPageText("");
     setSelectedPageRevision(null);
     setLinkedRefs([]);
@@ -617,20 +620,19 @@ export default function App() {
     setMode("onboarding");
   }
 
-  async function runStreamCleanup() {
+  async function refreshStreamWorkspace(forceReload = false) {
     try {
-      const result = await invoke("cleanup_empty_stream_pages", { olderThanDays: 7 });
-      if (result.removed_page_ids.length > 0) {
+      const result = await invoke("refresh_stream_workspace", { olderThanDays: 7 });
+      const removedPageIds = Array.isArray(result?.removed_page_ids) ? result.removed_page_ids : [];
+      if (forceReload || removedPageIds.length > 0) {
         await loadWorkspaceLists();
       }
     } catch {
-      // Stream cleanup is best-effort and should not block navigation.
+      // Stream refresh is best-effort and should not block navigation.
+      if (forceReload) {
+        await loadWorkspaceLists();
+      }
     }
-  }
-
-  async function refreshStreamWorkspace() {
-    await loadWorkspaceLists();
-    await runStreamCleanup();
   }
 
   function handleSelectPage(pageId) {
@@ -643,15 +645,17 @@ export default function App() {
   }
 
   function handleSelectStreamDual(dateName) {
+    setLastStreamDate(dateName);
     setSelection({ kind: "stream_dual", dateName });
     setActionError(null);
-    void runStreamCleanup();
+    void refreshStreamWorkspace();
   }
 
   function handleSelectStreamSingle(streamName, dateName) {
+    setLastStreamDate(dateName);
     setSelection({ kind: "stream_single", streamName, dateName });
     setActionError(null);
-    void runStreamCleanup();
+    void refreshStreamWorkspace();
   }
 
   function handleTogglePageTree(pageId) {
@@ -1177,7 +1181,7 @@ export default function App() {
   }, [mode, pages, selectedPageId, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load blocks when the selected page changes.
-  // `selectedPageId` is a string — React compares it by value, so this fires exactly once per navigation.
+  // `selectedPageId` is a string ??React compares it by value, so this fires exactly once per navigation.
   useEffect(() => {
     if (mode !== "workspace" || !selectedPageId) {
       return;
@@ -1198,6 +1202,10 @@ export default function App() {
     const id = setInterval(async () => {
       const events = await invoke("drain_workspace_events").catch(() => []);
       for (const event of events) {
+        if (shouldBumpStreamReloadToken(event, Boolean(streamSelection))) {
+          setStreamReloadToken((current) => current + 1);
+        }
+
         if (event.type === "workspace_reloaded") {
           await loadWorkspaceLists().catch(() => {});
           if (loadedPageId) {
@@ -1232,7 +1240,7 @@ export default function App() {
     }, 250);
 
     return () => clearInterval(id);
-  }, [mode, loadedPageId, linkedRefs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, loadedPageId, linkedRefs, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedPageId) {
@@ -1294,7 +1302,7 @@ export default function App() {
                   aria-expanded={menuOpen}
                   onClick={() => setMenuOpen((open) => !open)}
                 >
-                  ⋮
+                  ...
                 </button>
                 {menuOpen && (
                   <div className="topbar-menu-dropdown">
@@ -1392,106 +1400,42 @@ export default function App() {
           ) : null}
 
           <div className="workspace-body">
-            <aside className="workspace-sidebar">
-              <div className="sidebar-section sidebar-section--streams">
-                <div className="section-heading">
-                    <button
-                      type="button"
-                      className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
-                      onClick={() => handleSelectStreamDual(selectedStreamDate)}
-                    >
-                      Streams
-                    </button>
-                </div>
+            <StreamWorkspace
+              streamSelection={streamSelection}
+              selectedStreamDate={selectedStreamDate}
+              streamNames={streamNames}
+              streamPagesByDate={streamPagesByDate}
+              regularPages={regularPages}
+              streamReloadToken={streamReloadToken}
+              pageSidebarContent={
+                <div className="sidebar-section sidebar-section--pages">
+                  <div className="section-heading">
+                    <h2>Pages</h2>
+                  </div>
 
-                <SidebarCalendar
-                  selectedDate={selectedStreamDate}
-                  streamPagesByDate={streamPagesByDate}
-                  onSelectDate={(dateName) => handleSelectStreamDual(dateName)}
-                />
-
-                {streamNames.length > 0 && (
-                  <ul className="stream-list">
-                    {streamNames.map((streamName) => (
-                      <li key={streamName} className="stream-list-item">
-                        <button
-                          type="button"
-                          className={`stream-list-btn${
-                            streamSelection?.kind === "stream_single" && streamSelection.streamName === streamName
-                              ? " stream-list-btn--active"
-                              : ""
-                          }`}
-                          onClick={() => handleSelectStreamSingle(streamName, selectedStreamDate)}
-                        >
-                          {streamName}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <div className="sidebar-section sidebar-section--pages">
-                <div className="section-heading">
-                  <h2>Pages</h2>
-                </div>
-
-                {regularPages.length === 0 ? (
-                  <p className="empty-state">No regular pages yet.</p>
-                ) : (
-                  <PageTree
-                    nodes={pageTree}
-                    expandedPageIds={expandedPageIds}
-                    selectedPageId={selectedPageId}
-                    onSelectPage={handleSelectPage}
-                    onTogglePageTree={handleTogglePageTree}
-                    pageMenuOpenId={pageMenuOpenId}
-                    onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
-                    onRename={openRenameModal}
-                    onMove={openMoveModal}
-                    onDelete={openDeleteModal}
-                    dragState={dragState?.active ? dragState : null}
-                    onDragItemPointerDown={handleDragItemPointerDown}
-                  />
-                )}
-              </div>
-            </aside>
-
-            <section className="editor-panel">
-              {streamSelection ? (
-                <>
-                  <p className="eyebrow">
-                    {streamSelection.kind === "stream_single" ? streamSelection.streamName : "Streams"}
-                  </p>
-                  <h1 className="editor-title-static">{formatDateLabel(selectedStreamDate)}</h1>
-                  {streamSelection.kind === "stream_dual" ? (
-                    <StreamDualEditor
-                      key={selectedStreamDate}
-                      dateName={selectedStreamDate}
-                      streamPagesByDate={streamPagesByDate}
-                      pages={regularPages}
-                      onNavigate={handleSelectPage}
-                      onError={(error) => setActionError(normalizeError(error))}
-                      onRefresh={() => void refreshStreamWorkspace()}
-                    />
+                  {regularPages.length === 0 ? (
+                    <p className="empty-state">No regular pages yet.</p>
                   ) : (
-                    <StreamSingleEditor
-                      key={`${streamSelection.streamName}/${selectedStreamDate}`}
-                      streamName={streamSelection.streamName}
-                      dateName={selectedStreamDate}
-                      existingPageId={
-                        (streamPagesByDate.get(selectedStreamDate) ?? []).includes(streamSelection.streamName)
-                          ? `stream:${streamSelection.streamName}/${selectedStreamDate}`
-                          : null
-                      }
-                      pages={regularPages}
-                      onNavigate={handleSelectPage}
-                      onError={(error) => setActionError(normalizeError(error))}
-                      onRefresh={() => void refreshStreamWorkspace()}
+                    <PageTree
+                      nodes={pageTree}
+                      expandedPageIds={expandedPageIds}
+                      selectedPageId={selectedPageId}
+                      onSelectPage={handleSelectPage}
+                      onTogglePageTree={handleTogglePageTree}
+                      pageMenuOpenId={pageMenuOpenId}
+                      onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
+                      onRename={openRenameModal}
+                      onMove={openMoveModal}
+                      onDelete={openDeleteModal}
+                      dragState={dragState?.active ? dragState : null}
+                      onDragItemPointerDown={handleDragItemPointerDown}
                     />
                   )}
-                </>
-              ) : loadedPage ? (
+                </div>
+              }
+              fallbackEditor={
+                <section className="editor-panel">
+                  {loadedPage ? (
                 <>
                   <p className="eyebrow">Editor</p>
                   {loadedPageIsRegular ? (
@@ -1573,8 +1517,15 @@ export default function App() {
                     />
                   ) : null}
                 </>
-              ) : null}
-            </section>
+                  ) : null}
+                </section>
+              }
+              onSelectStreamDual={handleSelectStreamDual}
+              onSelectStreamSingle={handleSelectStreamSingle}
+              onNavigatePage={handleSelectPage}
+              onError={(error) => setActionError(normalizeError(error))}
+              onRefresh={() => void refreshStreamWorkspace(true)}
+            />
           </div>
 
           {dragState?.active ? (
@@ -1805,3 +1756,4 @@ export default function App() {
     </main>
   );
 }
+

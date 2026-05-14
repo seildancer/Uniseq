@@ -1,22 +1,23 @@
 import { useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
+import { PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
 
 export default function StreamDualEditor({
   dateName,
   streamPagesByDate,
   pages,
+  reloadToken,
   onNavigate,
   onError,
   onRefresh,
 }) {
-  const [mobileTab, setMobileTab] = useState("diary");
+  const [mobileTab, setMobileTab] = useState(PRIMARY_STREAM_LEFT);
 
-  const streamNamesForDate = streamPagesByDate.get(dateName) ?? [];
-  const diaryPageId = streamNamesForDate.includes("diary")
-    ? `stream:diary/${dateName}`
+  const diaryPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_LEFT)
+    ? streamPageId(PRIMARY_STREAM_LEFT, dateName)
     : null;
-  const journalsPageId = streamNamesForDate.includes("journals")
-    ? `stream:journals/${dateName}`
+  const journalsPageId = streamPageExists(streamPagesByDate, dateName, PRIMARY_STREAM_RIGHT)
+    ? streamPageId(PRIMARY_STREAM_RIGHT, dateName)
     : null;
 
   return (
@@ -24,42 +25,44 @@ export default function StreamDualEditor({
       <div className="stream-dual-tabs">
         <button
           type="button"
-          className={`stream-dual-tab${mobileTab === "diary" ? " stream-dual-tab--active" : ""}`}
-          onClick={() => setMobileTab("diary")}
+          className={`stream-dual-tab${mobileTab === PRIMARY_STREAM_LEFT ? " stream-dual-tab--active" : ""}`}
+          onClick={() => setMobileTab(PRIMARY_STREAM_LEFT)}
         >
-          diary
+          {PRIMARY_STREAM_LEFT}
         </button>
         <button
           type="button"
-          className={`stream-dual-tab${mobileTab === "journals" ? " stream-dual-tab--active" : ""}`}
-          onClick={() => setMobileTab("journals")}
+          className={`stream-dual-tab${mobileTab === PRIMARY_STREAM_RIGHT ? " stream-dual-tab--active" : ""}`}
+          onClick={() => setMobileTab(PRIMARY_STREAM_RIGHT)}
         >
-          journals
+          {PRIMARY_STREAM_RIGHT}
         </button>
       </div>
 
       <div className="stream-dual-pane">
-        <div className={`stream-dual-panel${mobileTab !== "diary" ? " stream-dual-panel--hidden-mobile" : ""}`}>
-          <p className="stream-panel-label">diary</p>
+        <div className={`stream-dual-panel${mobileTab !== PRIMARY_STREAM_LEFT ? " stream-dual-panel--hidden-mobile" : ""}`}>
+          <p className="stream-panel-label">{PRIMARY_STREAM_LEFT}</p>
           <StreamSingleEditor
-            key={`diary/${dateName}`}
-            streamName="diary"
+            key={`${PRIMARY_STREAM_LEFT}/${dateName}`}
+            streamName={PRIMARY_STREAM_LEFT}
             dateName={dateName}
             existingPageId={diaryPageId}
             pages={pages}
+            reloadToken={reloadToken}
             onNavigate={onNavigate}
             onError={onError}
             onRefresh={onRefresh}
           />
         </div>
-        <div className={`stream-dual-panel${mobileTab !== "journals" ? " stream-dual-panel--hidden-mobile" : ""}`}>
-          <p className="stream-panel-label">journals</p>
+        <div className={`stream-dual-panel${mobileTab !== PRIMARY_STREAM_RIGHT ? " stream-dual-panel--hidden-mobile" : ""}`}>
+          <p className="stream-panel-label">{PRIMARY_STREAM_RIGHT}</p>
           <StreamSingleEditor
-            key={`journals/${dateName}`}
-            streamName="journals"
+            key={`${PRIMARY_STREAM_RIGHT}/${dateName}`}
+            streamName={PRIMARY_STREAM_RIGHT}
             dateName={dateName}
             existingPageId={journalsPageId}
             pages={pages}
+            reloadToken={reloadToken}
             onNavigate={onNavigate}
             onError={onError}
             onRefresh={onRefresh}

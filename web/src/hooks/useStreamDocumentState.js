@@ -5,6 +5,7 @@ export function useStreamDocumentState({
   streamName,
   dateName,
   existingPageId,
+  reloadToken,
   onError,
   onRefresh,
 }) {
@@ -50,7 +51,7 @@ export function useStreamDocumentState({
         }
         onError?.(error);
       });
-  }, [backedPageId, onError]);
+  }, [backedPageId, reloadToken, onError]);
 
   function handleFirstWrite({ pageId, text, revision }) {
     setBackedPageId(pageId);

@@ -396,6 +396,10 @@ impl WorkspaceController {
         Ok(CleanupResultDto { removed_page_ids })
     }
 
+    fn refresh_stream_workspace(&self, older_than_days: u64) -> CommandResult<CleanupResultDto> {
+        self.cleanup_empty_stream_pages(older_than_days)
+    }
+
     fn write_virtual_stream_page(
         &self,
         stream_name: String,
@@ -1159,6 +1163,18 @@ fn cleanup_empty_stream_pages(
 }
 
 #[tauri::command]
+fn refresh_stream_workspace(
+    state: State<'_, AppState>,
+    older_than_days: u64,
+) -> CommandResult<CleanupResultDto> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .refresh_stream_workspace(older_than_days)
+}
+
+#[tauri::command]
 fn write_virtual_stream_page(
     state: State<'_, AppState>,
     stream_name: String,
@@ -1329,6 +1345,7 @@ pub fn run() {
             create_stream_page,
             delete_stream_page,
             cleanup_empty_stream_pages,
+            refresh_stream_workspace,
             write_virtual_stream_page
         ])
         .run(tauri::generate_context!())

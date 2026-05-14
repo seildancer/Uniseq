@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { monthFromDateName, todayDateName, yearFromDateName } from "../utils/streamDates.js";
+import { hasExtraStreams, PRIMARY_STREAM_LEFT, PRIMARY_STREAM_RIGHT } from "../utils/streamWorkspace.js";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -114,10 +115,10 @@ export default function SidebarCalendar({ selectedDate, streamPagesByDate, onSel
       </div>
       <div className="stream-calendar-grid">
         {days.map((day) => {
-          const streamNames = streamPagesByDate.get(day.dateName) ?? [];
-          const hasDiary = streamNames.includes("diary");
-          const hasJournals = streamNames.includes("journals");
-          const hasExtra = streamNames.some((name) => name !== "diary" && name !== "journals");
+          const streamNames = streamPagesByDate.get(day.dateName);
+          const hasDiary = streamNames?.has(PRIMARY_STREAM_LEFT) ?? false;
+          const hasJournals = streamNames?.has(PRIMARY_STREAM_RIGHT) ?? false;
+          const hasExtra = hasExtraStreams(streamNames);
           const isSelected = day.dateName === selectedDate;
           const isToday = day.dateName === today;
           const hasAny = hasDiary || hasJournals || hasExtra;
