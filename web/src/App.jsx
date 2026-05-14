@@ -19,7 +19,6 @@ const INITIAL_CREATE_STATE = {
   folderName: "",
 };
 
-const NOTICE_AUTO_DISMISS_MS = 4000;
 const ROOT_PARENT_KEY = "__root__";
 const DRAG_LONG_PRESS_MS = 260;
 const DRAG_MOVE_SLOP_PX = 8;
@@ -1362,17 +1361,6 @@ export default function App() {
     }
   }, [pageMenuOpenId]);
 
-  useEffect(() => {
-    if (!notice) {
-      return undefined;
-    }
-
-    const timeoutId = setTimeout(() => {
-      setNotice((current) => (current?.id === notice.id ? null : current));
-    }, NOTICE_AUTO_DISMISS_MS);
-
-    return () => clearTimeout(timeoutId);
-  }, [notice]);
 
   useEffect(() => {
     isBootEffectMountedRef.current = true;
@@ -1696,12 +1684,18 @@ export default function App() {
       <main className="app-shell app-shell--workspace">
         <section className="workspace-shell">
           {visibleError ? (
-            <div className="error-banner" role="alert">
+            <div className="snackbar" role="alert" aria-live="assertive">
               <span>{formatError(visibleError)}</span>
+              <button
+                className="snackbar-dismiss"
+                type="button"
+                aria-label="Dismiss error"
+                onClick={() => { setActionError(null); setStartupError(null); }}
+              >
+                Dismiss
+              </button>
             </div>
-          ) : null}
-
-          {notice ? (
+          ) : notice ? (
             <div className="snackbar" role="status" aria-live="polite">
               <span>{notice.message}</span>
               <button
@@ -2120,8 +2114,16 @@ export default function App() {
         </div>
 
         {visibleError ? (
-          <div className="error-banner" role="alert">
+          <div className="snackbar" role="alert" aria-live="assertive">
             <span>{formatError(visibleError)}</span>
+            <button
+              className="snackbar-dismiss"
+              type="button"
+              aria-label="Dismiss error"
+              onClick={() => { setActionError(null); setStartupError(null); }}
+            >
+              Dismiss
+            </button>
           </div>
         ) : null}
 
