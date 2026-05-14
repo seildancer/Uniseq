@@ -142,12 +142,14 @@ struct LinkedRefEntryDto {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct FileFingerprintDto {
     len_bytes: usize,
+    #[serde(with = "u64_string")]
     content_hash: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct FileFingerprintInputDto {
     len_bytes: usize,
+    #[serde(with = "u64_string")]
     content_hash: u64,
 }
 
@@ -207,6 +209,25 @@ struct WorkspacePageOrder {
 }
 
 type CommandResult<T> = Result<T, ErrorDto>;
+
+mod u64_string {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse::<u64>().map_err(serde::de::Error::custom)
+    }
+}
 
 impl WorkspaceController {
     fn open_workspace(&mut self, root_path: String) -> CommandResult<WorkspaceOpenDto> {
@@ -1678,6 +1699,20 @@ mod tests {
             stream
         );
         assert!(parse_page_id_input("streams/journal").is_err());
+    }
+
+    #[test]
+    fn file_fingerprint_json_carries_u64_hash_as_string() {
+        let fingerprint = FileFingerprint::from_parts(3, u64::MAX);
+        let value = serde_json::to_value(FileFingerprintDto::from(fingerprint)).unwrap();
+
+        assert_eq!(
+            value["content_hash"],
+            serde_json::Value::String(u64::MAX.to_string())
+        );
+
+        let input: FileFingerprintInputDto = serde_json::from_value(value).unwrap();
+        assert_eq!(FileFingerprint::from(input), fingerprint);
     }
 
     #[test]

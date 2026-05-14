@@ -140,6 +140,11 @@ enum NativeEventAction {
     FallbackToSnapshot,
 }
 
+enum NativeEventBurst {
+    Events(Vec<Event>),
+    Stop,
+}
+
 enum WatchLoopMessage {
     Fs(notify::Result<notify::Event>),
     Stop,
@@ -1151,7 +1156,7 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
 fn collect_native_event_burst(
     first_event: Event,
     rx: &Receiver<WatchLoopMessage>,
-) -> Result<Vec<Event>, WatcherFallbackReason> {
+) -> Result<NativeEventBurst, WatcherFallbackReason> {
     let mut events = vec![first_event];
     loop {
         let message = match rx.recv_timeout(NATIVE_EVENT_DEBOUNCE) {
@@ -1169,11 +1174,11 @@ fn collect_native_event_burst(
                     message: error.to_string(),
                 });
             }
-            WatchLoopMessage::Stop => return Ok(events),
+            WatchLoopMessage::Stop => return Ok(NativeEventBurst::Stop),
         }
     }
 
-    Ok(events)
+    Ok(NativeEventBurst::Events(events))
 }
 
 fn run_native_or_polling_watch_loop(
@@ -1225,8 +1230,12 @@ fn run_native_watch_loop(
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(WatchLoopMessage::Fs(Ok(event))) => {
-                let events = collect_native_event_burst(event, rx)?;
-                apply_native_event_burst_once(state, &events);
+                match collect_native_event_burst(event, rx)? {
+                    NativeEventBurst::Events(events) => {
+                        apply_native_event_burst_once(state, &events);
+                    }
+                    NativeEventBurst::Stop => return Ok(()),
+                }
             }
             Ok(WatchLoopMessage::Fs(Err(error))) => {
                 return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
