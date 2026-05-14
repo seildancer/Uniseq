@@ -726,7 +726,8 @@ h2 {
 
 .stream-section-title {
   display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   min-height: 28px;
   padding: 4px 8px;
   border-radius: 8px;
@@ -746,6 +747,50 @@ h2 {
 
 .stream-section-title--active {
   background: var(--selected);
+}
+
+.stream-add-btn {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  margin-top: 2px;
+}
+
+.stream-add-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.stream-create-row {
+  padding: 4px 8px 4px;
+}
+
+.stream-create-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 0.9rem;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.stream-create-input:focus {
+  border-color: var(--accent);
 }
 
 /* Calendar */

@@ -707,6 +707,16 @@ export default function App() {
     setActionError(null);
   }
 
+  async function handleCreateStream(streamName) {
+    try {
+      await invoke("create_stream_page", { streamName, dateName: todayDateName() });
+      await loadWorkspaceLists();
+      handleSelectStreamSingle(streamName, todayDateName());
+    } catch (error) {
+      setActionError(normalizeError(error));
+    }
+  }
+
   function handleSelectStreamDual(dateName) {
     setLastStreamDate(dateName);
     setSelection({ kind: "stream_dual", dateName });
@@ -1717,6 +1727,7 @@ export default function App() {
               }
               onSelectStreamDual={handleSelectStreamDual}
               onSelectStreamSingle={handleSelectStreamSingle}
+              onCreateStream={handleCreateStream}
               onNavigatePage={handleSelectPage}
               onError={(error) => setActionError(normalizeError(error))}
               onRefresh={() => void refreshStreamWorkspace(true)}

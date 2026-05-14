@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
@@ -23,6 +23,7 @@ export default function StreamWorkspace({
   fallbackEditor,
   onSelectStreamDual,
   onSelectStreamSingle,
+  onCreateStream,
   onNavigatePage,
   onError,
   onRefresh,
@@ -31,6 +32,9 @@ export default function StreamWorkspace({
   const sidebarRef = useRef(null);
   const editorScrollRef = useRef(null);
   const resizeStateRef = useRef(null);
+  const createInputRef = useRef(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [draftName, setDraftName] = useState("");
 
   useEffect(() => {
     return () => {
@@ -76,6 +80,30 @@ export default function StreamWorkspace({
     window.addEventListener("pointerup", handlePointerUp, { once: true });
     handlePointerMove(event);
     event.preventDefault();
+  }
+
+  useEffect(() => {
+    if (isCreating) {
+      createInputRef.current?.focus();
+    }
+  }, [isCreating]);
+
+  function startCreating() {
+    setDraftName("");
+    setIsCreating(true);
+  }
+
+  function cancelCreating() {
+    setIsCreating(false);
+    setDraftName("");
+  }
+
+  async function submitCreate() {
+    const name = draftName.trim();
+    cancelCreating();
+    if (name) {
+      await onCreateStream?.(name);
+    }
   }
 
   const streamEditor = streamSelection
@@ -126,6 +154,14 @@ export default function StreamWorkspace({
               >
                 Streams
               </button>
+              <button
+                type="button"
+                className="stream-add-btn"
+                title="New stream"
+                onClick={startCreating}
+              >
+                +
+              </button>
             </div>
 
             <div className="sidebar-section-scroll">
@@ -161,6 +197,24 @@ export default function StreamWorkspace({
                     );
                   })}
                 </ul>
+              ) : null}
+
+              {isCreating ? (
+                <div className="stream-create-row">
+                  <input
+                    ref={createInputRef}
+                    className="stream-create-input"
+                    type="text"
+                    placeholder="Stream name"
+                    value={draftName}
+                    onChange={(e) => setDraftName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); void submitCreate(); }
+                      if (e.key === "Escape") { cancelCreating(); }
+                    }}
+                    onBlur={cancelCreating}
+                  />
+                </div>
               ) : null}
 
               <SidebarCalendar
