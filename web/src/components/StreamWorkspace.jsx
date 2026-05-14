@@ -32,6 +32,7 @@ export default function StreamWorkspace({
   onSelectStreamSingle,
   onCreateStream,
   onDeleteStream,
+  onRenameStream,
   onReorderStreams,
   onNavigatePage,
   onError,
@@ -113,6 +114,15 @@ export default function StreamWorkspace({
   function cancelCreating() {
     setIsCreating(false);
     setDraftName("");
+  }
+
+  function handleCreateRowBlur(event) {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    if (!draftName.trim()) {
+      cancelCreating();
+    }
   }
 
   async function submitCreate() {
@@ -449,6 +459,17 @@ export default function StreamWorkspace({
                                 <div className="stream-dropdown">
                                   <button
                                     type="button"
+                                    className="stream-dropdown-item"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setStreamMenuOpenFor(null);
+                                      onRenameStream?.(streamName);
+                                    }}
+                                  >
+                                    Rename
+                                  </button>
+                                  <button
+                                    type="button"
                                     className="stream-dropdown-item stream-dropdown-item--danger"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -470,21 +491,58 @@ export default function StreamWorkspace({
               ) : null}
 
               {isCreating ? (
-                <div className="stream-create-row">
+                <form
+                  className="stream-create-row"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void submitCreate();
+                  }}
+                  onBlur={handleCreateRowBlur}
+                >
                   <input
-                    ref={createInputRef}
-                    className="stream-create-input"
-                    type="text"
-                    placeholder="Stream name"
+                     ref={createInputRef}
+                     className="stream-create-input"
+                     type="text"
+                     placeholder="Stream name"
                     value={draftName}
                     onChange={(e) => setDraftName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") { e.preventDefault(); void submitCreate(); }
-                      if (e.key === "Escape") { cancelCreating(); }
-                    }}
-                    onBlur={cancelCreating}
-                  />
-                </div>
+                     onKeyDown={(e) => {
+                       if (e.key === "Enter") { e.preventDefault(); void submitCreate(); }
+                       if (e.key === "Escape") { cancelCreating(); }
+                     }}
+                   />
+                   <button
+                     type="submit"
+                     className="stream-create-action"
+                     aria-label="Create stream"
+                     disabled={!draftName.trim()}
+                   >
+                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                       <path
+                         d="M3 8.5 6.25 11.75 13 5"
+                         stroke="currentColor"
+                         strokeWidth="1.8"
+                         strokeLinecap="round"
+                         strokeLinejoin="round"
+                       />
+                     </svg>
+                   </button>
+                   <button
+                     type="button"
+                     className="stream-create-action"
+                     aria-label="Cancel creating stream"
+                     onClick={cancelCreating}
+                   >
+                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                       <path
+                         d="M4 4 12 12M12 4 4 12"
+                         stroke="currentColor"
+                         strokeWidth="1.8"
+                         strokeLinecap="round"
+                       />
+                     </svg>
+                   </button>
+                 </form>
               ) : null}
 
               <SidebarCalendar

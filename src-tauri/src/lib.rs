@@ -262,6 +262,12 @@ impl WorkspaceController {
         self.session.take().is_some()
     }
 
+    fn reopen_workspace(&mut self) -> CommandResult<()> {
+        let workspace_root = self.session()?.workspace_root();
+        self.open_workspace(workspace_root.to_string_lossy().to_string())
+            .map(|_| ())
+    }
+
     fn all_pages(&self) -> CommandResult<Vec<PageSummaryDto>> {
         Ok(self
             .session()?
@@ -409,6 +415,31 @@ impl WorkspaceController {
         let _ = fs::remove_dir(&stream_dir);
 
         Ok(DeleteStreamResultDto { deleted_page_count: deleted_count })
+    }
+
+    fn rename_stream(&mut self, stream_name: String, new_stream_name: String) -> CommandResult<()> {
+        let stream_name = PageName::new(&stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+        let new_stream_name = PageName::new(&new_stream_name)
+            .map_err(CoreError::from)
+            .map_err(ErrorDto::from)?;
+
+        if stream_name == new_stream_name {
+            return Ok(());
+        }
+
+        let workspace_root = self.session()?.workspace_root();
+        let source_dir = workspace_root.join(stream_name.as_str());
+        let target_dir = workspace_root.join(new_stream_name.as_str());
+
+        if target_dir.exists() {
+            return Err(ErrorDto::from(CoreError::DestinationPageExists));
+        }
+
+        fs::rename(&source_dir, &target_dir)
+            .map_err(|error| ErrorDto::from(CoreError::io(&source_dir, &error)))?;
+        self.reopen_workspace()
     }
 
     fn cleanup_empty_stream_pages(
@@ -1223,6 +1254,19 @@ fn delete_stream(
 }
 
 #[tauri::command]
+fn rename_stream(
+    state: State<'_, AppState>,
+    stream_name: String,
+    new_stream_name: String,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .rename_stream(stream_name, new_stream_name)
+}
+
+#[tauri::command]
 fn cleanup_empty_stream_pages(
     state: State<'_, AppState>,
     older_than_days: u64,
@@ -1417,6 +1461,7 @@ pub fn run() {
             create_stream_page,
             delete_stream,
             delete_stream_page,
+            rename_stream,
             cleanup_empty_stream_pages,
             refresh_stream_workspace,
             write_virtual_stream_page
@@ -1871,6 +1916,38 @@ mod tests {
         assert!(root.join("Notebook").join("journals").is_dir());
         assert!(root.join("Notebook").join("diary").is_dir());
         assert_eq!(controller.all_pages().unwrap().len(), 1);
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_stream_reopens_workspace_with_updated_stream_pages() {
+        let root = unique_temp_dir("uniseq-desktop-rename-stream");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        fs::create_dir_all(root.join("scratch")).unwrap();
+        write_workspace_file(&root, "scratch/2026_05_14.md", "hello");
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        controller
+            .rename_stream("scratch".to_owned(), "ideas".to_owned())
+            .unwrap();
+
+        assert!(root.join("ideas").join("2026_05_14.md").is_file());
+        assert!(!root.join("scratch").exists());
+        assert_eq!(
+            controller.all_streams().unwrap(),
+            vec!["diary".to_owned(), "ideas".to_owned(), "journals".to_owned()]
+        );
+        assert!(controller
+            .all_pages()
+            .unwrap()
+            .iter()
+            .any(|page| page.page_id == "stream:ideas/2026_05_14"));
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);

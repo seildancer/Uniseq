@@ -780,11 +780,15 @@ h2 {
 }
 
 .stream-create-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   padding: 4px 8px 4px;
 }
 
 .stream-create-input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   box-sizing: border-box;
   padding: 4px 8px;
   border: 1px solid var(--line);
@@ -799,6 +803,30 @@ h2 {
 
 .stream-create-input:focus {
   border-color: var(--accent);
+}
+
+.stream-create-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.stream-create-action:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.stream-create-action:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .stream-menu-wrap {

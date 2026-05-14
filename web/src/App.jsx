@@ -805,6 +805,11 @@ export default function App() {
     setModal({ type: "rename", pageId });
   }
 
+  function openRenameStreamModal(streamName) {
+    setRenameValue(streamName);
+    setModal({ type: "rename_stream", streamName });
+  }
+
   function resetEditorRenameValue(page = loadedPage) {
     setEditorRenameValue(page ? page.title || readPageLeafName(page.page_id) : "");
   }
@@ -858,6 +863,38 @@ export default function App() {
   async function handleConfirmRename(newTitle) {
     if (!modal?.pageId) return;
     await renamePage(modal.pageId, newTitle, () => closeModal());
+  }
+
+  async function handleConfirmRenameStream(newStreamName) {
+    if (modal?.type !== "rename_stream" || !modal.streamName) return;
+    const trimmedName = newStreamName.trim();
+    if (!trimmedName || trimmedName === modal.streamName) {
+      closeModal();
+      return;
+    }
+
+    setBusyAction("rename_stream");
+    setActionError(null);
+    try {
+      await invoke("rename_stream", {
+        streamName: modal.streamName,
+        newStreamName: trimmedName,
+      });
+      setStreamOrder((current) => current.map((name) => (
+        name === modal.streamName ? trimmedName : name
+      )));
+      setSelection((current) => (
+        current.kind === "stream_single" && current.streamName === modal.streamName
+          ? { ...current, streamName: trimmedName }
+          : current
+      ));
+      await loadWorkspaceLists();
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function handleEditorRenameSave() {
@@ -1837,6 +1874,7 @@ export default function App() {
               onSelectStreamSingle={handleSelectStreamSingle}
               onCreateStream={handleCreateStream}
               onDeleteStream={handleDeleteStream}
+              onRenameStream={openRenameStreamModal}
               onReorderStreams={handleReorderStreams}
               onNavigatePage={handleSelectPage}
               onError={(error) => setActionError(normalizeError(error))}
@@ -1898,6 +1936,46 @@ export default function App() {
                       onClick={() => void handleConfirmRename(renameValue)}
                     >
                       {busyAction === "rename" ? "Renaming..." : "Rename"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "rename_stream" && (
+                <>
+                  <h3>Rename stream</h3>
+                  <div className="field">
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void handleConfirmRenameStream(renameValue);
+                        }
+                        if (e.key === "Escape") {
+                          closeModal();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="modal-actions">
+                    <button className="secondary-button" type="button" onClick={closeModal}>
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={
+                        busyAction === "rename_stream" ||
+                        !renameValue.trim() ||
+                        renameValue.trim() === modal.streamName
+                      }
+                      onClick={() => void handleConfirmRenameStream(renameValue)}
+                    >
+                      {busyAction === "rename_stream" ? "Renaming..." : "Rename"}
                     </button>
                   </div>
                 </>
