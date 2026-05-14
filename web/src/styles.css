@@ -1270,7 +1270,7 @@ h2 {
   flex-direction: column;
   gap: 8px;
   padding: 16px 0;
-  scroll-margin-top: 12px;
+  scroll-margin-top: 0;
   transition:
     padding 220ms ease,
     opacity 280ms ease,

@@ -31,12 +31,90 @@ export default function StreamSingleList({
     disabled: Boolean(focusedDateName),
   });
   const pendingSelectedScrollRef = useRef(selectedDate);
-  const lastSelectedDateRef = useRef(selectedDate);
+  const selectedScrollStartedRef = useRef(false);
+  const selectedScrollGenerationRef = useRef(0);
+  const selectedScrollRafRef = useRef(null);
 
-  if (lastSelectedDateRef.current !== selectedDate) {
-    lastSelectedDateRef.current = selectedDate;
-    pendingSelectedScrollRef.current = selectedDate;
+  function cancelSelectedScrollFrame() {
+    if (selectedScrollRafRef.current !== null) {
+      cancelAnimationFrame(selectedScrollRafRef.current);
+      selectedScrollRafRef.current = null;
+    }
   }
+
+  function isDateReady(dateName) {
+    const editorKey = `${streamName}/${dateName}`;
+    const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
+      ? streamPageId(streamName, dateName)
+      : null;
+    if (!existingPageId) {
+      return true;
+    }
+
+    const readyState = editorReadyByKey.get(editorKey);
+    return readyState?.generation === selectedScrollGenerationRef.current && readyState.ready;
+  }
+
+  function areDatesReadyThrough(dateName) {
+    const targetIndex = visibleDates.indexOf(dateName);
+    if (targetIndex < 0) {
+      return false;
+    }
+
+    for (let index = 0; index <= targetIndex; index += 1) {
+      if (!isDateReady(visibleDates[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function scrollDateIntoView(dateName, behavior) {
+    const node = dayRefs.current.get(dateName);
+    if (!node) {
+      return;
+    }
+
+    const container = scrollContainerRef.current;
+    if (!container) {
+      node.scrollIntoView({ block: "start", behavior });
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    container.scrollTo({
+      top: container.scrollTop + nodeRect.top - containerRect.top,
+      behavior,
+    });
+  }
+
+  function queueFinalSelectedScroll(dateName, generation) {
+    cancelSelectedScrollFrame();
+    selectedScrollRafRef.current = requestAnimationFrame(() => {
+      selectedScrollRafRef.current = null;
+      if (selectedScrollGenerationRef.current !== generation) {
+        return;
+      }
+      scrollDateIntoView(dateName, "auto");
+    });
+  }
+
+  useLayoutEffect(() => {
+    selectedScrollGenerationRef.current += 1;
+    pendingSelectedScrollRef.current = selectedDate;
+    selectedScrollStartedRef.current = false;
+    cancelSelectedScrollFrame();
+
+    const container = scrollContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollTop, behavior: "auto" });
+    }
+  }, [selectedDate, scrollContainerRef]);
+
+  useEffect(() => () => {
+    cancelSelectedScrollFrame();
+  }, []);
 
   useEffect(() => {
     if (focusedDateName && !visibleDates.includes(focusedDateName)) {
@@ -52,12 +130,21 @@ export default function StreamSingleList({
     if (!dateName || !visibleDates.includes(dateName)) {
       return;
     }
-    pendingSelectedScrollRef.current = null;
-    dayRefs.current.get(dateName)?.scrollIntoView({
-      block: "start",
-      behavior: "smooth",
-    });
-  }, [focusedDateName, selectedDate, visibleDates]);
+    const didStartScroll = selectedScrollStartedRef.current;
+    const datesReady = areDatesReadyThrough(dateName);
+    const generation = selectedScrollGenerationRef.current;
+
+    scrollDateIntoView(dateName, didStartScroll ? "auto" : "smooth");
+    selectedScrollStartedRef.current = true;
+
+    if (datesReady) {
+      pendingSelectedScrollRef.current = null;
+      selectedScrollStartedRef.current = false;
+      if (didStartScroll) {
+        queueFinalSelectedScroll(dateName, generation);
+      }
+    }
+  }, [focusedDateName, selectedDate, visibleDates, editorReadyByKey, streamName, streamPagesByDate]);
 
   useLayoutEffect(() => {
     if (focusedDateName) {
@@ -97,12 +184,20 @@ export default function StreamSingleList({
 
   function handleEditorReadyChange(editorKey, ready) {
     setEditorReadyByKey((current) => {
-      if (current.get(editorKey) === ready) {
+      const nextReadyState = {
+        generation: selectedScrollGenerationRef.current,
+        ready,
+      };
+      const currentReadyState = current.get(editorKey);
+      if (
+        currentReadyState?.generation === nextReadyState.generation
+        && currentReadyState?.ready === nextReadyState.ready
+      ) {
         return current;
       }
 
       const next = new Map(current);
-      next.set(editorKey, ready);
+      next.set(editorKey, nextReadyState);
       return next;
     });
   }
@@ -117,7 +212,9 @@ export default function StreamSingleList({
         const isFocused = focusedDateName === dateName;
         const isSelected = selectedDate === dateName;
         const isEmpty = !existingPageId;
-        const isReady = editorReadyByKey.get(editorKey) ?? !existingPageId;
+        const readyState = editorReadyByKey.get(editorKey);
+        const isReady = !existingPageId
+          || (readyState?.generation === selectedScrollGenerationRef.current && readyState.ready);
         const shouldBlurDiary = diaryBlurEnabled && Boolean(existingPageId) && isDiaryStream(streamName) && !isFocused;
 
         return (
