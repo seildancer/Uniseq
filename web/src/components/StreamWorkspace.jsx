@@ -3,7 +3,11 @@ import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
 import StreamSingleList from "./StreamSingleList.jsx";
-import { isDiaryStream, orderStreamNamesForDisplay } from "../utils/streamWorkspace.js";
+import {
+  isDiaryStream,
+  orderStreamNamesForDisplay,
+  selectionForCalendarDate,
+} from "../utils/streamWorkspace.js";
 
 const SIDEBAR_MIN_WIDTH_PX = 280;
 
@@ -104,6 +108,15 @@ export default function StreamWorkspace({
     if (name) {
       await onCreateStream?.(name);
     }
+  }
+
+  function handleCalendarSelect(dateName) {
+    const nextSelection = selectionForCalendarDate(streamSelection, dateName);
+    if (nextSelection.kind === "stream_single") {
+      onSelectStreamSingle(nextSelection.streamName, nextSelection.dateName);
+      return;
+    }
+    onSelectStreamDual(nextSelection.dateName);
   }
 
   const streamEditor = streamSelection
@@ -220,7 +233,7 @@ export default function StreamWorkspace({
               <SidebarCalendar
                 selectedDate={selectedStreamDate}
                 streamPagesByDate={streamPagesByDate}
-                onSelectDate={onSelectStreamDual}
+                onSelectDate={handleCalendarSelect}
               />
             </div>
           </div>

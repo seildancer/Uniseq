@@ -4,6 +4,7 @@ import {
   isDiaryStream,
   orderStreamNamesForDisplay,
   readSelectedStreamDate,
+  selectionForCalendarDate,
   shouldBumpStreamReloadToken,
   streamPageExists,
   streamPageId,
@@ -32,6 +33,21 @@ test("streamPageId and streamPageExists resolve single-stream backing ids", () =
   assert.equal(streamPageId("diary", "2026_05_14"), "stream:diary/2026_05_14");
   assert.equal(streamPageExists(streamPagesByDate, "2026_05_14", "diary"), true);
   assert.equal(streamPageExists(streamPagesByDate, "2026_05_14", "logs"), false);
+});
+
+test("selectionForCalendarDate preserves the active stream mode when possible", () => {
+  assert.deepEqual(
+    selectionForCalendarDate({ kind: "stream_dual", dateName: "2026_05_10" }, "2026_05_14"),
+    { kind: "stream_dual", dateName: "2026_05_14" },
+  );
+  assert.deepEqual(
+    selectionForCalendarDate({ kind: "stream_single", streamName: "diary", dateName: "2026_05_10" }, "2026_05_14"),
+    { kind: "stream_single", streamName: "diary", dateName: "2026_05_14" },
+  );
+  assert.deepEqual(
+    selectionForCalendarDate({ kind: "page", pageId: "pages:A" }, "2026_05_14"),
+    { kind: "stream_dual", dateName: "2026_05_14" },
+  );
 });
 
 test("primary streams display journals before diary while preserving diary semantics", () => {

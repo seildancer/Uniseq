@@ -18,6 +18,14 @@ export function readSelectedStreamDate(selection, lastStreamDate) {
     : lastStreamDate;
 }
 
+export function selectionForCalendarDate(selection, dateName) {
+  if (selection?.kind === "stream_single" && selection.streamName) {
+    return { kind: "stream_single", streamName: selection.streamName, dateName };
+  }
+
+  return { kind: "stream_dual", dateName };
+}
+
 export function shouldBumpStreamReloadToken(event, hasActiveStreamSelection) {
   if (!hasActiveStreamSelection || !event || typeof event !== "object") {
     return false;
