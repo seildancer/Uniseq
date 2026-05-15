@@ -215,6 +215,14 @@ function normalizeError(error) {
   };
 }
 
+function childPageMergeError() {
+  return {
+    code: "invalid_page_merge",
+    message: "Can't merge a page that has subpages. Move or delete its subpages first, or rename it to a new name.",
+    path: null,
+  };
+}
+
 function formatError(error) {
   if (!error) {
     return "";
@@ -893,7 +901,7 @@ export default function App() {
       if (normalized.code === "destination_page_exists") {
         const sourcePage = regularPages.find((page) => page.page_id === pageId);
         if (!sourcePage || sourcePage.child_page_count > 0) {
-          setActionError(normalized);
+          setActionError(sourcePage?.child_page_count > 0 ? childPageMergeError() : normalized);
         } else {
           const targetPageId = renamedPageIdForTitle(pageId, trimmedTitle);
           const targetPage = regularPages.find((page) => page.page_id === targetPageId);
