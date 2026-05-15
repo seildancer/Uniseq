@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
-import StreamDualEditor from "./StreamDualEditor.jsx";
-import StreamDualEditorMobile from "./StreamDualEditorMobile.jsx";
+import StreamView from "./StreamView.jsx";
+import StreamViewMobile from "./StreamViewMobile.jsx";
 import { areArraysEqual } from "../utils/arrays.js";
 import {
   isDiaryStream,
@@ -193,8 +193,8 @@ export default function StreamWorkspace({
       };
 
       return isMobile
-        ? <StreamDualEditorMobile {...editorProps} />
-        : <StreamDualEditor {...editorProps} />;
+        ? <StreamViewMobile {...editorProps} />
+        : <StreamView {...editorProps} />;
     })()
     : null;
 

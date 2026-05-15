@@ -8,7 +8,7 @@ import {
   streamPageId,
 } from "../utils/streamWorkspace.js";
 
-export default function StreamDualEditorMobile({
+export default function StreamViewMobile({
   selectedDate,
   streamNames,
   streamPagesByDate,

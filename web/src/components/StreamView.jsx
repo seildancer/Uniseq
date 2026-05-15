@@ -8,7 +8,7 @@ import {
   streamPageId,
 } from "../utils/streamWorkspace.js";
 
-export default function StreamDualEditor({
+export default function StreamView({
   selectedDate,
   streamNames,
   streamPagesByDate,
