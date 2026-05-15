@@ -126,7 +126,7 @@ h2 {
 
 h1 {
   font-size: 1.75rem;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 h2 {
@@ -1883,7 +1883,7 @@ h2 {
   font-family: inherit;
   font-weight: 600;
   letter-spacing: -0.04em;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 .editor-title-static {
@@ -1893,7 +1893,7 @@ h2 {
   font-family: inherit;
   font-weight: 600;
   letter-spacing: -0.04em;
-  line-height: 1.1;
+  line-height: 1.2;
 }
 
 .editor-title-input:focus-visible {

@@ -642,7 +642,7 @@ export default function App() {
 
   async function handleEditorConflict() {
     if (!loadedPageId) return;
-    await loadPageContent(loadedPageId).catch(() => {});
+    await loadPageContent(loadedPageId).catch(() => { });
     setNotice({
       id: Date.now(),
       code: "stale_page_reload",
@@ -1161,11 +1161,11 @@ export default function App() {
           newParentPageId: newParentPageId ?? null,
         });
         setPageOrderByParent((current) => remapPageOrderEntries(current, sourcePageId, newPageId));
-      setSelection((current) => (
-        current.kind === "page"
-          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, sourcePageId, newPageId) }
-          : current
-      ));
+        setSelection((current) => (
+          current.kind === "page"
+            ? { kind: "page", pageId: remapSubtreePageId(current.pageId, sourcePageId, newPageId) }
+            : current
+        ));
         setLoadedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
       }
 
@@ -1178,7 +1178,7 @@ export default function App() {
       }
     } catch (error) {
       setActionError(normalizeError(error));
-      await loadWorkspaceLists().catch(() => {});
+      await loadWorkspaceLists().catch(() => { });
     } finally {
       setBusyAction("");
     }
@@ -1553,33 +1553,33 @@ export default function App() {
         }
 
         if (event.type === "workspace_reloaded") {
-          await loadWorkspaceLists().catch(() => {});
+          await loadWorkspaceLists().catch(() => { });
           if (loadedPageId) {
-            await loadPageLinkedRefs(loadedPageId).catch(() => {});
+            await loadPageLinkedRefs(loadedPageId).catch(() => { });
           }
         } else if (event.type === "pages_changed") {
-          await loadWorkspaceLists().catch(() => {});
+          await loadWorkspaceLists().catch(() => { });
           if (loadedPageId && event.page_ids.includes(loadedPageId)) {
-            await loadPageContent(loadedPageId).catch(() => {});
+            await loadPageContent(loadedPageId).catch(() => { });
           }
           if (
             loadedPageId &&
             (event.page_ids.includes(loadedPageId) ||
               linkedRefs.some((entry) => event.page_ids.includes(entry.source_page_id)))
           ) {
-            await loadPageLinkedRefs(loadedPageId).catch(() => {});
+            await loadPageLinkedRefs(loadedPageId).catch(() => { });
           }
         } else if (event.type === "page_removed") {
-            await loadWorkspaceLists().catch(() => {});
-            if (event.page_id === loadedPageId) {
-              setSelectedPageText("");
-              setSelectedPageRevision(null);
-              setLinkedRefs([]);
-              setLoadedPageId(null);
-              setSelection({ kind: "page", pageId: "" });
-            }
+          await loadWorkspaceLists().catch(() => { });
+          if (event.page_id === loadedPageId) {
+            setSelectedPageText("");
+            setSelectedPageRevision(null);
+            setLinkedRefs([]);
+            setLoadedPageId(null);
+            setSelection({ kind: "page", pageId: "" });
+          }
           if (linkedRefs.some((entry) => entry.source_page_id === event.page_id)) {
-            await loadPageLinkedRefs(loadedPageId).catch(() => {});
+            await loadPageLinkedRefs(loadedPageId).catch(() => { });
           }
         }
       }
@@ -1700,32 +1700,6 @@ export default function App() {
               )}
             </svg>
           </button>
-          <div className="topbar-menu" data-no-window-drag="true">
-            <button
-              className="window-control-button workspace-sidebar-control-button"
-              type="button"
-              aria-label="Search"
-              title="Search"
-              onClick={() => {
-                setMenuOpen(false);
-                setModal({ type: "search" });
-              }}
-            >
-              <svg
-                className="workspace-sidebar-icon"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="6" />
-                <path d="m20 20-4.2-4.2" />
-              </svg>
-            </button>
-          </div>
           <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
             <button
               className="window-control-button workspace-sidebar-control-button"
@@ -1800,6 +1774,32 @@ export default function App() {
                 </button>
               </div>
             )}
+          </div>
+          <div className="topbar-menu" data-no-window-drag="true">
+            <button
+              className="window-control-button workspace-sidebar-control-button"
+              type="button"
+              aria-label="Search"
+              title="Search"
+              onClick={() => {
+                setMenuOpen(false);
+                setModal({ type: "search" });
+              }}
+            >
+              <svg
+                className="workspace-sidebar-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="6" />
+                <path d="m20 20-4.2-4.2" />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
