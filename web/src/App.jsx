@@ -13,6 +13,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useMobileKeyboard } from "./hooks/useMobileKeyboard.js";
+import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
 
 const INITIAL_CREATE_STATE = {
   parentPath: "",
@@ -474,6 +476,8 @@ function WindowCloseIcon() {
 }
 
 export default function App() {
+  const { isKeyboardVisible, keyboardHeight } = useMobileKeyboard();
+
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
 
@@ -2390,6 +2394,10 @@ export default function App() {
               )}
             </div>
           </div>
+        )}
+
+        {isKeyboardVisible && (
+          <MobileKeyboardBar keyboardHeight={keyboardHeight} />
         )}
       </main>
     );
