@@ -22,7 +22,9 @@
       "Bash(Get-ChildItem -Path . -Recurse -Directory -ErrorAction SilentlyContinue)",
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\" -Force -Recurse)",
       "Bash(Select-Object -Property FullName, PSIsContainer)",
-      "Bash(ConvertTo-Json)"
+      "Bash(ConvertTo-Json)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Recurse -Depth 2)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }

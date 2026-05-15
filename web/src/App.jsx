@@ -506,7 +506,7 @@ export default function App() {
     return Math.max(SIDEBAR_MIN_WIDTH_PX, stored);
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true",
+    () => window.innerWidth <= 720 || localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true",
   );
   const dragLongPressTimerRef = useRef(null);
   const dragHoverExpandTimerRef = useRef(null);
@@ -1939,6 +1939,12 @@ export default function App() {
                     : undefined,
               }}
             >
+              {!sidebarCollapsed && (
+                <div
+                  className="sidebar-mobile-backdrop"
+                  onClick={() => setSidebarCollapsed(true)}
+                />
+              )}
               <StreamWorkspace
                 streamSelection={streamSelection}
                 selectedStreamDate={selectedStreamDate}
