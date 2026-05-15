@@ -8,6 +8,8 @@ import {
 } from "../utils/streamWorkspace.js";
 
 const SNAP_BUFFER_DAYS = 1;
+const TAP_MAX_DURATION_MS = 250;
+const TAP_MAX_MOVE_PX = 10;
 
 export default function StreamViewMobile({
   selectedDate,
@@ -26,6 +28,8 @@ export default function StreamViewMobile({
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const editorFocusRefs = useRef(new Map());
+  const focusedEditorRef = useRef(null);
+  const pendingTapRef = useRef(null);
   const latestDateName = useMemo(
     () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
     [selectedDate, streamPagesByDate],
@@ -44,6 +48,22 @@ export default function StreamViewMobile({
 
   const selectedDateRef = useRef(selectedDate);
   selectedDateRef.current = selectedDate;
+  const programmaticScrollRef = useRef(false);
+  const suppressScrollSnapUntilRef = useRef(0);
+
+  focusedEditorRef.current = focusedEditor;
+
+  function suppressDateSnap(durationMs = 900) {
+    suppressScrollSnapUntilRef.current = Date.now() + durationMs;
+  }
+
+  function isEditorDomFocused() {
+    const activeElement = document.activeElement;
+    if (!activeElement) {
+      return false;
+    }
+    return Boolean(activeElement.closest?.(".milkdown-editor, .ProseMirror"));
+  }
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
@@ -51,6 +71,7 @@ export default function StreamViewMobile({
 
     const selectedEntry = dayRefs.current.get(selectedDate);
     if (selectedEntry) {
+      programmaticScrollRef.current = true;
       selectedEntry.scrollIntoView({ block: "start", behavior: "auto" });
     }
   }, [selectedDate, scrollContainerRef]);
@@ -60,6 +81,17 @@ export default function StreamViewMobile({
     if (!container || typeof onSelectDate !== "function") return;
 
     function handleScrollEnd() {
+      if (programmaticScrollRef.current) {
+        programmaticScrollRef.current = false;
+        return;
+      }
+      if (focusedEditorRef.current || isEditorDomFocused()) {
+        return;
+      }
+      if (Date.now() < suppressScrollSnapUntilRef.current) {
+        return;
+      }
+
       let closestDate = null;
       let closestDist = Infinity;
       const containerRect = container.getBoundingClientRect();
@@ -89,7 +121,29 @@ export default function StreamViewMobile({
     }
   }, [streamNames, focusedEditor]);
 
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || !focusedEditor) {
+      return undefined;
+    }
+
+    const previousOverflow = container.style.overflow;
+    const previousTouchAction = container.style.touchAction;
+    const previousOverscrollBehavior = container.style.overscrollBehavior;
+
+    container.style.overflow = "hidden";
+    container.style.touchAction = "none";
+    container.style.overscrollBehavior = "none";
+
+    return () => {
+      container.style.overflow = previousOverflow;
+      container.style.touchAction = previousTouchAction;
+      container.style.overscrollBehavior = previousOverscrollBehavior;
+    };
+  }, [focusedEditor, scrollContainerRef]);
+
   function enterFocusMode(dateName, streamName) {
+    suppressDateSnap();
     setFocusedEditor({ dateName, streamName });
   }
 
@@ -119,6 +173,64 @@ export default function StreamViewMobile({
     }
   }
 
+  function handlePanePointerDown(event, editorKey) {
+    if (event.target.closest?.(".ProseMirror")) {
+      pendingTapRef.current = null;
+      return;
+    }
+    if (event.button !== undefined && event.button !== 0) {
+      pendingTapRef.current = null;
+      return;
+    }
+
+    pendingTapRef.current = {
+      editorKey,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startedAt: Date.now(),
+      moved: false,
+    };
+  }
+
+  function handlePanePointerMove(event) {
+    const pendingTap = pendingTapRef.current;
+    if (!pendingTap || pendingTap.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const distance = Math.hypot(event.clientX - pendingTap.startX, event.clientY - pendingTap.startY);
+    if (distance > TAP_MAX_MOVE_PX) {
+      pendingTapRef.current = {
+        ...pendingTap,
+        moved: true,
+      };
+    }
+  }
+
+  function handlePanePointerCancel(event) {
+    if (pendingTapRef.current?.pointerId === event.pointerId) {
+      pendingTapRef.current = null;
+    }
+  }
+
+  function handlePanePointerUp(event, editorKey) {
+    const pendingTap = pendingTapRef.current;
+    pendingTapRef.current = null;
+
+    if (!pendingTap || pendingTap.pointerId !== event.pointerId || pendingTap.editorKey !== editorKey) {
+      return;
+    }
+
+    const duration = Date.now() - pendingTap.startedAt;
+    if (pendingTap.moved || duration > TAP_MAX_DURATION_MS) {
+      return;
+    }
+
+    suppressDateSnap();
+    focusPaneEditor(event, editorKey);
+  }
+
   function handleEditorReadyChange(editorKey, ready) {
     setEditorReadyByKey((current) => {
       const next = new Map(current);
@@ -129,7 +241,7 @@ export default function StreamViewMobile({
 
   return (
     <div className="stream-dual-wrap stream-dual-wrap--mobile">
-      <div className="stream-day-list stream-day-list--mobile-single">
+      <div className={`stream-day-list stream-day-list--mobile-single${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
           const isSelected = selectedDate === dateName;
@@ -183,7 +295,10 @@ export default function StreamViewMobile({
                     <div
                       key={editorKey}
                       className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
-                      onPointerDown={(event) => focusPaneEditor(event, editorKey)}
+                      onPointerDown={(event) => handlePanePointerDown(event, editorKey)}
+                      onPointerMove={handlePanePointerMove}
+                      onPointerCancel={handlePanePointerCancel}
+                      onPointerUp={(event) => handlePanePointerUp(event, editorKey)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
                       <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
