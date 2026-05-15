@@ -71,7 +71,7 @@ button:disabled {
 
 .app-shell {
   min-height: 100vh;
-  padding: 32px;
+  padding: calc(32px + env(safe-area-inset-top, 0px)) 32px 32px;
   display: grid;
   place-items: center;
 }
@@ -415,7 +415,8 @@ h2 {
   top: 0;
   left: 0;
   right: 0;
-  height: 48px;
+  height: calc(48px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
@@ -700,7 +701,7 @@ h2 {
   background: var(--panel);
   display: flex;
   align-items: center;
-  padding: 0 12px;
+  padding: env(safe-area-inset-top, 0px) 12px 0;
 }
 
 .workspace-sidebar-controls {
@@ -745,7 +746,7 @@ h2 {
   z-index: 40;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 8px 8px 0;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 8px 0;
   background: transparent;
 }
 
@@ -766,6 +767,7 @@ h2 {
 
 .workspace-body--sidebar-collapsed .editor-panel-chrome {
   padding-left: 48px;
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .sidebar-section-scroll::-webkit-scrollbar,
@@ -2423,7 +2425,7 @@ code {
 
 @media (max-width: 720px) {
   .app-shell {
-    padding: 16px;
+    padding: calc(16px + env(safe-area-inset-top, 0px)) 16px 16px;
   }
 
   .hero-panel,
