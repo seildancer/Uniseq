@@ -456,7 +456,12 @@ function WindowCloseIcon() {
 }
 
 export default function App() {
-  const { isMobile, isKeyboardVisible, keyboardHeight } = useMobileKeyboard();
+  const {
+    isMobile,
+    isKeyboardVisible,
+    keyboardHeight,
+    visibleViewportHeight,
+  } = useMobileKeyboard();
 
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
@@ -512,6 +517,15 @@ export default function App() {
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
+
+  const mobileViewportStyle = useMemo(() => (
+    isMobile
+      ? {
+        "--mobile-visible-height": `${visibleViewportHeight}px`,
+        "--mobile-keyboard-height": `${keyboardHeight}px`,
+      }
+      : undefined
+  ), [isMobile, keyboardHeight, visibleViewportHeight]);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
@@ -1904,7 +1918,7 @@ export default function App() {
 
     return (
       <WorkspaceContext.Provider value={workspace.root_path}>
-        <main className="app-shell app-shell--workspace">
+        <main className="app-shell app-shell--workspace" style={mobileViewportStyle}>
           <section className="workspace-shell">
             {visibleError ? (
               <div className="snackbar" role="alert" aria-live="assertive">
@@ -1933,7 +1947,7 @@ export default function App() {
             ) : null}
 
             <div
-              className={`workspace-body${sidebarCollapsed ? " workspace-body--sidebar-collapsed" : ""}`}
+              className={`workspace-body${sidebarCollapsed ? " workspace-body--sidebar-collapsed" : ""}${isKeyboardVisible ? " workspace-body--keyboard-visible" : ""}`}
               style={{
                 "--workspace-sidebar-width": sidebarCollapsed
                   ? `${SIDEBAR_COLLAPSED_WIDTH_PX}px`
@@ -1952,6 +1966,7 @@ export default function App() {
                 streamSelection={streamSelection}
                 selectedStreamDate={selectedStreamDate}
                 isMobile={isMobile}
+                isKeyboardVisible={isKeyboardVisible}
                 orderedStreamNames={orderedStreamNames}
                 dualStreamNames={dualStreamNames}
                 streamPagesByDate={streamPagesByDate}
@@ -2012,9 +2027,9 @@ export default function App() {
                   </div>
                 }
                 fallbackEditor={
-                  <section className="editor-panel">
+                  <section className={`editor-panel${isKeyboardVisible ? " editor-panel--keyboard-visible" : ""}`}>
                     {renderPanelChrome(loadedPage ? breadcrumbItemsForPageId(loadedPage.page_id) : [])}
-                    <div className="editor-panel-scroll">
+                    <div className={`editor-panel-scroll${isKeyboardVisible ? " editor-panel-scroll--keyboard-visible" : ""}`}>
                       {loadedPage ? (
                         <div className="editor-panel-content">
                           {loadedPageIsRegular ? (

@@ -79,6 +79,11 @@ button:disabled {
 }
 
 .app-shell--workspace {
+  --mobile-visible-height: 100dvh;
+  --mobile-keyboard-height: 0px;
+  --mobile-keyboard-bar-height: 44px;
+  --mobile-keyboard-bar-offset: calc(var(--mobile-keyboard-bar-height) + env(safe-area-inset-bottom, 0px));
+  --mobile-keyboard-obstruction: 0px;
   height: 100%;
   padding: 0;
   display: flex;
@@ -1322,6 +1327,10 @@ h2 {
   scrollbar-width: none;
 }
 
+.editor-panel-scroll--mobile-stream.editor-panel-scroll--keyboard-visible {
+  scroll-snap-type: none;
+}
+
 .editor-panel-scroll--mobile-stream::-webkit-scrollbar {
   display: none;
 }
@@ -1435,6 +1444,7 @@ h2 {
   display: flex;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
 }
 
 .stream-single-pane {
@@ -1977,10 +1987,20 @@ h2 {
   overflow: hidden;
 }
 
+.editor-panel--keyboard-visible {
+  --mobile-keyboard-obstruction: calc(var(--mobile-keyboard-height) + var(--mobile-keyboard-bar-offset));
+  padding-bottom: calc(12px + var(--mobile-keyboard-obstruction));
+}
+
 .editor-panel-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scroll-padding: 12px 0 12px;
+}
+
+.editor-panel-scroll--keyboard-visible {
+  scroll-padding-bottom: calc(12px + var(--mobile-keyboard-obstruction));
 }
 
 .editor-panel-content {
@@ -2550,14 +2570,15 @@ code {
 
   .app-shell--workspace {
     padding: 0;
+    height: var(--mobile-visible-height);
   }
 
   .workspace-body {
     display: flex;
     flex-direction: column;
     position: relative;
-    height: 100vh;
-    height: 100dvh;
+    height: 100%;
+    min-height: 100%;
   }
 
   .workspace-resizer {

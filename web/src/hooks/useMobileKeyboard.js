@@ -9,6 +9,12 @@ function getKeyboardHeight() {
   return Math.max(0, Math.round(window.innerHeight - vv.offsetTop - vv.height));
 }
 
+function getVisibleViewportHeight() {
+  const vv = window.visualViewport;
+  if (!vv) return window.innerHeight;
+  return Math.max(0, Math.round(vv.height + vv.offsetTop));
+}
+
 function isEditable(el) {
   if (!el) return false;
   const tag = el.tagName?.toLowerCase();
@@ -20,6 +26,7 @@ export function useMobileKeyboard() {
     () => window.matchMedia(MOBILE_QUERY).matches
   );
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [visibleViewportHeight, setVisibleViewportHeight] = useState(() => getVisibleViewportHeight());
   const [hasFocus, setHasFocus] = useState(false);
 
   useEffect(() => {
@@ -38,6 +45,7 @@ export function useMobileKeyboard() {
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
         setKeyboardHeight(getKeyboardHeight());
+        setVisibleViewportHeight(getVisibleViewportHeight());
         setHasFocus(isEditable(document.activeElement));
       });
     }
@@ -67,5 +75,6 @@ export function useMobileKeyboard() {
     isMobile,
     isKeyboardVisible: isMobile && hasFocus && keyboardHeight > MIN_KEYBOARD_HEIGHT,
     keyboardHeight,
+    visibleViewportHeight,
   };
 }

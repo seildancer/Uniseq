@@ -18,6 +18,7 @@ export default function StreamWorkspace({
   streamSelection,
   selectedStreamDate,
   isMobile = false,
+  isKeyboardVisible = false,
   orderedStreamNames,
   dualStreamNames,
   streamPagesByDate,
@@ -575,11 +576,11 @@ export default function StreamWorkspace({
       />
 
       {streamSelection ? (
-        <section className="editor-panel editor-panel--stream">
+        <section className={`editor-panel editor-panel--stream${isKeyboardVisible ? " editor-panel--keyboard-visible" : ""}`}>
           {panelChrome(breadcrumbItemsForStreamSelection(streamSelection))}
           <div
             ref={editorScrollRef}
-            className={`editor-panel-scroll${isMobile ? " editor-panel-scroll--mobile-stream" : ""}`}
+            className={`editor-panel-scroll${isMobile ? " editor-panel-scroll--mobile-stream" : ""}${isKeyboardVisible ? " editor-panel-scroll--keyboard-visible" : ""}`}
           >
             {streamEditor}
           </div>
