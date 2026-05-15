@@ -38,6 +38,10 @@ const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
 
 const appWindow = getCurrentWindow();
 
+function defaultStreamSelection() {
+  return { kind: "stream_dual", dateName: todayDateName() };
+}
+
 function shouldShowDesktopWindowControls() {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return true;
@@ -465,7 +469,7 @@ export default function App() {
   const [streamNames, setStreamNames] = useState([]);
   const [streamOrder, setStreamOrder] = useState([]);
   const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
-  const [selection, setSelection] = useState(() => ({ kind: "stream_dual", dateName: todayDateName() }));
+  const [selection, setSelection] = useState(() => defaultStreamSelection());
   const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
   const [streamReloadToken, setStreamReloadToken] = useState(0);
   const [selectedPageText, setSelectedPageText] = useState("");
@@ -634,6 +638,13 @@ export default function App() {
   async function openWorkspaceRoot(rootPath) {
     const openedWorkspace = await invoke("open_workspace", { rootPath });
     setWorkspace(openedWorkspace);
+    setSelection(defaultStreamSelection());
+    setLastStreamDate(todayDateName());
+    setStreamReloadToken(0);
+    setSelectedPageText("");
+    setSelectedPageRevision(null);
+    setLinkedRefs([]);
+    setLoadedPageId(null);
     await loadWorkspaceLists();
     setMode("workspace");
   }
@@ -697,6 +708,13 @@ export default function App() {
         folderName: createState.folderName,
       });
       setWorkspace(openedWorkspace);
+      setSelection(defaultStreamSelection());
+      setLastStreamDate(todayDateName());
+      setStreamReloadToken(0);
+      setSelectedPageText("");
+      setSelectedPageRevision(null);
+      setLinkedRefs([]);
+      setLoadedPageId(null);
       await loadWorkspaceLists();
       setStartupError(null);
       setMode("workspace");
@@ -714,7 +732,7 @@ export default function App() {
     setPageOrderByParent({});
     setStreamNames([]);
     setStreamOrder([]);
-    setSelection({ kind: "page", pageId: "" });
+    setSelection(defaultStreamSelection());
     setLastStreamDate(todayDateName());
     setStreamReloadToken(0);
     setSelectedPageText("");
