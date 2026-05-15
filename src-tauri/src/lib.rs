@@ -1524,6 +1524,17 @@ fn open_url(url: String) {
     let _ = open::that(url);
 }
 
+#[tauri::command]
+fn get_default_workspace_path(app: AppHandle) -> CommandResult<String> {
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        ErrorDto::app_config_unavailable(format!(
+            "failed to resolve app data directory: {error}"
+        ))
+    })?;
+    let workspace_path = data_dir.join("workspace");
+    Ok(workspace_path.to_string_lossy().replace('\\', "/"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1559,6 +1570,7 @@ pub fn run() {
             start_watching,
             stop_watching,
             open_url,
+            get_default_workspace_path,
             create_stream_page,
             delete_stream,
             delete_stream_page,

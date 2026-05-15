@@ -302,8 +302,11 @@ h2 {
   color: var(--muted);
 }
 
-.onboard-title {
-  margin: 0 0 20px;
+.onboard-logo {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  display: block;
 }
 
 .onboard-tabs {

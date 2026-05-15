@@ -64,6 +64,7 @@ export function useMobileKeyboard() {
   }, [isMobile]);
 
   return {
+    isMobile,
     isKeyboardVisible: isMobile && hasFocus && keyboardHeight > MIN_KEYBOARD_HEIGHT,
     keyboardHeight,
   };

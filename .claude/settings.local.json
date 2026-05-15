@@ -19,7 +19,10 @@
       "Bash(New-Item -ItemType File \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\\\\WorkspaceContext.js\" -Force)",
       "Bash(Out-Null)",
       "Bash(Write-Output \"ok\")",
-      "Bash(Get-ChildItem -Path . -Recurse -Directory -ErrorAction SilentlyContinue)"
+      "Bash(Get-ChildItem -Path . -Recurse -Directory -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\" -Force -Recurse)",
+      "Bash(Select-Object -Property FullName, PSIsContainer)",
+      "Bash(ConvertTo-Json)"
     ]
   }
 }

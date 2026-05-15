@@ -456,7 +456,7 @@ function WindowCloseIcon() {
 }
 
 export default function App() {
-  const { isKeyboardVisible, keyboardHeight } = useMobileKeyboard();
+  const { isMobile, isKeyboardVisible, keyboardHeight } = useMobileKeyboard();
 
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
@@ -647,6 +647,21 @@ export default function App() {
     setLoadedPageId(null);
     await loadWorkspaceLists();
     setMode("workspace");
+  }
+
+  async function handleOpenDefaultWorkspace() {
+    setBusyAction("open");
+    setActionError(null);
+
+    try {
+      const defaultPath = await invoke("get_default_workspace_path");
+      await openWorkspaceRoot(defaultPath);
+      setStartupError(null);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
   }
 
   async function handleOpenWorkspace() {
@@ -1253,6 +1268,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!showDesktopWindowControls) return;
+
     let cancelled = false;
 
     async function syncWindowMaximizedState() {
@@ -1271,7 +1288,7 @@ export default function App() {
       cancelled = true;
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, []);
+  }, [showDesktopWindowControls]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!dragState) {
@@ -1474,7 +1491,16 @@ export default function App() {
         const lastWorkspacePath = await invoke("get_last_workspace_path");
         if (!lastWorkspacePath) {
           if (isBootEffectMountedRef.current) {
-            setMode("onboarding");
+            if (window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches) {
+              try {
+                const defaultPath = await invoke("get_default_workspace_path");
+                await openWorkspaceRoot(defaultPath);
+              } catch {
+                setMode("onboarding");
+              }
+            } else {
+              setMode("onboarding");
+            }
           }
           return;
         }
@@ -1484,14 +1510,29 @@ export default function App() {
         await invoke("clear_last_workspace_path").catch(() => undefined);
 
         if (isBootEffectMountedRef.current) {
-          setStartupError({
-            code: "workspace_reopen_failed",
-            message:
-              "The last workspace could not be reopened. Choose a workspace folder or create a new one.",
-            path: null,
-            cause: normalizeError(error),
-          });
-          setMode("onboarding");
+          if (window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches) {
+            try {
+              const defaultPath = await invoke("get_default_workspace_path");
+              await openWorkspaceRoot(defaultPath);
+            } catch (fallbackError) {
+              setStartupError({
+                code: "workspace_reopen_failed",
+                message: "Could not open workspace. Please try again.",
+                path: null,
+                cause: normalizeError(fallbackError),
+              });
+              setMode("onboarding");
+            }
+          } else {
+            setStartupError({
+              code: "workspace_reopen_failed",
+              message:
+                "The last workspace could not be reopened. Choose a workspace folder or create a new one.",
+              path: null,
+              cause: normalizeError(error),
+            });
+            setMode("onboarding");
+          }
         }
       }
     }
@@ -2435,7 +2476,7 @@ export default function App() {
         ) : null}
       </div>
       <section className="hero-panel minimal-panel">
-        <h1 className="onboard-title">Uniseq</h1>
+        <img src="/uniseq.svg" alt="Uniseq" className="onboard-logo" />
 
         {visibleError ? (
           <div className="snackbar" role="alert" aria-live="assertive">
@@ -2451,79 +2492,94 @@ export default function App() {
           </div>
         ) : null}
 
-        <div className="onboard-tabs" role="tablist">
-          <button
-            className={`onboard-tab${onboardingTab === "create" ? " onboard-tab--active" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={onboardingTab === "create"}
-            onClick={() => setOnboardingTab("create")}
-          >
-            Make new
-          </button>
-          <button
-            className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={onboardingTab === "open"}
-            onClick={() => setOnboardingTab("open")}
-          >
-            Open existing
-          </button>
-        </div>
-
-        <div className="onboard-panel">
-          {onboardingTab === "open" ? (
+        {isMobile ? (
+          <div className="onboard-panel">
             <button
               className="primary-button"
               type="button"
-              onClick={handleOpenWorkspace}
+              onClick={handleOpenDefaultWorkspace}
               disabled={busyAction === "open"}
             >
-              {busyAction === "open" ? "Opening..." : "Choose folder"}
+              {busyAction === "open" ? "Opening..." : "Open My Notes"}
             </button>
-          ) : (
-            <form className="create-form" onSubmit={handleCreateWorkspace}>
-              <div className="field">
-                <span>Location</span>
-                <div className="inline-field">
-                  <input
-                    type="text"
-                    value={createState.parentPath}
-                    readOnly
-                    placeholder="Parent folder"
-                    title={createState.parentPath}
-                  />
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={handleChooseCreateParent}
-                    disabled={busyAction === "pick-parent"}
-                  >
-                    {busyAction === "pick-parent" ? "Choosing..." : "Browse"}
-                  </button>
-                </div>
-              </div>
-              <div className="field">
-                <span>Workspace name</span>
-                <input
-                  type="text"
-                  value={createState.folderName}
-                  onChange={(event) =>
-                    setCreateState((current) => ({
-                      ...current,
-                      folderName: event.target.value,
-                    }))
-                  }
-                  placeholder="My Notes"
-                />
-              </div>
-              <button className="primary-button" type="submit" disabled={createDisabled}>
-                {busyAction === "create" ? "Creating..." : "Create"}
+          </div>
+        ) : (
+          <>
+            <div className="onboard-tabs" role="tablist">
+              <button
+                className={`onboard-tab${onboardingTab === "create" ? " onboard-tab--active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={onboardingTab === "create"}
+                onClick={() => setOnboardingTab("create")}
+              >
+                Make new
               </button>
-            </form>
-          )}
-        </div>
+              <button
+                className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={onboardingTab === "open"}
+                onClick={() => setOnboardingTab("open")}
+              >
+                Open existing
+              </button>
+            </div>
+
+            <div className="onboard-panel">
+              {onboardingTab === "open" ? (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleOpenWorkspace}
+                  disabled={busyAction === "open"}
+                >
+                  {busyAction === "open" ? "Opening..." : "Choose folder"}
+                </button>
+              ) : (
+                <form className="create-form" onSubmit={handleCreateWorkspace}>
+                  <div className="field">
+                    <span>Location</span>
+                    <div className="inline-field">
+                      <input
+                        type="text"
+                        value={createState.parentPath}
+                        readOnly
+                        placeholder="Parent folder"
+                        title={createState.parentPath}
+                      />
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={handleChooseCreateParent}
+                        disabled={busyAction === "pick-parent"}
+                      >
+                        {busyAction === "pick-parent" ? "Choosing..." : "Browse"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <span>Workspace name</span>
+                    <input
+                      type="text"
+                      value={createState.folderName}
+                      onChange={(event) =>
+                        setCreateState((current) => ({
+                          ...current,
+                          folderName: event.target.value,
+                        }))
+                      }
+                      placeholder="My Notes"
+                    />
+                  </div>
+                  <button className="primary-button" type="submit" disabled={createDisabled}>
+                    {busyAction === "create" ? "Creating..." : "Create"}
+                  </button>
+                </form>
+              )}
+            </div>
+          </>
+        )}
       </section>
     </main>
   );

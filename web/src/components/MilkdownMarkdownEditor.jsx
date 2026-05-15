@@ -1,11 +1,10 @@
 import { useContext, useEffect, useRef } from "react";
-import { Editor, rootCtx, defaultValueCtx, prosePluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
+import { Editor, rootCtx, defaultValueCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
 import { gfm } from "@milkdown/preset-gfm";
 import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
-import { $remark } from "@milkdown/utils";
 import breaks from "remark-breaks";
 
 import createBackspacePlugin from "../plugins/backspacePlugin";
@@ -18,8 +17,6 @@ import taskListClickPlugin from "../plugins/taskListClickPlugin";
 import AutocompleteEditor from "./Autocomplete";
 import { WorkspaceContext } from "../WorkspaceContext.js";
 import { toEditorMarkdown } from "../utils/imageMarkdown.js";
-
-const remarkBreaks = $remark("remarkBreaks", () => breaks);
 
 function MilkdownMarkdownEditorInner({
   documentKey,
@@ -49,6 +46,7 @@ function MilkdownMarkdownEditorInner({
         ctx.set(defaultValueCtx, toEditorMarkdown(text, workspaceRoot));
         ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
 
+        ctx.update(remarkPluginsCtx, (plugins) => [...plugins, breaks]);
         ctx.update(prosePluginsCtx, (plugins) => [
           createBackspacePlugin(),
           createDeleteKeyPlugin(),
@@ -67,7 +65,6 @@ function MilkdownMarkdownEditorInner({
       .use(history)
       .use(blockHighlightPlugin)
       .use(imageResizePlugin)
-      .use(remarkBreaks.plugin)
   );
 
   if (editorGetRef) {
