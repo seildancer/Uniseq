@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { Editor, rootCtx, defaultValueCtx, prosePluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
 import { gfm } from "@milkdown/preset-gfm";
@@ -15,6 +15,8 @@ import createWikilinkPlugin, { resetWikilinkFocus } from "../plugins/wikilinkPlu
 import blockHighlightPlugin, { resetBlockHighlightFocus } from "../plugins/blockHighlightPlugin";
 import taskListClickPlugin from "../plugins/taskListClickPlugin";
 import AutocompleteEditor from "./Autocomplete";
+import { WorkspaceContext } from "../WorkspaceContext.js";
+import { toEditorMarkdown } from "../utils/imageMarkdown.js";
 
 const remarkBreaks = $remark("remarkBreaks", () => breaks);
 
@@ -28,6 +30,7 @@ function MilkdownMarkdownEditorInner({
   editorGetRef,
   onFocusChange,
 }) {
+  const workspaceRoot = useContext(WorkspaceContext);
   const navigateRef = useRef(onNavigate);
   const pagesRef = useRef(pages);
   navigateRef.current = onNavigate;
@@ -42,7 +45,7 @@ function MilkdownMarkdownEditorInner({
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root);
-        ctx.set(defaultValueCtx, text);
+        ctx.set(defaultValueCtx, toEditorMarkdown(text, workspaceRoot));
         ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
 
         ctx.update(prosePluginsCtx, (plugins) => [

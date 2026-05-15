@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WorkspaceContext } from "./WorkspaceContext.js";
 import Editor from "./Editor.jsx";
 import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
@@ -1849,6 +1850,7 @@ export default function App() {
     }
 
     return (
+      <WorkspaceContext.Provider value={workspace.root_path}>
       <main className="app-shell app-shell--workspace">
         <section className="workspace-shell">
           {visibleError ? (
@@ -2400,6 +2402,7 @@ export default function App() {
           <MobileKeyboardBar keyboardHeight={keyboardHeight} />
         )}
       </main>
+      </WorkspaceContext.Provider>
     );
   }
 

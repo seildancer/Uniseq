@@ -1,7 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 const STORED_IMAGE_RE =
-  /!\[([^\]]*)\]\((\.\.\/assets\/[^)\s]+)\)\{\:height\s+(\d+),\s*\:width\s+(\d+)\}/g;
+  /!\[([^\]]*)\]\((\.\.\/assets\/[^)\s]+)\)(?:\{\:height\s+(\d+),\s*\:width\s+(\d+)\})?/g;
 const EDITOR_IMAGE_RE =
   /!\[([^\]]*)\]\(([^)\s]+)\s+"uniseq-image\|(\d+)\|(\d+)\|([^"]+)"\)/g;
 
@@ -25,7 +25,9 @@ export function toEditorMarkdown(markdown, workspaceRoot) {
     (_match, alt, relativeAssetPath, height, width) => {
       const assetSrc = convertFileSrc(assetAbsolutePath(workspaceRoot, relativeAssetPath));
       const relEncoded = encodeURIComponent(relativeAssetPath);
-      return `![${alt}](${assetSrc} "uniseq-image|${height}|${width}|${relEncoded}")`;
+      const h = height ?? "0";
+      const w = width ?? "0";
+      return `![${alt}](${assetSrc} "uniseq-image|${h}|${w}|${relEncoded}")`;
     },
   );
 }
@@ -39,6 +41,9 @@ export function toStoredMarkdown(markdown) {
     EDITOR_IMAGE_RE,
     (_match, alt, _displaySrc, height, width, relativeAssetPathEncoded) => {
       const relativeAssetPath = decodeURIComponent(relativeAssetPathEncoded);
+      if (height === "0" && width === "0") {
+        return `![${alt}](${relativeAssetPath})`;
+      }
       return `![${alt}](${relativeAssetPath}){:height ${height}, :width ${width}}`;
     },
   );
