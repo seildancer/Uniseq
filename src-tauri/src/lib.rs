@@ -1228,8 +1228,12 @@ fn create_workspace(
 }
 
 #[tauri::command]
-fn close_workspace(state: State<'_, AppState>) -> bool {
-    state.controller.lock().unwrap().close_workspace()
+fn close_workspace(app: AppHandle, state: State<'_, AppState>) -> bool {
+    let closed = state.controller.lock().unwrap().close_workspace();
+    if closed {
+        let _ = clear_persisted_last_workspace_path(&app);
+    }
+    closed
 }
 
 #[tauri::command]

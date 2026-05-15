@@ -1842,559 +1842,559 @@ export default function App() {
 
     return (
       <WorkspaceContext.Provider value={workspace.root_path}>
-      <main className="app-shell app-shell--workspace">
-        <section className="workspace-shell">
-          {visibleError ? (
-            <div className="snackbar" role="alert" aria-live="assertive">
-              <span>{formatError(visibleError)}</span>
-              <button
-                className="snackbar-dismiss"
-                type="button"
-                aria-label="Dismiss error"
-                onClick={() => { setActionError(null); setStartupError(null); }}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : notice ? (
-            <div className="snackbar" role="status" aria-live="polite">
-              <span>{notice.message}</span>
-              <button
-                className="snackbar-dismiss"
-                type="button"
-                aria-label="Dismiss notification"
-                onClick={() => setNotice(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : null}
+        <main className="app-shell app-shell--workspace">
+          <section className="workspace-shell">
+            {visibleError ? (
+              <div className="snackbar" role="alert" aria-live="assertive">
+                <span>{formatError(visibleError)}</span>
+                <button
+                  className="snackbar-dismiss"
+                  type="button"
+                  aria-label="Dismiss error"
+                  onClick={() => { setActionError(null); setStartupError(null); }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : notice ? (
+              <div className="snackbar" role="status" aria-live="polite">
+                <span>{notice.message}</span>
+                <button
+                  className="snackbar-dismiss"
+                  type="button"
+                  aria-label="Dismiss notification"
+                  onClick={() => setNotice(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            ) : null}
 
-          <div
-            className={`workspace-body${sidebarCollapsed ? " workspace-body--sidebar-collapsed" : ""}`}
-            style={{
-              "--workspace-sidebar-width": sidebarCollapsed
-                ? `${SIDEBAR_COLLAPSED_WIDTH_PX}px`
-                : Number.isFinite(sidebarWidth)
-                  ? `${sidebarWidth}px`
-                  : undefined,
-            }}
-          >
-            <StreamWorkspace
-              streamSelection={streamSelection}
-              selectedStreamDate={selectedStreamDate}
-              orderedStreamNames={orderedStreamNames}
-              dualStreamNames={dualStreamNames}
-              streamPagesByDate={streamPagesByDate}
-              regularPages={regularPages}
-              streamReloadToken={streamReloadToken}
-              diaryBlurEnabled={diaryBlurEnabled}
-              onDiaryBlurToggle={() => setDiaryBlurEnabled((enabled) => !enabled)}
-              onSidebarWidthChange={(width) => {
-                setSidebarCollapsed(false);
-                setSidebarWidth(width);
+            <div
+              className={`workspace-body${sidebarCollapsed ? " workspace-body--sidebar-collapsed" : ""}`}
+              style={{
+                "--workspace-sidebar-width": sidebarCollapsed
+                  ? `${SIDEBAR_COLLAPSED_WIDTH_PX}px`
+                  : Number.isFinite(sidebarWidth)
+                    ? `${sidebarWidth}px`
+                    : undefined,
               }}
-              sidebarCollapsed={sidebarCollapsed}
-              sidebarChrome={sidebarChrome}
-              panelChrome={renderPanelChrome}
-              pageSidebarContent={
-                <div className="sidebar-section sidebar-section--pages">
-                  <div className="section-heading">
-                    <h2>Pages</h2>
-                    <button
-                      type="button"
-                      className="stream-add-btn"
-                      title="New page"
-                      onClick={() => {
-                        setRenameValue("");
-                        setModal({ type: "new_page" });
-                      }}
-                    >
-                      <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-                        <path d="M5 1v8M1 5h8" />
-                      </svg>
-                    </button>
-                  </div>
+            >
+              <StreamWorkspace
+                streamSelection={streamSelection}
+                selectedStreamDate={selectedStreamDate}
+                orderedStreamNames={orderedStreamNames}
+                dualStreamNames={dualStreamNames}
+                streamPagesByDate={streamPagesByDate}
+                regularPages={regularPages}
+                streamReloadToken={streamReloadToken}
+                diaryBlurEnabled={diaryBlurEnabled}
+                onDiaryBlurToggle={() => setDiaryBlurEnabled((enabled) => !enabled)}
+                onSidebarWidthChange={(width) => {
+                  setSidebarCollapsed(false);
+                  setSidebarWidth(width);
+                }}
+                sidebarCollapsed={sidebarCollapsed}
+                sidebarChrome={sidebarChrome}
+                panelChrome={renderPanelChrome}
+                pageSidebarContent={
+                  <div className="sidebar-section sidebar-section--pages">
+                    <div className="section-heading">
+                      <h2>Pages</h2>
+                      <button
+                        type="button"
+                        className="stream-add-btn"
+                        title="New page"
+                        onClick={() => {
+                          setRenameValue("");
+                          setModal({ type: "new_page" });
+                        }}
+                      >
+                        <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                          <path d="M5 1v8M1 5h8" />
+                        </svg>
+                      </button>
+                    </div>
 
-                  <div className="sidebar-section-scroll">
-                    {regularPages.length === 0 ? (
-                      <p className="empty-state">No regular pages yet.</p>
-                    ) : (
+                    <div className="sidebar-section-scroll">
+                      {regularPages.length === 0 ? (
+                        <p className="empty-state">No regular pages yet.</p>
+                      ) : (
+                        <PageTree
+                          nodes={pageTree}
+                          expandedPageIds={expandedPageIds}
+                          selectedPageId={selectedPageId}
+                          onSelectPage={handleSelectPage}
+                          onTogglePageTree={handleTogglePageTree}
+                          pageMenuOpenId={pageMenuOpenId}
+                          onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
+                          onRename={openRenameModal}
+                          onMove={openMoveModal}
+                          onDelete={openDeleteModal}
+                          onAddSubpage={(parentPageId) => {
+                            setRenameValue("");
+                            setModal({ type: "new_page", parentPageId });
+                          }}
+                          dragState={dragState?.active ? dragState : null}
+                          onDragItemPointerDown={handleDragItemPointerDown}
+                        />
+                      )}
+                    </div>
+                  </div>
+                }
+                fallbackEditor={
+                  <section className="editor-panel">
+                    {renderPanelChrome(loadedPage ? breadcrumbItemsForPageId(loadedPage.page_id) : [])}
+                    <div className="editor-panel-scroll">
+                      {loadedPage ? (
+                        <div className="editor-panel-content">
+                          {loadedPageIsRegular ? (
+                            <form
+                              className="editor-title-form"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                void handleEditorRenameSave();
+                              }}
+                              onBlur={(event) => {
+                                if (busyAction === "rename") return;
+                                const nextFocused = event.relatedTarget;
+                                if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
+                                  return;
+                                }
+                                resetEditorRenameValue();
+                              }}
+                            >
+                              <input
+                                ref={editorTitleInputRef}
+                                className="editor-title-input"
+                                type="text"
+                                value={editorRenameValue}
+                                size={Math.max(editorRenameValue.length, 1)}
+                                onFocus={() => setActionError(null)}
+                                onChange={(event) => setEditorRenameValue(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Escape") {
+                                    event.preventDefault();
+                                    resetEditorRenameValue();
+                                    editorTitleInputRef.current?.blur();
+                                  }
+                                }}
+                              />
+                              <div className="editor-title-actions">
+                                <button
+                                  className="stream-create-action editor-title-action"
+                                  type="submit"
+                                  aria-label="Save title"
+                                  title="Save title"
+                                  disabled={
+                                    busyAction === "rename" ||
+                                    !editorRenameValue.trim() ||
+                                    editorRenameValue.trim() === pageLeafName(loadedPage.page_id)
+                                  }
+                                >
+                                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                                    <path
+                                      d="M3 8.5 6.25 11.75 13 5"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                                <button
+                                  className="stream-create-action editor-title-action"
+                                  type="button"
+                                  aria-label="Cancel title edit"
+                                  title="Cancel title edit"
+                                  onClick={() => {
+                                    resetEditorRenameValue();
+                                    editorTitleInputRef.current?.blur();
+                                  }}
+                                  disabled={busyAction === "rename"}
+                                >
+                                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                                    <path
+                                      d="M4 4 12 12M12 4 4 12"
+                                      stroke="currentColor"
+                                      strokeWidth="1.8"
+                                      strokeLinecap="round"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <h1 className="editor-title-static">
+                              {loadedPage.title || pageLeafName(loadedPage.page_id) || loadedPage.page_id}
+                            </h1>
+                          )}
+                          <Editor
+                            pageId={loadedPageId}
+                            text={selectedPageText}
+                            revision={selectedPageRevision}
+                            key={loadedPageEditorKey}
+                            pages={regularPages}
+                            onNavigate={handleSelectPage}
+                            onConflict={() => void handleEditorConflict()}
+                          />
+                          {loadedPageIsRegular ? (
+                            <LinkedReferences
+                              entries={linkedRefs}
+                              pages={pages}
+                              diaryBlurEnabled={diaryBlurEnabled}
+                              onNavigate={(sourcePageId) => {
+                                const sourcePage = pagesById.get(sourcePageId);
+                                if (sourcePage && readStreamName(sourcePage.location) === null) {
+                                  handleSelectPage(sourcePageId);
+                                }
+                              }}
+                              onReload={() => loadPageLinkedRefs(loadedPageId)}
+                              onNotice={(message) => showNotice(message, "linked_refs_reload")}
+                            />
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                }
+                onSelectStreamDual={handleSelectStreamDual}
+                onSelectStreamSingle={handleSelectStreamSingle}
+                onCreateStream={handleCreateStream}
+                onDeleteStream={handleDeleteStream}
+                onRenameStream={openRenameStreamModal}
+                onReorderStreams={handleReorderStreams}
+                onNavigatePage={handleSelectPage}
+                onError={(error) => setActionError(normalizeError(error))}
+                onRefresh={() => void refreshStreamWorkspace(true)}
+              />
+            </div>
+
+            {dragState?.active ? (
+              <div
+                className="page-tree-drag-ghost"
+                style={{
+                  left: dragState.clientX + 14,
+                  top: dragState.clientY + 14,
+                }}
+              >
+                <span className="page-tree-drag-ghost-title">{dragState.sourceLabel}</span>
+              </div>
+            ) : null}
+          </section>
+
+          {modal && (
+            <div className="modal-overlay" onClick={closeModal}>
+              <div
+                className={`modal${modal.type === "search" ? " modal--search" : ""}`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {modal.type === "rename" && (
+                  <>
+                    <h3>Rename page</h3>
+                    <div className="field">
+                      <input
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleConfirmRename(renameValue);
+                          }
+                          if (e.key === "Escape") {
+                            closeModal();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="modal-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={closeModal}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={
+                          !renameValue.trim() ||
+                          renameValue.trim() === pageLeafName(modal.pageId)
+                        }
+                        onClick={() => void handleConfirmRename(renameValue)}
+                      >
+                        {busyAction === "rename" ? "Renaming..." : "Rename"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {modal.type === "rename_stream" && (
+                  <>
+                    <h3>Rename stream</h3>
+                    <div className="field">
+                      <input
+                        type="text"
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleConfirmRenameStream(renameValue);
+                          }
+                          if (e.key === "Escape") {
+                            closeModal();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="modal-actions">
+                      <button className="secondary-button" type="button" onClick={closeModal}>
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={
+                          busyAction === "rename_stream" ||
+                          !renameValue.trim() ||
+                          renameValue.trim() === modal.streamName
+                        }
+                        onClick={() => void handleConfirmRenameStream(renameValue)}
+                      >
+                        {busyAction === "rename_stream" ? "Renaming..." : "Rename"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {modal.type === "move" && (
+                  <>
+                    <h3>Move page</h3>
+                    <p className="modal-hint">
+                      Choose a new parent for <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong>
+                    </p>
+                    <div className="modal-tree-wrap">
+                      <button
+                        className={
+                          moveTarget === ""
+                            ? "page-tree-row page-tree-row--picked"
+                            : "page-tree-row"
+                        }
+                        type="button"
+                        style={{ "--page-tree-depth": 0 }}
+                        onClick={() => setMoveTarget("")}
+                      >
+                        <span className="page-tree-toggle page-tree-toggle--placeholder" aria-hidden="true" />
+                        <span className="page-tree-item" style={{ textAlign: "left" }}>
+                          <span className="page-tree-title">Root (no parent)</span>
+                        </span>
+                      </button>
                       <PageTree
                         nodes={pageTree}
                         expandedPageIds={expandedPageIds}
-                        selectedPageId={selectedPageId}
-                        onSelectPage={handleSelectPage}
                         onTogglePageTree={handleTogglePageTree}
-                        pageMenuOpenId={pageMenuOpenId}
-                        onPageMenuToggle={(id) => setPageMenuOpenId((prev) => (prev === id ? null : id))}
-                        onRename={openRenameModal}
-                        onMove={openMoveModal}
-                        onDelete={openDeleteModal}
-                        onAddSubpage={(parentPageId) => {
-                          setRenameValue("");
-                          setModal({ type: "new_page", parentPageId });
-                        }}
-                        dragState={dragState?.active ? dragState : null}
-                        onDragItemPointerDown={handleDragItemPointerDown}
+                        pickerMode
+                        pickerValue={moveTarget}
+                        onPickerSelect={setMoveTarget}
+                        disabledIds={new Set([
+                          modal.pageId,
+                          ...regularPages
+                            .filter((p) => p.page_id.startsWith(modal.pageId + "/"))
+                            .map((p) => p.page_id),
+                        ])}
+                        dragState={null}
                       />
-                    )}
-                  </div>
-                </div>
-              }
-              fallbackEditor={
-                <section className="editor-panel">
-                  {renderPanelChrome(loadedPage ? breadcrumbItemsForPageId(loadedPage.page_id) : [])}
-                  <div className="editor-panel-scroll">
-                    {loadedPage ? (
-                      <div className="editor-panel-content">
-                        {loadedPageIsRegular ? (
-                          <form
-                            className="editor-title-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              void handleEditorRenameSave();
-                            }}
-                            onBlur={(event) => {
-                              if (busyAction === "rename") return;
-                              const nextFocused = event.relatedTarget;
-                              if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
-                                return;
-                              }
-                              resetEditorRenameValue();
-                            }}
-                          >
-                            <input
-                              ref={editorTitleInputRef}
-                              className="editor-title-input"
-                              type="text"
-                              value={editorRenameValue}
-                              size={Math.max(editorRenameValue.length, 1)}
-                              onFocus={() => setActionError(null)}
-                              onChange={(event) => setEditorRenameValue(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Escape") {
-                                  event.preventDefault();
-                                  resetEditorRenameValue();
-                                  editorTitleInputRef.current?.blur();
-                                }
-                              }}
-                            />
-                            <div className="editor-title-actions">
-                              <button
-                                className="stream-create-action editor-title-action"
-                                type="submit"
-                                aria-label="Save title"
-                                title="Save title"
-                                disabled={
-                                  busyAction === "rename" ||
-                                  !editorRenameValue.trim() ||
-                                  editorRenameValue.trim() === pageLeafName(loadedPage.page_id)
-                                }
-                              >
-                                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
-                                  <path
-                                    d="M3 8.5 6.25 11.75 13 5"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                  />
-                                </svg>
-                              </button>
-                              <button
-                                className="stream-create-action editor-title-action"
-                                type="button"
-                                aria-label="Cancel title edit"
-                                title="Cancel title edit"
-                                onClick={() => {
-                                  resetEditorRenameValue();
-                                  editorTitleInputRef.current?.blur();
-                                }}
-                                disabled={busyAction === "rename"}
-                              >
-                                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
-                                  <path
-                                    d="M4 4 12 12M12 4 4 12"
-                                    stroke="currentColor"
-                                    strokeWidth="1.8"
-                                    strokeLinecap="round"
-                                  />
-                                </svg>
-                              </button>
-                            </div>
-                          </form>
-                        ) : (
-                          <h1 className="editor-title-static">
-                            {loadedPage.title || pageLeafName(loadedPage.page_id) || loadedPage.page_id}
-                          </h1>
-                        )}
-                        <Editor
-                          pageId={loadedPageId}
-                          text={selectedPageText}
-                          revision={selectedPageRevision}
-                          key={loadedPageEditorKey}
-                          pages={regularPages}
-                          onNavigate={handleSelectPage}
-                          onConflict={() => void handleEditorConflict()}
-                        />
-                        {loadedPageIsRegular ? (
-                          <LinkedReferences
-                            entries={linkedRefs}
-                            pages={pages}
-                            diaryBlurEnabled={diaryBlurEnabled}
-                            onNavigate={(sourcePageId) => {
-                              const sourcePage = pagesById.get(sourcePageId);
-                              if (sourcePage && readStreamName(sourcePage.location) === null) {
-                                handleSelectPage(sourcePageId);
-                              }
-                            }}
-                            onReload={() => loadPageLinkedRefs(loadedPageId)}
-                            onNotice={(message) => showNotice(message, "linked_refs_reload")}
-                          />
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
-              }
-              onSelectStreamDual={handleSelectStreamDual}
-              onSelectStreamSingle={handleSelectStreamSingle}
-              onCreateStream={handleCreateStream}
-              onDeleteStream={handleDeleteStream}
-              onRenameStream={openRenameStreamModal}
-              onReorderStreams={handleReorderStreams}
-              onNavigatePage={handleSelectPage}
-              onError={(error) => setActionError(normalizeError(error))}
-              onRefresh={() => void refreshStreamWorkspace(true)}
-            />
-          </div>
+                    </div>
+                    <div className="modal-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={closeModal}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={busyAction === "move"}
+                        onClick={() => void handleConfirmMove(moveTarget)}
+                      >
+                        {busyAction === "move" ? "Moving..." : "Move"}
+                      </button>
+                    </div>
+                  </>
+                )}
 
-          {dragState?.active ? (
-            <div
-              className="page-tree-drag-ghost"
-              style={{
-                left: dragState.clientX + 14,
-                top: dragState.clientY + 14,
-              }}
-            >
-              <span className="page-tree-drag-ghost-title">{dragState.sourceLabel}</span>
-            </div>
-          ) : null}
-        </section>
+                {modal.type === "new_page" && (
+                  <>
+                    <h3>{modal.parentPageId ? "New subpage" : "New page"}</h3>
+                    <div className="field">
+                      <input
+                        type="text"
+                        value={renameValue}
+                        placeholder="Page name"
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleCreatePage(renameValue, modal.parentPageId);
+                          }
+                          if (e.key === "Escape") {
+                            closeModal();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="modal-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={closeModal}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={busyAction === "create" || !renameValue.trim()}
+                        onClick={() => void handleCreatePage(renameValue, modal.parentPageId)}
+                      >
+                        {busyAction === "create" ? "Creating..." : "Create"}
+                      </button>
+                    </div>
+                  </>
+                )}
 
-        {modal && (
-          <div className="modal-overlay" onClick={closeModal}>
-            <div
-              className={`modal${modal.type === "search" ? " modal--search" : ""}`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {modal.type === "rename" && (
-                <>
-                  <h3>Rename page</h3>
-                  <div className="field">
-                    <input
-                      type="text"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleConfirmRename(renameValue);
-                        }
-                        if (e.key === "Escape") {
-                          closeModal();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="modal-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={closeModal}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={
-                        !renameValue.trim() ||
-                        renameValue.trim() === pageLeafName(modal.pageId)
-                      }
-                      onClick={() => void handleConfirmRename(renameValue)}
-                    >
-                      {busyAction === "rename" ? "Renaming..." : "Rename"}
-                    </button>
-                  </div>
-                </>
-              )}
+                {modal.type === "merge_page" && (
+                  <>
+                    <h3>Merge page</h3>
+                    <p>
+                      <strong>{modal.sourceTitle}</strong> will be appended to{" "}
+                      <strong>{modal.targetTitle}</strong>, all references updated, and the
+                      original page deleted. This cannot be undone.
+                    </p>
+                    <div className="modal-actions">
+                      <button className="secondary-button" type="button" onClick={closeModal}>
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={busyAction === "merge"}
+                        onClick={() => void handleConfirmMergePage()}
+                      >
+                        {busyAction === "merge" ? "Merging..." : "Merge"}
+                      </button>
+                    </div>
+                  </>
+                )}
 
-              {modal.type === "rename_stream" && (
-                <>
-                  <h3>Rename stream</h3>
-                  <div className="field">
-                    <input
-                      type="text"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleConfirmRenameStream(renameValue);
-                        }
-                        if (e.key === "Escape") {
-                          closeModal();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="modal-actions">
-                    <button className="secondary-button" type="button" onClick={closeModal}>
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={
-                        busyAction === "rename_stream" ||
-                        !renameValue.trim() ||
-                        renameValue.trim() === modal.streamName
-                      }
-                      onClick={() => void handleConfirmRenameStream(renameValue)}
-                    >
-                      {busyAction === "rename_stream" ? "Renaming..." : "Rename"}
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {modal.type === "move" && (
-                <>
-                  <h3>Move page</h3>
-                  <p className="modal-hint">
-                    Choose a new parent for <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong>
-                  </p>
-                  <div className="modal-tree-wrap">
-                    <button
-                      className={
-                        moveTarget === ""
-                          ? "page-tree-row page-tree-row--picked"
-                          : "page-tree-row"
-                      }
-                      type="button"
-                      style={{ "--page-tree-depth": 0 }}
-                      onClick={() => setMoveTarget("")}
-                    >
-                      <span className="page-tree-toggle page-tree-toggle--placeholder" aria-hidden="true" />
-                      <span className="page-tree-item" style={{ textAlign: "left" }}>
-                        <span className="page-tree-title">Root (no parent)</span>
-                      </span>
-                    </button>
-                    <PageTree
-                      nodes={pageTree}
-                      expandedPageIds={expandedPageIds}
-                      onTogglePageTree={handleTogglePageTree}
-                      pickerMode
-                      pickerValue={moveTarget}
-                      onPickerSelect={setMoveTarget}
-                      disabledIds={new Set([
-                        modal.pageId,
-                        ...regularPages
-                          .filter((p) => p.page_id.startsWith(modal.pageId + "/"))
-                          .map((p) => p.page_id),
-                      ])}
-                      dragState={null}
-                    />
-                  </div>
-                  <div className="modal-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={closeModal}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={busyAction === "move"}
-                      onClick={() => void handleConfirmMove(moveTarget)}
-                    >
-                      {busyAction === "move" ? "Moving..." : "Move"}
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {modal.type === "new_page" && (
-                <>
-                  <h3>{modal.parentPageId ? "New subpage" : "New page"}</h3>
-                  <div className="field">
-                    <input
-                      type="text"
-                      value={renameValue}
-                      placeholder="Page name"
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void handleCreatePage(renameValue, modal.parentPageId);
-                        }
-                        if (e.key === "Escape") {
-                          closeModal();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="modal-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={closeModal}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={busyAction === "create" || !renameValue.trim()}
-                      onClick={() => void handleCreatePage(renameValue, modal.parentPageId)}
-                    >
-                      {busyAction === "create" ? "Creating..." : "Create"}
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {modal.type === "merge_page" && (
-                <>
-                  <h3>Merge page</h3>
-                  <p>
-                    <strong>{modal.sourceTitle}</strong> will be appended to{" "}
-                    <strong>{modal.targetTitle}</strong>, all references updated, and the
-                    original page deleted. This cannot be undone.
-                  </p>
-                  <div className="modal-actions">
-                    <button className="secondary-button" type="button" onClick={closeModal}>
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={busyAction === "merge"}
-                      onClick={() => void handleConfirmMergePage()}
-                    >
-                      {busyAction === "merge" ? "Merging..." : "Merge"}
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {modal.type === "search" && (
-                <>
-                  <h3>Search</h3>
-                  <div className="field">
-                    <input
-                      className="topbar-search-input"
-                      type="search"
-                      value={searchQuery}
-                      placeholder="Search pages and content"
-                      autoFocus
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && searchResults.length > 0) {
-                          e.preventDefault();
-                          openSearchResult(searchResults[0]);
-                        }
-                        if (e.key === "Escape") {
-                          closeModal();
-                        }
-                      }}
-                    />
-                  </div>
-                  <div className="modal-list topbar-search-results">
-                    {!searchQuery.trim() ? (
-                      <p className="topbar-search-empty">Search titles, page ids, and note content.</p>
-                    ) : searchLoading ? (
-                      <p className="topbar-search-empty">Searching...</p>
-                    ) : searchResults.length === 0 ? (
-                      <p className="topbar-search-empty">No results.</p>
-                    ) : (
-                      searchResults.map((result) => {
-                        const streamName = readStreamName(result.location);
-                        return (
-                          <button
-                            key={`${result.page_id}:${result.matched_field}:${result.snippet ?? ""}`}
-                            className="topbar-search-result"
-                            type="button"
-                            onClick={() => openSearchResult(result)}
-                          >
-                            <div className="topbar-search-result-head">
-                              <span className="topbar-search-result-title">{searchResultLabel(result)}</span>
-                              <span className="topbar-search-result-match">
-                                {describeSearchMatch(result.matched_field)}
-                              </span>
-                            </div>
-                            <div className="topbar-search-result-meta">
-                              {streamName ? (
-                                <span className="topbar-search-result-stream">{streamName}</span>
+                {modal.type === "search" && (
+                  <>
+                    <h3>Search</h3>
+                    <div className="field">
+                      <input
+                        className="topbar-search-input"
+                        type="search"
+                        value={searchQuery}
+                        placeholder="Search pages and content"
+                        autoFocus
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && searchResults.length > 0) {
+                            e.preventDefault();
+                            openSearchResult(searchResults[0]);
+                          }
+                          if (e.key === "Escape") {
+                            closeModal();
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="modal-list topbar-search-results">
+                      {!searchQuery.trim() ? (
+                        <p className="topbar-search-empty">Search titles, page ids, and note content.</p>
+                      ) : searchLoading ? (
+                        <p className="topbar-search-empty">Searching...</p>
+                      ) : searchResults.length === 0 ? (
+                        <p className="topbar-search-empty">No results.</p>
+                      ) : (
+                        searchResults.map((result) => {
+                          const streamName = readStreamName(result.location);
+                          return (
+                            <button
+                              key={`${result.page_id}:${result.matched_field}:${result.snippet ?? ""}`}
+                              className="topbar-search-result"
+                              type="button"
+                              onClick={() => openSearchResult(result)}
+                            >
+                              <div className="topbar-search-result-head">
+                                <span className="topbar-search-result-title">{searchResultLabel(result)}</span>
+                                <span className="topbar-search-result-match">
+                                  {describeSearchMatch(result.matched_field)}
+                                </span>
+                              </div>
+                              <div className="topbar-search-result-meta">
+                                {streamName ? (
+                                  <span className="topbar-search-result-stream">{streamName}</span>
+                                ) : null}
+                                <span className="topbar-search-result-id">{result.page_id}</span>
+                              </div>
+                              {result.snippet ? (
+                                <div className="topbar-search-result-snippet">{result.snippet}</div>
                               ) : null}
-                              <span className="topbar-search-result-id">{result.page_id}</span>
-                            </div>
-                            {result.snippet ? (
-                              <div className="topbar-search-result-snippet">{result.snippet}</div>
-                            ) : null}
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                  <div className="modal-actions">
-                    <button className="secondary-button" type="button" onClick={closeModal}>
-                      Close
-                    </button>
-                  </div>
-                </>
-              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="modal-actions">
+                      <button className="secondary-button" type="button" onClick={closeModal}>
+                        Close
+                      </button>
+                    </div>
+                  </>
+                )}
 
-              {modal.type === "delete" && (
-                <>
-                  <h3>Delete page</h3>
-                  <p>
-                    Delete <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong> and all its subpages? This cannot be undone.
-                  </p>
-                  <div className="modal-actions">
-                    <button
-                      className="secondary-button"
-                      type="button"
-                      onClick={closeModal}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={busyAction === "delete"}
-                      onClick={() => void handleConfirmDelete()}
-                    >
-                      {busyAction === "delete" ? "Deleting..." : "Delete"}
-                    </button>
-                  </div>
-                </>
-              )}
+                {modal.type === "delete" && (
+                  <>
+                    <h3>Delete page</h3>
+                    <p>
+                      Delete <strong>{pageLabel(regularPages.find((p) => p.page_id === modal.pageId) ?? { page_id: modal.pageId })}</strong> and all its subpages? This cannot be undone.
+                    </p>
+                    <div className="modal-actions">
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={closeModal}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={busyAction === "delete"}
+                        onClick={() => void handleConfirmDelete()}
+                      >
+                        {busyAction === "delete" ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {isKeyboardVisible && (
-          <MobileKeyboardBar keyboardHeight={keyboardHeight} />
-        )}
-      </main>
+          {isKeyboardVisible && (
+            <MobileKeyboardBar keyboardHeight={keyboardHeight} />
+          )}
+        </main>
       </WorkspaceContext.Provider>
     );
   }
@@ -2473,7 +2473,7 @@ export default function App() {
                     type="text"
                     value={createState.parentPath}
                     readOnly
-                    placeholder="Choose a folder"
+                    placeholder="Parent folder"
                     title={createState.parentPath}
                   />
                   <button
