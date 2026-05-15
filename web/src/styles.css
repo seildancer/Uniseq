@@ -294,35 +294,70 @@ h2 {
 }
 
 .minimal-panel {
-  max-width: 520px;
+  max-width: 400px;
 }
 
-.compact-copy {
-  margin-bottom: 12px;
-}
-
-.status-copy,
-.section-copy p {
+.status-copy {
   margin: 6px 0 0;
   color: var(--muted);
 }
 
-.minimal-stack {
-  display: grid;
-  gap: 16px;
+.onboard-title {
+  margin: 0 0 20px;
 }
 
-.minimal-section {
-  padding: 14px 0 0;
-  border-top: 1px solid var(--line);
+.onboard-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 20px;
 }
 
-.section-copy {
-  margin-bottom: 12px;
+.onboard-tab {
+  padding: 6px 14px;
+  margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: color 100ms ease, border-color 100ms ease;
 }
 
-.compact-form {
-  max-width: 100%;
+.onboard-tab:hover {
+  color: var(--ink);
+}
+
+.onboard-tab--active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+.onboard-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.onboard-panel .create-form {
+  width: 100%;
+}
+
+.onboard-name-input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.onboard-name-input:focus-visible {
+  outline: 2px solid rgba(31, 111, 95, 0.42);
+  outline-offset: 2px;
 }
 
 .section-heading {

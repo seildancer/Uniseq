@@ -477,6 +477,7 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
+  const [onboardingTab, setOnboardingTab] = useState("create");
   const [expandedPageIds, setExpandedPageIds] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -2386,9 +2387,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <section className="hero-panel minimal-panel">
-        <div className="hero-copy compact-copy">
-          <h1>Uniseq</h1>
-        </div>
+        <h1 className="onboard-title">Uniseq</h1>
 
         {visibleError ? (
           <div className="snackbar" role="alert" aria-live="assertive">
@@ -2404,36 +2403,45 @@ export default function App() {
           </div>
         ) : null}
 
-        <div className="minimal-stack">
-          <section className="minimal-section">
-            <div className="section-copy">
-              <h2>Open existing workspace</h2>
-              <p>Select the workspace folder.</p>
-            </div>
+        <div className="onboard-tabs" role="tablist">
+          <button
+            className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={onboardingTab === "open"}
+            onClick={() => setOnboardingTab("open")}
+          >
+            Open existing
+          </button>
+          <button
+            className={`onboard-tab${onboardingTab === "create" ? " onboard-tab--active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={onboardingTab === "create"}
+            onClick={() => setOnboardingTab("create")}
+          >
+            Make new
+          </button>
+        </div>
 
+        <div className="onboard-panel">
+          {onboardingTab === "open" ? (
             <button
               className="primary-button"
               type="button"
               onClick={handleOpenWorkspace}
               disabled={busyAction === "open"}
             >
-              {busyAction === "open" ? "Opening..." : "Open workspace folder"}
+              {busyAction === "open" ? "Opening..." : "Choose folder"}
             </button>
-          </section>
-
-          <section className="minimal-section">
-            <div className="section-copy">
-              <h2>Create new workspace</h2>
-              <p>Select where to create the workspace folder.</p>
-            </div>
-
-            <form className="create-form compact-form" onSubmit={handleCreateWorkspace}>
+          ) : (
+            <form className="create-form" onSubmit={handleCreateWorkspace}>
               <div className="inline-field">
                 <input
                   type="text"
                   value={createState.parentPath}
                   readOnly
-                  placeholder="Parent folder"
+                  placeholder="Location"
                 />
                 <button
                   className="secondary-button"
@@ -2441,30 +2449,26 @@ export default function App() {
                   onClick={handleChooseCreateParent}
                   disabled={busyAction === "pick-parent"}
                 >
-                  {busyAction === "pick-parent" ? "Choosing..." : "Choose location"}
+                  {busyAction === "pick-parent" ? "Choosing..." : "Choose"}
                 </button>
               </div>
-
-              <label className="field">
-                <span>Name</span>
-                <input
-                  type="text"
-                  value={createState.folderName}
-                  onChange={(event) =>
-                    setCreateState((current) => ({
-                      ...current,
-                      folderName: event.target.value,
-                    }))
-                  }
-                  placeholder="Workspace name"
-                />
-              </label>
-
+              <input
+                className="onboard-name-input"
+                type="text"
+                value={createState.folderName}
+                onChange={(event) =>
+                  setCreateState((current) => ({
+                    ...current,
+                    folderName: event.target.value,
+                  }))
+                }
+                placeholder="Name"
+              />
               <button className="primary-button" type="submit" disabled={createDisabled}>
-                {busyAction === "create" ? "Creating..." : "Create workspace"}
+                {busyAction === "create" ? "Creating..." : "Create"}
               </button>
             </form>
-          </section>
+          )}
         </div>
       </section>
     </main>
