@@ -4,20 +4,6 @@ import { addDaysToDateName, compareDateNames } from "../utils/streamDates.js";
 const WHEEL_PAGE_THRESHOLD_PX = 24;
 const WHEEL_PAGE_COOLDOWN_MS = 420;
 const TOUCH_PAGE_THRESHOLD_PX = 64;
-const SCROLL_BOUNDARY_EPSILON_PX = 2;
-
-function canPage(container, direction) {
-  const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-  if (maxScrollTop <= SCROLL_BOUNDARY_EPSILON_PX) {
-    return true;
-  }
-
-  if (direction === "newer") {
-    return container.scrollTop <= SCROLL_BOUNDARY_EPSILON_PX;
-  }
-
-  return maxScrollTop - container.scrollTop <= SCROLL_BOUNDARY_EPSILON_PX;
-}
 
 function nextDateName(selectedDate, latestDateName, direction) {
   const candidate = addDaysToDateName(selectedDate, direction === "newer" ? 1 : -1);
@@ -54,7 +40,7 @@ export function useMobileStreamDatePager({
     }
 
     function pageDate(direction, event, source) {
-      if (navigationLockedRef.current || !canPage(container, direction)) {
+      if (navigationLockedRef.current) {
         return false;
       }
       if (source === "wheel" && Date.now() - lastWheelPageAtRef.current < WHEEL_PAGE_COOLDOWN_MS) {
@@ -112,12 +98,6 @@ export function useMobileStreamDatePager({
       }
 
       const direction = movementY > 0 ? "newer" : "older";
-      if (!canPage(container, direction)) {
-        touchState.startY = currentY;
-        touchState.lastY = currentY;
-        touchState.direction = null;
-        return;
-      }
 
       if (touchState.direction !== direction) {
         touchState.startY = previousY;

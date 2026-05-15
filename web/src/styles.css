@@ -1316,6 +1316,7 @@ h2 {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
 }
 
 .editor-panel-scroll--mobile-stream > .stream-day-list,
@@ -1616,6 +1617,10 @@ h2 {
   min-height: 100%;
   max-height: none;
   overflow: visible;
+}
+
+.stream-day-list--mobile-single .stream-day-entry--focused .stream-editor-pane .milkdown-editor .ProseMirror {
+  overflow: auto;
 }
 
 .stream-dual-wrap--mobile {
@@ -2540,8 +2545,11 @@ code {
   }
 
   .workspace-body {
-    display: block;
+    display: flex;
+    flex-direction: column;
     position: relative;
+    height: 100vh;
+    height: 100dvh;
   }
 
   .workspace-resizer {
@@ -2595,6 +2603,8 @@ code {
 
   .editor-panel {
     padding: 18px;
+    flex: 1;
+    min-height: 0;
   }
 
   .editor-panel-chrome {
