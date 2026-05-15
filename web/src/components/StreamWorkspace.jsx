@@ -512,49 +512,49 @@ export default function StreamWorkspace({
                   onBlur={handleCreateRowBlur}
                 >
                   <input
-                     ref={createInputRef}
-                     className="stream-create-input"
-                     type="text"
-                     placeholder="Stream name"
+                    ref={createInputRef}
+                    className="stream-create-input"
+                    type="text"
+                    placeholder="Stream name"
                     value={draftName}
                     onChange={(e) => setDraftName(e.target.value)}
-                     onKeyDown={(e) => {
-                       if (e.key === "Enter") { e.preventDefault(); void submitCreate(); }
-                       if (e.key === "Escape") { cancelCreating(); }
-                     }}
-                   />
-                   <button
-                     type="submit"
-                     className="stream-create-action"
-                     aria-label="Create stream"
-                     disabled={!draftName.trim()}
-                   >
-                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
-                       <path
-                         d="M3 8.5 6.25 11.75 13 5"
-                         stroke="currentColor"
-                         strokeWidth="1.8"
-                         strokeLinecap="round"
-                         strokeLinejoin="round"
-                       />
-                     </svg>
-                   </button>
-                   <button
-                     type="button"
-                     className="stream-create-action"
-                     aria-label="Cancel creating stream"
-                     onClick={cancelCreating}
-                   >
-                     <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
-                       <path
-                         d="M4 4 12 12M12 4 4 12"
-                         stroke="currentColor"
-                         strokeWidth="1.8"
-                         strokeLinecap="round"
-                       />
-                     </svg>
-                   </button>
-                 </form>
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); void submitCreate(); }
+                      if (e.key === "Escape") { cancelCreating(); }
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    className="stream-create-action"
+                    aria-label="Create stream"
+                    disabled={!draftName.trim()}
+                  >
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                      <path
+                        d="M3 8.5 6.25 11.75 13 5"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className="stream-create-action"
+                    aria-label="Cancel creating stream"
+                    onClick={cancelCreating}
+                  >
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                      <path
+                        d="M4 4 12 12M12 4 4 12"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  </button>
+                </form>
               ) : null}
 
               <SidebarCalendar

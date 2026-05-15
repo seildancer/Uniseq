@@ -7,9 +7,22 @@ import {
   streamPageId,
 } from "../utils/streamWorkspace.js";
 
-const SNAP_BUFFER_DAYS = 1;
-const TAP_MAX_DURATION_MS = 250;
-const TAP_MAX_MOVE_PX = 10;
+const NEIGHBOR_DAY_COUNT = 1;
+const SCROLL_SETTLE_MS = 140;
+const PROGRAMMATIC_SCROLL_MS = 260;
+
+function editorKeyFor(streamName, dateName) {
+  return `${streamName}/${dateName}`;
+}
+
+function isEditorTarget(target) {
+  return Boolean(target?.closest?.(".ProseMirror"));
+}
+
+function isEditorDomFocused() {
+  const activeElement = document.activeElement;
+  return Boolean(activeElement?.closest?.(".milkdown-editor, .ProseMirror"));
+}
 
 export default function StreamViewMobile({
   selectedDate,
@@ -25,126 +38,92 @@ export default function StreamViewMobile({
   diaryBlurEnabled = true,
 }) {
   const [focusedEditor, setFocusedEditor] = useState(null);
-  const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const editorFocusRefs = useRef(new Map());
+  const selectedDateRef = useRef(selectedDate);
   const focusedEditorRef = useRef(null);
-  const pendingTapRef = useRef(null);
+  const scrollSettleTimerRef = useRef(null);
+  const programmaticScrollTimerRef = useRef(null);
+  const isProgrammaticScrollRef = useRef(false);
+
+  selectedDateRef.current = selectedDate;
+  focusedEditorRef.current = focusedEditor;
+
   const latestDateName = useMemo(
     () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
     [selectedDate, streamPagesByDate],
   );
+
   const visibleDates = useMemo(() => {
     const dates = [];
-    for (let i = SNAP_BUFFER_DAYS; i >= -SNAP_BUFFER_DAYS; i -= 1) {
-      const candidate = addDaysToDateName(selectedDate, i);
-      if (latestDateName && compareDateNames(candidate, latestDateName) > 0) {
+    for (let offset = NEIGHBOR_DAY_COUNT; offset >= -NEIGHBOR_DAY_COUNT; offset -= 1) {
+      const dateName = addDaysToDateName(selectedDate, offset);
+      if (latestDateName && compareDateNames(dateName, latestDateName) > 0) {
         continue;
       }
-      dates.push(candidate);
+      dates.push(dateName);
     }
     return dates;
-  }, [selectedDate, latestDateName]);
+  }, [latestDateName, selectedDate]);
 
-  const selectedDateRef = useRef(selectedDate);
-  selectedDateRef.current = selectedDate;
-  const programmaticScrollRef = useRef(false);
-  const suppressScrollSnapUntilRef = useRef(0);
-
-  focusedEditorRef.current = focusedEditor;
-
-  function suppressDateSnap(durationMs = 900) {
-    suppressScrollSnapUntilRef.current = Date.now() + durationMs;
+  function clearScrollTimers() {
+    if (scrollSettleTimerRef.current !== null) {
+      window.clearTimeout(scrollSettleTimerRef.current);
+      scrollSettleTimerRef.current = null;
+    }
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
   }
 
-  function isEditorDomFocused() {
-    const activeElement = document.activeElement;
-    if (!activeElement) {
-      return false;
+  function markProgrammaticScroll() {
+    isProgrammaticScrollRef.current = true;
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
     }
-    return Boolean(activeElement.closest?.(".milkdown-editor, .ProseMirror"));
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+      programmaticScrollTimerRef.current = null;
+    }, PROGRAMMATIC_SCROLL_MS);
   }
 
-  useLayoutEffect(() => {
+  function scrollDateIntoView(dateName, behavior = "auto") {
+    const node = dayRefs.current.get(dateName);
     const container = scrollContainerRef.current;
-    if (!container) return;
-
-    const selectedEntry = dayRefs.current.get(selectedDate);
-    if (selectedEntry) {
-      programmaticScrollRef.current = true;
-      selectedEntry.scrollIntoView({ block: "start", behavior: "auto" });
+    if (!node || !container) {
+      return;
     }
-  }, [selectedDate, scrollContainerRef]);
 
-  useEffect(() => {
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    markProgrammaticScroll();
+    container.scrollTo({
+      top: container.scrollTop + nodeRect.top - containerRect.top,
+      behavior,
+    });
+  }
+
+  function closestVisibleDate() {
     const container = scrollContainerRef.current;
-    if (!container || typeof onSelectDate !== "function") return;
-
-    function handleScrollEnd() {
-      if (programmaticScrollRef.current) {
-        programmaticScrollRef.current = false;
-        return;
-      }
-      if (focusedEditorRef.current || isEditorDomFocused()) {
-        return;
-      }
-      if (Date.now() < suppressScrollSnapUntilRef.current) {
-        return;
-      }
-
-      let closestDate = null;
-      let closestDist = Infinity;
-      const containerRect = container.getBoundingClientRect();
-
-      for (const [dateName, node] of dayRefs.current) {
-        if (!node) continue;
-        const rect = node.getBoundingClientRect();
-        const dist = Math.abs(rect.top - containerRect.top);
-        if (dist < closestDist) {
-          closestDist = dist;
-          closestDate = dateName;
-        }
-      }
-
-      if (closestDate && closestDate !== selectedDateRef.current) {
-        onSelectDate(closestDate);
-      }
+    if (!container) {
+      return null;
     }
 
-    container.addEventListener("scrollend", handleScrollEnd);
-    return () => container.removeEventListener("scrollend", handleScrollEnd);
-  }, [scrollContainerRef, onSelectDate]);
-
-  useEffect(() => {
-    if (focusedEditor && !streamNames.includes(focusedEditor.streamName)) {
-      setFocusedEditor(null);
+    let closestDate = null;
+    let closestDistance = Infinity;
+    const containerTop = container.getBoundingClientRect().top;
+    for (const [dateName, node] of dayRefs.current) {
+      if (!node) {
+        continue;
+      }
+      const distance = Math.abs(node.getBoundingClientRect().top - containerTop);
+      if (distance < closestDistance) {
+        closestDate = dateName;
+        closestDistance = distance;
+      }
     }
-  }, [streamNames, focusedEditor]);
-
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container || !focusedEditor) {
-      return undefined;
-    }
-
-    const previousOverflow = container.style.overflow;
-    const previousTouchAction = container.style.touchAction;
-    const previousOverscrollBehavior = container.style.overscrollBehavior;
-
-    container.style.overflow = "hidden";
-    container.style.touchAction = "none";
-    container.style.overscrollBehavior = "none";
-
-    return () => {
-      container.style.overflow = previousOverflow;
-      container.style.touchAction = previousTouchAction;
-      container.style.overscrollBehavior = previousOverscrollBehavior;
-    };
-  }, [focusedEditor, scrollContainerRef]);
-
-  function enterFocusMode(dateName, streamName) {
-    suppressDateSnap();
-    setFocusedEditor({ dateName, streamName });
+    return closestDate;
   }
 
   function editorFocusRefForKey(editorKey) {
@@ -156,11 +135,16 @@ export default function StreamViewMobile({
     return focusRef;
   }
 
-  function focusPaneEditor(event, editorKey) {
-    if (event.target.closest?.(".ProseMirror")) {
-      return;
+  function enterFocusMode(dateName, streamName) {
+    if (dateName !== selectedDateRef.current) {
+      onSelectDate?.(dateName);
     }
-    if (event.button !== undefined && event.button !== 0) {
+    scrollDateIntoView(dateName, "auto");
+    setFocusedEditor({ dateName, streamName });
+  }
+
+  function focusPaneEditor(event, dateName, streamName, editorKey) {
+    if (isEditorTarget(event.target)) {
       return;
     }
 
@@ -168,76 +152,70 @@ export default function StreamViewMobile({
     if (!didFocus) {
       event.currentTarget.querySelector(".ProseMirror")?.focus();
     }
-    if (event.pointerType === "mouse") {
-      event.preventDefault();
-    }
+    enterFocusMode(dateName, streamName);
   }
 
-  function handlePanePointerDown(event, editorKey) {
-    if (event.target.closest?.(".ProseMirror")) {
-      pendingTapRef.current = null;
+  useLayoutEffect(() => {
+    if (focusedEditorRef.current) {
       return;
     }
-    if (event.button !== undefined && event.button !== 0) {
-      pendingTapRef.current = null;
-      return;
-    }
+    scrollDateIntoView(selectedDate, "auto");
+  }, [selectedDate, scrollContainerRef]);
 
-    pendingTapRef.current = {
-      editorKey,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      startedAt: Date.now(),
-      moved: false,
+  useEffect(() => {
+    return () => {
+      clearScrollTimers();
     };
-  }
+  }, []);
 
-  function handlePanePointerMove(event) {
-    const pendingTap = pendingTapRef.current;
-    if (!pendingTap || pendingTap.pointerId !== event.pointerId) {
+  useEffect(() => {
+    if (!focusedEditor) {
       return;
     }
-
-    const distance = Math.hypot(event.clientX - pendingTap.startX, event.clientY - pendingTap.startY);
-    if (distance > TAP_MAX_MOVE_PX) {
-      pendingTapRef.current = {
-        ...pendingTap,
-        moved: true,
-      };
+    if (!streamNames.includes(focusedEditor.streamName) || !visibleDates.includes(focusedEditor.dateName)) {
+      setFocusedEditor(null);
     }
-  }
+  }, [focusedEditor, streamNames, visibleDates]);
 
-  function handlePanePointerCancel(event) {
-    if (pendingTapRef.current?.pointerId === event.pointerId) {
-      pendingTapRef.current = null;
-    }
-  }
-
-  function handlePanePointerUp(event, editorKey) {
-    const pendingTap = pendingTapRef.current;
-    pendingTapRef.current = null;
-
-    if (!pendingTap || pendingTap.pointerId !== event.pointerId || pendingTap.editorKey !== editorKey) {
-      return;
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof onSelectDate !== "function") {
+      return undefined;
     }
 
-    const duration = Date.now() - pendingTap.startedAt;
-    if (pendingTap.moved || duration > TAP_MAX_DURATION_MS) {
-      return;
+    function handleScroll() {
+      if (
+        isProgrammaticScrollRef.current
+        || focusedEditorRef.current
+        || isEditorDomFocused()
+      ) {
+        return;
+      }
+
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+      }
+      scrollSettleTimerRef.current = window.setTimeout(() => {
+        scrollSettleTimerRef.current = null;
+        if (focusedEditorRef.current || isEditorDomFocused()) {
+          return;
+        }
+        const nextDate = closestVisibleDate();
+        if (nextDate && nextDate !== selectedDateRef.current) {
+          onSelectDate(nextDate);
+        }
+      }, SCROLL_SETTLE_MS);
     }
 
-    suppressDateSnap();
-    focusPaneEditor(event, editorKey);
-  }
-
-  function handleEditorReadyChange(editorKey, ready) {
-    setEditorReadyByKey((current) => {
-      const next = new Map(current);
-      next.set(editorKey, ready);
-      return next;
-    });
-  }
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      if (scrollSettleTimerRef.current !== null) {
+        window.clearTimeout(scrollSettleTimerRef.current);
+        scrollSettleTimerRef.current = null;
+      }
+    };
+  }, [onSelectDate, scrollContainerRef]);
 
   return (
     <div className="stream-dual-wrap stream-dual-wrap--mobile">
@@ -246,24 +224,24 @@ export default function StreamViewMobile({
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
           const isSelected = selectedDate === dateName;
           const paneStates = streamNames.map((streamName) => {
-            const editorKey = `${streamName}/${dateName}`;
+            const editorKey = editorKeyFor(streamName, dateName);
             const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
               ? streamPageId(streamName, dateName)
               : null;
-            const focusEditorRef = editorFocusRefForKey(editorKey);
             const shouldBlur = diaryBlurEnabled
               && isDiaryStream(streamName)
               && Boolean(existingPageId)
               && focusedStreamName !== streamName;
 
             return {
-              streamName,
               editorKey,
-              focusEditorRef,
               existingPageId,
+              focusEditorRef: editorFocusRefForKey(editorKey),
               shouldBlur,
+              streamName,
             };
           });
+          const isEmpty = paneStates.every((pane) => !pane.existingPageId);
 
           return (
             <section
@@ -275,7 +253,7 @@ export default function StreamViewMobile({
                   dayRefs.current.delete(dateName);
                 }
               }}
-              className={`stream-day-entry${focusedStreamName ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}`}
+              className={`stream-day-entry stream-day-entry--ready${focusedStreamName ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}`}
             >
               <div className="stream-day-entry-header">
                 <h2 className="stream-day-entry-title">{formatDateLabel(dateName)}</h2>
@@ -287,23 +265,18 @@ export default function StreamViewMobile({
                   style={{
                     gridTemplateRows: paneStates.map((pane) => (
                       pane.streamName === focusedStreamName ? "minmax(0, 9fr)" : "minmax(0, 1fr)"
-                    )).join(" ")
-                      || "minmax(0, 1fr)",
+                    )).join(" ") || "minmax(0, 1fr)",
                   }}
                 >
                   {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
                     <div
                       key={editorKey}
                       className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
-                      onPointerDown={(event) => handlePanePointerDown(event, editorKey)}
-                      onPointerMove={handlePanePointerMove}
-                      onPointerCancel={handlePanePointerCancel}
-                      onPointerUp={(event) => handlePanePointerUp(event, editorKey)}
+                      onClick={(event) => focusPaneEditor(event, dateName, streamName, editorKey)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
                       <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
                         <StreamSingleEditor
-                          key={editorKey}
                           streamName={streamName}
                           dateName={dateName}
                           existingPageId={existingPageId}
@@ -313,18 +286,16 @@ export default function StreamViewMobile({
                           onError={onError}
                           onRefresh={onRefresh}
                           focusEditorRef={focusEditorRef}
-                          onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
                           onFocusChange={(focused) => {
                             if (focused) {
                               enterFocusMode(dateName, streamName);
                               return;
                             }
-                            setFocusedEditor((current) => {
-                              if (current?.dateName === dateName && current?.streamName === streamName) {
-                                return null;
-                              }
-                              return current;
-                            });
+                            setFocusedEditor((current) => (
+                              current?.dateName === dateName && current?.streamName === streamName
+                                ? null
+                                : current
+                            ));
                           }}
                         />
                       </div>
