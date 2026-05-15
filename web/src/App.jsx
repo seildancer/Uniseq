@@ -4,9 +4,12 @@ import Editor from "./Editor.jsx";
 import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
+import { areArraysEqual } from "./utils/arrays.js";
+import pageLeafName from "./utils/pageLeafName.js";
 import { todayDateName } from "./utils/streamDates.js";
 import {
   orderStreamNamesForDisplay,
+  readStreamName,
   readDualStreamNames,
   readSelectedStreamDate,
   shouldBumpStreamReloadToken,
@@ -43,28 +46,12 @@ function shouldShowDesktopWindowControls() {
   return !window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches;
 }
 
-function readPageLeafName(pageId) {
-  if (typeof pageId !== "string") {
-    return "";
-  }
-
-  if (pageId.startsWith("pages:")) {
-    return pageId.slice("pages:".length).split("/").at(-1) ?? pageId;
-  }
-
-  if (pageId.startsWith("stream:")) {
-    return pageId.slice("stream:".length).split("/").at(-1) ?? pageId;
-  }
-
-  return pageId;
-}
-
 function pageLabel(page) {
-  return page.title || readPageLeafName(page.page_id) || page.page_id;
+  return page.title || pageLeafName(page.page_id) || page.page_id;
 }
 
 function searchResultLabel(result) {
-  return result?.title || readPageLeafName(result?.page_id) || result?.page_id || "";
+  return result?.title || pageLeafName(result?.page_id) || result?.page_id || "";
 }
 
 function parentOrderKey(parentPageId) {
@@ -245,22 +232,6 @@ function describeSearchMatch(matchedField) {
     default:
       return "";
   }
-}
-
-function readStreamName(location) {
-  if (!location || typeof location !== "object") {
-    return null;
-  }
-
-  if ("stream" in location && location.stream?.stream_name) {
-    return location.stream.stream_name;
-  }
-
-  if ("Stream" in location && location.Stream?.stream_name) {
-    return location.Stream.stream_name;
-  }
-
-  return null;
 }
 
 function PageTree({
@@ -559,7 +530,7 @@ export default function App() {
     for (const page of pages) {
       const sName = readStreamName(page.location);
       if (!sName) continue;
-      const dName = readPageLeafName(page.page_id);
+      const dName = pageLeafName(page.page_id);
       const set = map.get(dName) ?? new Set();
       set.add(sName);
       map.set(dName, set);
@@ -592,7 +563,7 @@ export default function App() {
   function openSearchResult(result) {
     const streamName = readStreamName(result.location);
     if (streamName) {
-      handleSelectStreamSingle(streamName, readPageLeafName(result.page_id));
+      handleSelectStreamSingle(streamName, pageLeafName(result.page_id));
     } else {
       handleSelectPage(result.page_id);
     }
@@ -849,7 +820,7 @@ export default function App() {
 
   function openRenameModal(pageId) {
     setPageMenuOpenId(null);
-    setRenameValue(readPageLeafName(pageId));
+    setRenameValue(pageLeafName(pageId));
     setModal({ type: "rename", pageId });
   }
 
@@ -859,7 +830,7 @@ export default function App() {
   }
 
   function resetEditorRenameValue(page = loadedPage) {
-    setEditorRenameValue(page ? page.title || readPageLeafName(page.page_id) : "");
+    setEditorRenameValue(page ? page.title || pageLeafName(page.page_id) : "");
   }
 
   function openMoveModal(pageId) {
@@ -885,7 +856,7 @@ export default function App() {
   async function renamePage(pageId, newTitle, onSuccess) {
     const trimmedTitle = newTitle.trim();
     if (!pageId || !trimmedTitle) return;
-    if (trimmedTitle === readPageLeafName(pageId)) {
+    if (trimmedTitle === pageLeafName(pageId)) {
       onSuccess?.();
       return;
     }
@@ -988,7 +959,7 @@ export default function App() {
         pageId: modal.pageId,
         newParentPageId: newParentPageId || null,
       });
-      const leafName = readPageLeafName(modal.pageId);
+      const leafName = pageLeafName(modal.pageId);
       const newPageId = newParentPageId
         ? newParentPageId + "/" + leafName
         : "pages:" + leafName;
@@ -1126,7 +1097,7 @@ export default function App() {
     }
 
     const oldParentPageId = sourcePage.parent_page_id ?? null;
-    const leafName = readPageLeafName(sourcePageId);
+    const leafName = pageLeafName(sourcePageId);
     const newParentPageId = hover.parentPageId ?? null;
     const newPageId = newParentPageId ? `${newParentPageId}/${leafName}` : `pages:${leafName}`;
     const nextOrderParentId = hover.mode === "child" ? hover.pageId : newParentPageId;
@@ -1150,7 +1121,7 @@ export default function App() {
 
     const isSameParent = oldParentPageId === newParentPageId;
     const isStructuralMove = sourcePageId !== newPageId;
-    const isOrderChanged = JSON.stringify(currentSiblingOrder) !== JSON.stringify(nextSiblingOrder);
+    const isOrderChanged = !areArraysEqual(currentSiblingOrder, nextSiblingOrder);
 
     if (!isStructuralMove && !isOrderChanged) {
       return;
@@ -1996,7 +1967,7 @@ export default function App() {
                                 disabled={
                                   busyAction === "rename" ||
                                   !editorRenameValue.trim() ||
-                                  editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
+                                  editorRenameValue.trim() === pageLeafName(loadedPage.page_id)
                                 }
                               >
                                 <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
@@ -2033,7 +2004,7 @@ export default function App() {
                           </form>
                         ) : (
                           <h1 className="editor-title-static">
-                            {loadedPage.title || readPageLeafName(loadedPage.page_id) || loadedPage.page_id}
+                            {loadedPage.title || pageLeafName(loadedPage.page_id) || loadedPage.page_id}
                           </h1>
                         )}
                         <Editor
@@ -2129,7 +2100,7 @@ export default function App() {
                       type="button"
                       disabled={
                         !renameValue.trim() ||
-                        renameValue.trim() === readPageLeafName(modal.pageId)
+                        renameValue.trim() === pageLeafName(modal.pageId)
                       }
                       onClick={() => void handleConfirmRename(renameValue)}
                     >

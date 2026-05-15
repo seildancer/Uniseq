@@ -94,7 +94,7 @@ export default function MilkdownMarkdownEditor({
 }) {
   useEffect(() => {
     return () => { flushRef.current?.(); };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [flushRef]);
 
   return (
     <MilkdownProvider>

@@ -12,6 +12,22 @@ export function streamPageExists(streamPagesByDate, dateName, streamName) {
   return streamPagesByDate.get(dateName)?.has(streamName) ?? false;
 }
 
+export function readStreamName(location) {
+  if (!location || typeof location !== "object") {
+    return null;
+  }
+
+  if ("stream" in location && location.stream?.stream_name) {
+    return location.stream.stream_name;
+  }
+
+  if ("Stream" in location && location.Stream?.stream_name) {
+    return location.Stream.stream_name;
+  }
+
+  return null;
+}
+
 export function readSelectedStreamDate(selection, lastStreamDate) {
   return selection?.kind && selection.kind !== "page"
     ? selection.dateName

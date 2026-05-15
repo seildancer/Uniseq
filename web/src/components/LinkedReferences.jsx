@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import BlockEditor from "../BlockEditor";
-import { isDiaryStream } from "../utils/streamWorkspace.js";
+import { isDiaryStream, readStreamName } from "../utils/streamWorkspace.js";
 
 function readPageLabel(page) {
   if (!page) {
@@ -10,22 +10,6 @@ function readPageLabel(page) {
   const title = page.title || page.page_id;
   const streamName = readStreamName(page.location);
   return { title, streamName };
-}
-
-function readStreamName(location) {
-  if (!location || typeof location !== "object") {
-    return null;
-  }
-
-  if ("stream" in location && location.stream?.stream_name) {
-    return location.stream.stream_name;
-  }
-
-  if ("Stream" in location && location.Stream?.stream_name) {
-    return location.Stream.stream_name;
-  }
-
-  return null;
 }
 
 export default function LinkedReferences({

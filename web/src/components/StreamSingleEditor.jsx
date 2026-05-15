@@ -1,16 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import MilkdownMarkdownEditor from "./MilkdownMarkdownEditor";
+import { useMarkdownEditorBridge } from "../hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "../hooks/useEditorPersistence";
 import { useStreamDocumentState } from "../hooks/useStreamDocumentState";
 import { useVirtualStreamPersistence } from "../hooks/useVirtualStreamPersistence";
 
 function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConflict, onFocusChange }) {
-  const flushRef = useRef(null);
-  const onMarkdownUpdatedRef = useRef(null);
-  const editorGetRef = useRef(null);
+  const { flushRef, onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
 
   useEditorPersistence({
-    get: () => editorGetRef.current?.(),
+    get: getEditor,
     text,
     revision,
     pageId,
@@ -42,9 +41,7 @@ function VirtualStreamEditor({
   onFirstWrite,
   onFocusChange,
 }) {
-  const flushRef = useRef(null);
-  const onMarkdownUpdatedRef = useRef(null);
-  const editorGetRef = useRef(null);
+  const { flushRef, onMarkdownUpdatedRef, editorGetRef } = useMarkdownEditorBridge();
 
   useVirtualStreamPersistence({
     streamName,

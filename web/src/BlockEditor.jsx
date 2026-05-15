@@ -1,5 +1,6 @@
-import { useCallback, useRef } from "react";
+import { useCallback } from "react";
 import MilkdownMarkdownEditor from "./components/MilkdownMarkdownEditor";
+import { useMarkdownEditorBridge } from "./hooks/useMarkdownEditorBridge";
 import { useBlockEditorPersistence } from "./hooks/useBlockEditorPersistence";
 
 export default function BlockEditor({
@@ -10,9 +11,7 @@ export default function BlockEditor({
   onNotice,
   onFocusChange,
 }) {
-  const flushRef = useRef(null);
-  const onMarkdownUpdatedRef = useRef(null);
-  const editorGetRef = useRef(null);
+  const { flushRef, onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
 
   const handleConflict = useCallback(async () => {
     await onReload();
@@ -20,7 +19,7 @@ export default function BlockEditor({
   }, [onNotice, onReload]);
 
   useBlockEditorPersistence({
-    get: () => editorGetRef.current?.(),
+    get: getEditor,
     blockHandle: entry.block.handle,
     text: entry.block.markdown,
     flushRef,

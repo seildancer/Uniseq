@@ -3,6 +3,7 @@ import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
 import StreamSingleList from "./StreamSingleList.jsx";
+import { areArraysEqual } from "../utils/arrays.js";
 import {
   isDiaryStream,
   PRIMARY_STREAM_NAMES,
@@ -295,7 +296,7 @@ export default function StreamWorkspace({
       hover.mode,
     );
 
-    const didChange = JSON.stringify(nextOrderedStreamNames) !== JSON.stringify(orderedStreamNames);
+    const didChange = !areArraysEqual(nextOrderedStreamNames, orderedStreamNames);
     if (!didChange) {
       return;
     }

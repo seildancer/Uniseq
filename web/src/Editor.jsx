@@ -1,12 +1,11 @@
-import { useRef } from "react";
 import MilkdownMarkdownEditor from "./components/MilkdownMarkdownEditor";
+import { useMarkdownEditorBridge } from "./hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
 function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, onConflict }) {
-  const onMarkdownUpdatedRef = useRef(null);
-  const editorGetRef = useRef(null);
+  const { onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
 
   useEditorPersistence({
-    get: () => editorGetRef.current?.(),
+    get: getEditor,
     text,
     revision,
     pageId,
@@ -29,7 +28,7 @@ function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, 
 }
 
 export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict }) {
-  const flushRef = useRef(null);
+  const { flushRef } = useMarkdownEditorBridge();
 
   return (
     <PageEditorInner
