@@ -19,11 +19,12 @@ use crate::core::files::{
 };
 use crate::core::storage::{all_stream_names, is_supported_workspace_markdown_path};
 use crate::core::structure::{
-    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMove, PageRename,
+    IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMerge, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
-    apply_page_delete_subtree_with_update, apply_page_move_with_update,
-    apply_page_rename_with_update, apply_stream_page_create_with_update,
-    apply_stream_page_delete_with_update, recover_workspace_transactions,
+    apply_page_delete_subtree_with_update, apply_page_merge_with_update,
+    apply_page_move_with_update, apply_page_rename_with_update,
+    apply_stream_page_create_with_update, apply_stream_page_delete_with_update,
+    recover_workspace_transactions,
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -299,6 +300,15 @@ impl WorkspaceSession {
             .unwrap()
             .apply_incremental_write(|root, cache| {
                 apply_page_rename_with_update(root, cache, request)
+            })
+    }
+
+    pub fn apply_page_merge(&self, request: PageMerge) -> Result<(), CoreError> {
+        self.state
+            .write()
+            .unwrap()
+            .apply_incremental_write(|root, cache| {
+                apply_page_merge_with_update(root, cache, request)
             })
     }
 
@@ -1236,14 +1246,12 @@ fn run_native_watch_loop(
 
     loop {
         match rx.recv_timeout(poll_interval) {
-            Ok(WatchLoopMessage::Fs(Ok(event))) => {
-                match collect_native_event_burst(event, rx)? {
-                    NativeEventBurst::Events(events) => {
-                        apply_native_event_burst_once(state, &events);
-                    }
-                    NativeEventBurst::Stop => return Ok(()),
+            Ok(WatchLoopMessage::Fs(Ok(event))) => match collect_native_event_burst(event, rx)? {
+                NativeEventBurst::Events(events) => {
+                    apply_native_event_burst_once(state, &events);
                 }
-            }
+                NativeEventBurst::Stop => return Ok(()),
+            },
             Ok(WatchLoopMessage::Fs(Err(error))) => {
                 return Err(WatcherFallbackReason::NativeWatcherRuntimeFailed {
                     message: error.to_string(),
@@ -1946,6 +1954,68 @@ mod tests {
                 markdown_event(&workspace, "A___B___C.md", false),
                 markdown_event(&workspace, "A___Renamed.md", true),
                 markdown_event(&workspace, "A___Renamed___C.md", true),
+                markdown_event(&workspace, "X.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
+        session.poll_once().unwrap();
+        assert!(session.drain_events().is_empty());
+    }
+
+    #[test]
+    fn structural_merge_emits_precise_events_and_keeps_snapshot_incremental() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("A.md", "- source [[A]] and [[C]]\n");
+        workspace.write_file("B.md", "- target [[A]]\n");
+        workspace.write_file("C.md", "");
+        workspace.write_file("X.md", "- [[A]] and #A\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_merge(PageMerge {
+                source_page_id: PageId::new(["A"]).unwrap(),
+                target_page_id: PageId::new(["B"]).unwrap(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![
+                WorkspaceEvent::PagesChanged {
+                    page_ids: vec![
+                        PageId::new(["B"]).unwrap(),
+                        PageId::new(["C"]).unwrap(),
+                        PageId::new(["X"]).unwrap(),
+                    ],
+                },
+                WorkspaceEvent::PageRemoved {
+                    page_id: PageId::new(["A"]).unwrap(),
+                },
+            ]
+        );
+        assert_eq!(
+            workspace.read_file("B.md"),
+            "- target [[B]]\n\n- source [[B]] and [[C]]\n"
+        );
+        assert_eq!(workspace.read_file("X.md"), "- [[B]] and #B\n");
+        assert_eq!(
+            session
+                .page_detail(&PageId::new(["B"]).unwrap())
+                .unwrap()
+                .incoming_refs
+                .len(),
+            4
+        );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A.md", false),
+                markdown_event(&workspace, "B.md", true),
                 markdown_event(&workspace, "X.md", true),
             ])
             .unwrap();

@@ -140,6 +140,7 @@ pub enum CoreError {
     MissingPage,
     MissingDestinationParent,
     DestinationPageExists,
+    InvalidPageMerge,
     InvalidPageMove,
     UnsupportedStreamOperation { operation: &'static str },
     ConcurrentWorkspaceReconciliation,
@@ -196,6 +197,9 @@ impl fmt::Display for CoreError {
                 write!(f, "destination parent page does not exist")
             }
             Self::DestinationPageExists => write!(f, "destination page already exists"),
+            Self::InvalidPageMerge => {
+                write!(f, "page merge is not valid for this source and target")
+            }
             Self::InvalidPageMove => write!(f, "page move would create an invalid hierarchy"),
             Self::UnsupportedStreamOperation { operation } => {
                 write!(f, "stream pages do not support the '{operation}' operation")

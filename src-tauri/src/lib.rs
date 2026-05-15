@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, State};
 use uniseq_backend::{
     BlockHandle, BlockSnapshot, CoreError, FileFingerprint, FlatBlockSnapshot,
     IncomingPageRefSnapshot, LinkedRefEntry, OutgoingPageRefSnapshot, PageContentSnapshot,
-    PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMove, PageName, PageRename,
+    PageCreate, PageDeleteSubtree, PageId, PageLocation, PageMerge, PageMove, PageName, PageRename,
     PageSummary, RefHighlightSnapshot, SearchMatchField, SearchResult, SourceSpan,
     StreamPageCreate, StreamPageDelete, WatcherFallbackReason, WatcherMode, WorkspaceEvent,
     WorkspaceSession, create_workspace_root, prepare_workspace_root,
@@ -378,7 +378,10 @@ impl WorkspaceController {
             .map_err(CoreError::from)
             .map_err(ErrorDto::from)?;
         self.session()?
-            .apply_stream_page_create(StreamPageCreate { stream_name, date_name })
+            .apply_stream_page_create(StreamPageCreate {
+                stream_name,
+                date_name,
+            })
             .map_err(ErrorDto::from)?;
         self.session()?
             .page_summary(&page_id)
@@ -386,11 +389,7 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)
     }
 
-    fn delete_stream_page(
-        &self,
-        stream_name: String,
-        date_name: String,
-    ) -> CommandResult<()> {
+    fn delete_stream_page(&self, stream_name: String, date_name: String) -> CommandResult<()> {
         let stream_name = PageName::new(&stream_name)
             .map_err(CoreError::from)
             .map_err(ErrorDto::from)?;
@@ -398,7 +397,10 @@ impl WorkspaceController {
             .map_err(CoreError::from)
             .map_err(ErrorDto::from)?;
         self.session()?
-            .apply_stream_page_delete(StreamPageDelete { stream_name, date_name })
+            .apply_stream_page_delete(StreamPageDelete {
+                stream_name,
+                date_name,
+            })
             .map_err(ErrorDto::from)
     }
 
@@ -437,7 +439,9 @@ impl WorkspaceController {
         let stream_dir = workspace_root.join(stream_name_parsed.as_str());
         let _ = fs::remove_dir(&stream_dir);
 
-        Ok(DeleteStreamResultDto { deleted_page_count: deleted_count })
+        Ok(DeleteStreamResultDto {
+            deleted_page_count: deleted_count,
+        })
     }
 
     fn rename_stream(&mut self, stream_name: String, new_stream_name: String) -> CommandResult<()> {
@@ -465,10 +469,7 @@ impl WorkspaceController {
         self.reopen_workspace()
     }
 
-    fn cleanup_empty_stream_pages(
-        &self,
-        older_than_days: u64,
-    ) -> CommandResult<CleanupResultDto> {
+    fn cleanup_empty_stream_pages(&self, older_than_days: u64) -> CommandResult<CleanupResultDto> {
         let all_pages = self.session()?.all_pages();
         let mut removed_page_ids = Vec::new();
 
@@ -541,7 +542,10 @@ impl WorkspaceController {
             .map_err(CoreError::from)
             .map_err(ErrorDto::from)?;
         self.session()?
-            .apply_stream_page_create(StreamPageCreate { stream_name, date_name })
+            .apply_stream_page_create(StreamPageCreate {
+                stream_name,
+                date_name,
+            })
             .map_err(ErrorDto::from)?;
         self.session()?
             .write_and_reparse(&page_id, text, None)
@@ -607,6 +611,25 @@ impl WorkspaceController {
             })
             .map_err(ErrorDto::from)?;
         self.remove_page_order_subtree(app, &page_id_to_string(&page_id))
+    }
+
+    fn merge_page(
+        &self,
+        app: &AppHandle,
+        source_page_id: String,
+        target_page_id: String,
+    ) -> CommandResult<()> {
+        let source_page_id = parse_page_id_input(&source_page_id)
+            .map_err(|_| ErrorDto::invalid_page_id(&source_page_id))?;
+        let target_page_id = parse_page_id_input(&target_page_id)
+            .map_err(|_| ErrorDto::invalid_page_id(&target_page_id))?;
+        self.session()?
+            .apply_page_merge(PageMerge {
+                source_page_id: source_page_id.clone(),
+                target_page_id,
+            })
+            .map_err(ErrorDto::from)?;
+        self.remove_page_order_subtree(app, &page_id_to_string(&source_page_id))
     }
 
     fn set_page_sibling_order(
@@ -1148,6 +1171,11 @@ impl From<CoreError> for ErrorDto {
                 message: "destination page already exists".to_owned(),
                 path: None,
             },
+            CoreError::InvalidPageMerge => Self {
+                code: "invalid_page_merge",
+                message: "page merge is not valid for this source and target".to_owned(),
+                path: None,
+            },
             CoreError::InvalidPageMove => Self {
                 code: "invalid_page_move",
                 message: "page move would create an invalid hierarchy".to_owned(),
@@ -1395,6 +1423,20 @@ fn delete_page(state: State<'_, AppState>, app: AppHandle, page_id: String) -> C
 }
 
 #[tauri::command]
+fn merge_page(
+    state: State<'_, AppState>,
+    app: AppHandle,
+    source_page_id: String,
+    target_page_id: String,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .merge_page(&app, source_page_id, target_page_id)
+}
+
+#[tauri::command]
 fn set_page_sibling_order(
     state: State<'_, AppState>,
     app: AppHandle,
@@ -1500,6 +1542,7 @@ pub fn run() {
             rename_page,
             move_page,
             delete_page,
+            merge_page,
             set_page_sibling_order,
             page_incoming_refs,
             page_outgoing_refs,
@@ -1920,7 +1963,12 @@ mod tests {
         assert_eq!(results[0].matched_field, "title");
         assert_eq!(results[1].page_id, "pages:Beta");
         assert_eq!(results[1].matched_field, "content");
-        assert!(results[1].snippet.as_ref().is_some_and(|snippet| snippet.contains("alpha")));
+        assert!(
+            results[1]
+                .snippet
+                .as_ref()
+                .is_some_and(|snippet| snippet.contains("alpha"))
+        );
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
@@ -2021,13 +2069,19 @@ mod tests {
         assert!(!root.join("scratch").exists());
         assert_eq!(
             controller.all_streams().unwrap(),
-            vec!["diary".to_owned(), "ideas".to_owned(), "journals".to_owned()]
+            vec![
+                "diary".to_owned(),
+                "ideas".to_owned(),
+                "journals".to_owned()
+            ]
         );
-        assert!(controller
-            .all_pages()
-            .unwrap()
-            .iter()
-            .any(|page| page.page_id == "stream:ideas/2026_05_14"));
+        assert!(
+            controller
+                .all_pages()
+                .unwrap()
+                .iter()
+                .any(|page| page.page_id == "stream:ideas/2026_05_14")
+        );
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);

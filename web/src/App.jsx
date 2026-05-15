@@ -889,7 +889,25 @@ export default function App() {
       await loadWorkspaceLists();
       onSuccess?.(newPageId);
     } catch (error) {
-      setActionError(normalizeError(error));
+      const normalized = normalizeError(error);
+      if (normalized.code === "destination_page_exists") {
+        const sourcePage = regularPages.find((page) => page.page_id === pageId);
+        if (!sourcePage || sourcePage.child_page_count > 0) {
+          setActionError(normalized);
+        } else {
+          const targetPageId = renamedPageIdForTitle(pageId, trimmedTitle);
+          const targetPage = regularPages.find((page) => page.page_id === targetPageId);
+          setModal({
+            type: "merge_page",
+            sourcePageId: pageId,
+            targetPageId,
+            sourceTitle: pageLabel(sourcePage),
+            targetTitle: pageLabel(targetPage ?? { page_id: targetPageId }),
+          });
+        }
+      } else {
+        setActionError(normalized);
+      }
     } finally {
       setBusyAction("");
     }
@@ -990,6 +1008,38 @@ export default function App() {
         setLoadedPageId(null);
       }
       await loadWorkspaceLists();
+      closeModal();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleConfirmMergePage() {
+    if (modal?.type !== "merge_page") return;
+    const { sourcePageId, targetPageId } = modal;
+    const shouldActivateTarget = selectedPageId === sourcePageId || loadedPageId === sourcePageId;
+    setBusyAction("merge");
+    setActionError(null);
+    try {
+      await invoke("merge_page", { sourcePageId, targetPageId });
+      setPageOrderByParent((current) => removePageOrderEntries(current, sourcePageId));
+      setSelection((current) => (
+        current.kind === "page" && current.pageId === sourcePageId
+          ? { kind: "page", pageId: targetPageId }
+          : current
+      ));
+      if (loadedPageId === sourcePageId) {
+        setLoadedPageId(targetPageId);
+      }
+      await loadWorkspaceLists();
+      if (shouldActivateTarget) {
+        await Promise.all([
+          loadPageContent(targetPageId),
+          loadPageLinkedRefs(targetPageId),
+        ]);
+      }
       closeModal();
     } catch (error) {
       setActionError(normalizeError(error));
@@ -2175,6 +2225,30 @@ export default function App() {
                       onClick={() => void handleCreatePage(renameValue)}
                     >
                       {busyAction === "create" ? "Creating..." : "Create"}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {modal.type === "merge_page" && (
+                <>
+                  <h3>Merge page</h3>
+                  <p>
+                    <strong>{modal.sourceTitle}</strong> will be appended to{" "}
+                    <strong>{modal.targetTitle}</strong>, all references updated, and the
+                    original page deleted. This cannot be undone.
+                  </p>
+                  <div className="modal-actions">
+                    <button className="secondary-button" type="button" onClick={closeModal}>
+                      Cancel
+                    </button>
+                    <button
+                      className="primary-button"
+                      type="button"
+                      disabled={busyAction === "merge"}
+                      onClick={() => void handleConfirmMergePage()}
+                    >
+                      {busyAction === "merge" ? "Merging..." : "Merge"}
                     </button>
                   </div>
                 </>

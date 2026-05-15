@@ -30,8 +30,8 @@ pub use session::{WatcherFallbackReason, WatcherMode, WorkspaceEvent, WorkspaceS
 pub use span::SourceSpan;
 pub use storage::{create_workspace_root, prepare_workspace_root, validate_workspace_folder_name};
 pub use structure::{
-    PageCreate, PageDeleteSubtree, PageMove, PageRename, StreamPageCreate, StreamPageDelete,
-    apply_page_create, apply_page_delete_subtree, apply_page_move, apply_page_rename,
-    apply_stream_page_create, apply_stream_page_delete,
+    PageCreate, PageDeleteSubtree, PageMerge, PageMove, PageRename, StreamPageCreate,
+    StreamPageDelete, apply_page_create, apply_page_delete_subtree, apply_page_merge,
+    apply_page_move, apply_page_rename, apply_stream_page_create, apply_stream_page_delete,
 };
 pub use workspace::WorkspaceCache;

@@ -272,7 +272,7 @@ fn plan_file_change(
     }))
 }
 
-fn rewrite_page_refs<'a>(
+pub(super) fn rewrite_page_refs<'a>(
     text: &str,
     refs: impl Iterator<Item = &'a PageRefOccurrence>,
     moved_page_ids: &BTreeMap<PageId, PageId>,

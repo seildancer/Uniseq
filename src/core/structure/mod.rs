@@ -1,7 +1,7 @@
 mod planning;
 mod transaction;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -34,6 +34,12 @@ pub struct PageCreate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageDeleteSubtree {
     pub page_id: PageId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageMerge {
+    pub source_page_id: PageId,
+    pub target_page_id: PageId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,6 +142,14 @@ pub fn apply_stream_page_delete(
     request: StreamPageDelete,
 ) -> Result<(), CoreError> {
     apply_stream_page_delete_with_update(root, cache, request).map(|_| ())
+}
+
+pub fn apply_page_merge(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageMerge,
+) -> Result<(), CoreError> {
+    apply_page_merge_with_update(root, cache, request).map(|_| ())
 }
 
 pub fn apply_page_rename(
@@ -313,6 +327,125 @@ pub(crate) fn apply_stream_page_delete_with_update(
         deleted_paths: vec![page.workspace_path.clone()],
         changed_page_ids,
         removed_page_ids: vec![page_id],
+    })
+}
+
+pub(crate) fn apply_page_merge_with_update(
+    root: impl AsRef<Path>,
+    cache: &mut WorkspaceCache,
+    request: PageMerge,
+) -> Result<IncrementalWorkspaceUpdate, CoreError> {
+    let root = root.as_ref();
+    recover_workspace_transactions(root, cache)?;
+    validate_page_merge_request(cache, &request)?;
+
+    let source_page = cache
+        .page(&request.source_page_id)
+        .ok_or(CoreError::MissingPage)?
+        .clone();
+    let target_page = cache
+        .page(&request.target_page_id)
+        .ok_or(CoreError::MissingPage)?
+        .clone();
+
+    let rewrite_map = BTreeMap::from([(
+        request.source_page_id.clone(),
+        request.target_page_id.clone(),
+    )]);
+    let rewritten_source_text =
+        planning::rewrite_page_refs(&source_page.text, source_page.outgoing_refs(), &rewrite_map)?;
+    let rewritten_target_text =
+        planning::rewrite_page_refs(&target_page.text, target_page.outgoing_refs(), &rewrite_map)?;
+    let merged_text = merge_page_texts(&rewritten_target_text, &rewritten_source_text);
+    let updated_target = page_from_markdown_in_location(
+        request.target_page_id.clone(),
+        target_page.location.clone(),
+        merged_text,
+    )?;
+
+    let mut rewritten_pages = Vec::new();
+    for referrer_id in pages_referring_to_any(cache, std::iter::once(&request.source_page_id))? {
+        if referrer_id == request.source_page_id || referrer_id == request.target_page_id {
+            continue;
+        }
+
+        let referrer = cache
+            .page(&referrer_id)
+            .ok_or(CoreError::MissingPage)?
+            .clone();
+        let rewritten =
+            planning::rewrite_page_refs(&referrer.text, referrer.outgoing_refs(), &rewrite_map)?;
+        if rewritten == referrer.text {
+            continue;
+        }
+
+        let updated = page_from_markdown_in_location(
+            referrer.page_id.clone(),
+            referrer.location.clone(),
+            rewritten,
+        )?;
+        rewritten_pages.push((referrer, updated));
+    }
+
+    let mut expected_source_files = vec![
+        expected_source_file(&source_page),
+        expected_source_file(&target_page),
+    ];
+    expected_source_files.extend(
+        rewritten_pages
+            .iter()
+            .map(|(page, _)| expected_source_file(page)),
+    );
+    validate_expected_source_files(root, &expected_source_files)?;
+
+    let target_abs = root.join(&target_page.workspace_path);
+    fs::write(&target_abs, &updated_target.text)
+        .map_err(|error| CoreError::io(&target_abs, &error))?;
+
+    let mut written_paths = vec![target_page.workspace_path.clone()];
+    for (_, updated) in &rewritten_pages {
+        let page_abs = root.join(&updated.workspace_path);
+        fs::write(&page_abs, &updated.text).map_err(|error| CoreError::io(&page_abs, &error))?;
+        written_paths.push(updated.workspace_path.clone());
+    }
+
+    let source_abs = root.join(&source_page.workspace_path);
+    match fs::remove_file(&source_abs) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(CoreError::StructuralConflict {
+                path: source_page.workspace_path.clone(),
+            });
+        }
+        Err(error) => return Err(CoreError::io(&source_abs, &error)),
+    }
+
+    let mut changed_page_ids =
+        changed_page_ids_for_updated_page(cache, &target_page, &updated_target)?;
+    for (page, updated) in &rewritten_pages {
+        changed_page_ids.extend(changed_page_ids_for_updated_page(cache, page, updated)?);
+    }
+    if let Some(parent_page_id) = source_page.parent_page_id() {
+        if parent_page_id != request.source_page_id
+            && parent_page_id != request.target_page_id
+            && cache.page(&parent_page_id).is_some()
+        {
+            changed_page_ids.insert(parent_page_id);
+        }
+    }
+    changed_page_ids.remove(&request.source_page_id);
+
+    cache.refresh_page_content(updated_target);
+    for (_, updated) in rewritten_pages {
+        cache.refresh_page_content(updated);
+    }
+    cache.remove_page(&request.source_page_id);
+
+    Ok(IncrementalWorkspaceUpdate {
+        written_paths,
+        deleted_paths: vec![source_page.workspace_path.clone()],
+        changed_page_ids: changed_page_ids.into_iter().collect(),
+        removed_page_ids: vec![request.source_page_id],
     })
 }
 
@@ -593,6 +726,105 @@ fn pages_referring_to_any<'a>(
     }
 
     Ok(source_page_ids.into_iter().collect())
+}
+
+fn validate_page_merge_request(
+    cache: &WorkspaceCache,
+    request: &PageMerge,
+) -> Result<(), CoreError> {
+    if request.source_page_id == request.target_page_id {
+        return Err(CoreError::InvalidPageMerge);
+    }
+
+    reject_stream_page_operation(cache, &request.source_page_id, "merge")?;
+    reject_stream_page_operation(cache, &request.target_page_id, "merge")?;
+
+    let source_page = cache
+        .page(&request.source_page_id)
+        .ok_or(CoreError::MissingPage)?;
+    cache
+        .page(&request.target_page_id)
+        .ok_or(CoreError::MissingPage)?;
+
+    if !source_page.child_page_ids.is_empty() {
+        return Err(CoreError::InvalidPageMerge);
+    }
+
+    Ok(())
+}
+
+fn merge_page_texts(target_text: &str, source_text: &str) -> String {
+    if source_text.is_empty() {
+        return target_text.to_owned();
+    }
+    if target_text.is_empty() {
+        return source_text.to_owned();
+    }
+    if target_text.ends_with('\n') {
+        format!("{target_text}\n{source_text}")
+    } else {
+        format!("{target_text}\n\n{source_text}")
+    }
+}
+
+fn expected_source_file(page: &crate::core::Page) -> planning::ExpectedSourceFile {
+    planning::ExpectedSourceFile {
+        workspace_path: page.workspace_path.clone(),
+        fingerprint: page.fingerprint,
+    }
+}
+
+fn validate_expected_source_files(
+    root: &Path,
+    expected_source_files: &[planning::ExpectedSourceFile],
+) -> Result<(), CoreError> {
+    for expected in expected_source_files {
+        let absolute_path = root.join(&expected.workspace_path);
+        let disk_text = match fs::read_to_string(&absolute_path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err(CoreError::StructuralConflict {
+                    path: expected.workspace_path.clone(),
+                });
+            }
+            Err(error) => return Err(CoreError::io(&absolute_path, &error)),
+        };
+
+        if crate::core::FileFingerprint::from_text(&disk_text) != expected.fingerprint {
+            return Err(CoreError::StructuralConflict {
+                path: expected.workspace_path.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn changed_page_ids_for_updated_page(
+    cache: &WorkspaceCache,
+    old_page: &crate::core::Page,
+    new_page: &crate::core::Page,
+) -> Result<BTreeSet<PageId>, CoreError> {
+    let mut changed_page_ids = BTreeSet::from([new_page.page_id.clone()]);
+    let mut affected_target_page_ids = target_page_ids_from_page(old_page);
+    affected_target_page_ids.extend(target_page_ids_from_page(new_page));
+
+    changed_page_ids.extend(
+        affected_target_page_ids
+            .iter()
+            .filter(|page_id| **page_id == new_page.page_id || cache.page(*page_id).is_some())
+            .cloned(),
+    );
+    changed_page_ids
+        .extend(pages_referring_to_any(cache, affected_target_page_ids.iter())?.into_iter());
+
+    Ok(changed_page_ids)
+}
+
+fn target_page_ids_from_page(page: &crate::core::Page) -> BTreeSet<PageId> {
+    page.outgoing_refs()
+        .map(|outgoing_ref| outgoing_ref.target_page_id.clone())
+        .collect()
 }
 
 fn stream_page_id(stream_name: &PageName, date_name: &PageName) -> Result<PageId, CoreError> {
@@ -907,6 +1139,24 @@ mod tests {
             move_error,
             CoreError::UnsupportedStreamOperation { operation: "move" }
         );
+
+        let merge_error = apply_page_merge(
+            &workspace.root,
+            &mut cache,
+            PageMerge {
+                source_page_id: PageId::stream(
+                    PageName::new("journal").unwrap(),
+                    PageName::new("2026_05_07").unwrap(),
+                )
+                .unwrap(),
+                target_page_id: PageId::new(["A"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            merge_error,
+            CoreError::UnsupportedStreamOperation { operation: "merge" }
+        );
     }
 
     #[test]
@@ -986,6 +1236,122 @@ mod tests {
             }
         );
         assert!(workspace.file_exists("A___B.md"));
+    }
+
+    #[test]
+    fn merge_appends_content_and_rewrites_refs() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "- source [[A]] and [[C]]\n");
+        workspace.write_file("B.md", "- target [[A]]\n");
+        workspace.write_file("C.md", "");
+        workspace.write_file("X.md", "- [[A]] and #A\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        apply_page_merge(
+            &workspace.root,
+            &mut cache,
+            PageMerge {
+                source_page_id: PageId::new(["A"]).unwrap(),
+                target_page_id: PageId::new(["B"]).unwrap(),
+            },
+        )
+        .unwrap();
+
+        assert!(!workspace.file_exists("A.md"));
+        assert_eq!(
+            workspace.read_file("B.md"),
+            "- target [[B]]\n\n- source [[B]] and [[C]]\n"
+        );
+        assert_eq!(workspace.read_file("X.md"), "- [[B]] and #B\n");
+        assert!(cache.page(&PageId::new(["A"]).unwrap()).is_none());
+
+        let read_api = WorkspaceReadApi::new(&cache, &|_| None);
+        let outgoing_refs = read_api
+            .page_outgoing_refs(&PageId::new(["B"]).unwrap())
+            .unwrap();
+        assert_eq!(outgoing_refs.len(), 3);
+        assert_eq!(outgoing_refs[0].target_page_id, PageId::new(["B"]).unwrap());
+        assert!(outgoing_refs[0].target_exists);
+        assert_eq!(outgoing_refs[1].target_page_id, PageId::new(["B"]).unwrap());
+        assert!(outgoing_refs[1].target_exists);
+        assert_eq!(outgoing_refs[2].target_page_id, PageId::new(["C"]).unwrap());
+        assert!(outgoing_refs[2].target_exists);
+
+        let incoming_refs = read_api
+            .page_incoming_refs(&PageId::new(["B"]).unwrap())
+            .unwrap();
+        assert_eq!(incoming_refs.len(), 4);
+    }
+
+    #[test]
+    fn merge_rejects_same_source_and_target() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "- body\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        let error = apply_page_merge(
+            &workspace.root,
+            &mut cache,
+            PageMerge {
+                source_page_id: PageId::new(["A"]).unwrap(),
+                target_page_id: PageId::new(["A"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::InvalidPageMerge);
+    }
+
+    #[test]
+    fn merge_rejects_source_pages_with_children() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "- body\n");
+        workspace.write_file("A___Child.md", "- child\n");
+        workspace.write_file("B.md", "");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        let error = apply_page_merge(
+            &workspace.root,
+            &mut cache,
+            PageMerge {
+                source_page_id: PageId::new(["A"]).unwrap(),
+                target_page_id: PageId::new(["B"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, CoreError::InvalidPageMerge);
+    }
+
+    #[test]
+    fn merge_rejects_stale_referrer_source_before_write() {
+        let workspace = TestWorkspace::new("uniseq-structure");
+        workspace.write_file("A.md", "- body\n");
+        workspace.write_file("B.md", "- target\n");
+        workspace.write_file("X.md", "- [[A]]\n");
+
+        let mut cache = discover_workspace(&workspace.root).unwrap().cache;
+        workspace.write_file("X.md", "- [[A]] and updated\n");
+
+        let error = apply_page_merge(
+            &workspace.root,
+            &mut cache,
+            PageMerge {
+                source_page_id: PageId::new(["A"]).unwrap(),
+                target_page_id: PageId::new(["B"]).unwrap(),
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            CoreError::StructuralConflict {
+                path: workspace_test_relative_path("X.md"),
+            }
+        );
+        assert_eq!(workspace.read_file("A.md"), "- body\n");
+        assert_eq!(workspace.read_file("B.md"), "- target\n");
+        assert_eq!(workspace.read_file("X.md"), "- [[A]] and updated\n");
     }
 
     #[test]
