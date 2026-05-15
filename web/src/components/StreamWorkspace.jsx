@@ -17,6 +17,7 @@ const STREAM_DRAG_MOVE_SLOP_PX = 8;
 export default function StreamWorkspace({
   streamSelection,
   selectedStreamDate,
+  isMobile = false,
   orderedStreamNames,
   dualStreamNames,
   streamPagesByDate,
@@ -173,6 +174,7 @@ export default function StreamWorkspace({
       streamSelection.kind === "stream_dual" ? (
         <StreamDualEditor
           selectedDate={selectedStreamDate}
+          isMobile={isMobile}
           dualStreamNames={dualStreamNames}
           streamPagesByDate={streamPagesByDate}
           pages={regularPages}
@@ -181,12 +183,14 @@ export default function StreamWorkspace({
           onNavigate={onNavigatePage}
           onError={onError}
           onRefresh={onRefresh}
+          onSelectDate={onSelectStreamDual}
           diaryBlurEnabled={diaryBlurEnabled}
         />
       ) : (
         <StreamSingleList
           streamName={streamSelection.streamName}
           selectedDate={selectedStreamDate}
+          isMobile={isMobile}
           streamPagesByDate={streamPagesByDate}
           pages={regularPages}
           reloadToken={streamReloadToken}
@@ -194,6 +198,7 @@ export default function StreamWorkspace({
           onNavigate={onNavigatePage}
           onError={onError}
           onRefresh={onRefresh}
+          onSelectDate={(dateName) => onSelectStreamSingle(streamSelection.streamName, dateName)}
           diaryBlurEnabled={diaryBlurEnabled}
         />
       )
@@ -579,7 +584,10 @@ export default function StreamWorkspace({
       {streamSelection ? (
         <section className="editor-panel editor-panel--stream">
           {panelChrome(breadcrumbItemsForStreamSelection(streamSelection))}
-          <div ref={editorScrollRef} className="editor-panel-scroll">
+          <div
+            ref={editorScrollRef}
+            className={`editor-panel-scroll${isMobile ? " editor-panel-scroll--mobile-stream" : ""}`}
+          >
             {streamEditor}
           </div>
         </section>

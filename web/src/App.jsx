@@ -1948,6 +1948,7 @@ export default function App() {
               <StreamWorkspace
                 streamSelection={streamSelection}
                 selectedStreamDate={selectedStreamDate}
+                isMobile={isMobile}
                 orderedStreamNames={orderedStreamNames}
                 dualStreamNames={dualStreamNames}
                 streamPagesByDate={streamPagesByDate}

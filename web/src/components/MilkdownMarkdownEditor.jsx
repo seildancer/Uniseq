@@ -1,10 +1,11 @@
 import { useContext, useEffect, useRef } from "react";
-import { Editor, rootCtx, defaultValueCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
 import { gfm } from "@milkdown/preset-gfm";
 import { history } from "@milkdown/plugin-history";
 import { listener, listenerCtx } from "@milkdown/plugin-listener";
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react";
+import { TextSelection } from "prosemirror-state";
 import breaks from "remark-breaks";
 
 import createBackspacePlugin from "../plugins/backspacePlugin";
@@ -26,6 +27,7 @@ function MilkdownMarkdownEditorInner({
   onMarkdownUpdatedRef,
   className,
   editorGetRef,
+  focusEditorRef,
   onFocusChange,
 }) {
   const workspaceRoot = useContext(WorkspaceContext);
@@ -71,6 +73,37 @@ function MilkdownMarkdownEditorInner({
     editorGetRef.current = get;
   }
 
+  useEffect(() => {
+    if (!focusEditorRef) {
+      return undefined;
+    }
+
+    const focusEditor = ({ atEnd = true } = {}) => {
+      const editor = get();
+      if (!editor) {
+        return false;
+      }
+
+      const view = editor.action((ctx) => ctx.get(editorViewCtx));
+      if (atEnd) {
+        view.dispatch(
+          view.state.tr
+            .setSelection(TextSelection.atEnd(view.state.doc))
+            .scrollIntoView(),
+        );
+      }
+      view.focus();
+      return true;
+    };
+
+    focusEditorRef.current = focusEditor;
+    return () => {
+      if (focusEditorRef.current === focusEditor) {
+        focusEditorRef.current = null;
+      }
+    };
+  }, [focusEditorRef, get]);
+
   return (
     <AutocompleteEditor get={get} pages={pages} className={className} onFocusChange={onFocusChange}>
       <Milkdown />
@@ -87,6 +120,7 @@ export default function MilkdownMarkdownEditor({
   onMarkdownUpdatedRef,
   className = "milkdown-editor",
   editorGetRef = null,
+  focusEditorRef = null,
   onFocusChange = null,
 }) {
   useEffect(() => {
@@ -103,6 +137,7 @@ export default function MilkdownMarkdownEditor({
         onMarkdownUpdatedRef={onMarkdownUpdatedRef}
         className={className}
         editorGetRef={editorGetRef}
+        focusEditorRef={focusEditorRef}
         onFocusChange={onFocusChange}
       />
     </MilkdownProvider>

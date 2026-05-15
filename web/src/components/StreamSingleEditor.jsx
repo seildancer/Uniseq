@@ -5,7 +5,16 @@ import { useEditorPersistence } from "../hooks/useEditorPersistence";
 import { useStreamDocumentState } from "../hooks/useStreamDocumentState";
 import { useVirtualStreamPersistence } from "../hooks/useVirtualStreamPersistence";
 
-function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConflict, onFocusChange }) {
+function BackedStreamEditor({
+  pageId,
+  text,
+  revision,
+  pages,
+  onNavigate,
+  onConflict,
+  focusEditorRef,
+  onFocusChange,
+}) {
   const { flushRef, onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
 
   useEditorPersistence({
@@ -27,6 +36,7 @@ function BackedStreamEditor({ pageId, text, revision, pages, onNavigate, onConfl
       flushRef={flushRef}
       onMarkdownUpdatedRef={onMarkdownUpdatedRef}
       editorGetRef={editorGetRef}
+      focusEditorRef={focusEditorRef}
       onFocusChange={onFocusChange}
     />
   );
@@ -39,6 +49,7 @@ function VirtualStreamEditor({
   onNavigate,
   onError,
   onFirstWrite,
+  focusEditorRef,
   onFocusChange,
 }) {
   const { flushRef, onMarkdownUpdatedRef, editorGetRef } = useMarkdownEditorBridge();
@@ -61,6 +72,7 @@ function VirtualStreamEditor({
       flushRef={flushRef}
       onMarkdownUpdatedRef={onMarkdownUpdatedRef}
       editorGetRef={editorGetRef}
+      focusEditorRef={focusEditorRef}
       onFocusChange={onFocusChange}
     />
   );
@@ -75,6 +87,7 @@ export default function StreamSingleEditor({
   onNavigate,
   onError,
   onRefresh,
+  focusEditorRef,
   onFocusChange,
   onReadyChange,
 }) {
@@ -116,6 +129,7 @@ export default function StreamSingleEditor({
         pages={pages}
         onNavigate={onNavigate}
         onConflict={handleConflictReload}
+        focusEditorRef={focusEditorRef}
         onFocusChange={onFocusChange}
       />
     );
@@ -130,6 +144,7 @@ export default function StreamSingleEditor({
       onNavigate={onNavigate}
       onError={onError}
       onFirstWrite={handleFirstWrite}
+      focusEditorRef={focusEditorRef}
       onFocusChange={onFocusChange}
     />
   );

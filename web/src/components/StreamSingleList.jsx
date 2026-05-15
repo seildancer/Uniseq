@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
+import { useMobileStreamDatePager } from "../hooks/useMobileStreamDatePager.js";
 import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import { isDiaryStream, streamPageExists, streamPageId } from "../utils/streamWorkspace.js";
 
 export default function StreamSingleList({
   streamName,
   selectedDate,
+  isMobile = false,
   streamPagesByDate,
   pages,
   reloadToken,
@@ -14,22 +16,28 @@ export default function StreamSingleList({
   onNavigate,
   onError,
   onRefresh,
+  onSelectDate,
   diaryBlurEnabled = true,
 }) {
   const [focusedDateName, setFocusedDateName] = useState(null);
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
+  const editorFocusRef = useRef(null);
   const restoreDateAfterBlurRef = useRef(null);
   const latestDateName = useMemo(
     () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
     [selectedDate, streamPagesByDate],
   );
-  const { visibleDates } = useLazyStreamDateRange({
+  const { visibleDates: lazyVisibleDates } = useLazyStreamDateRange({
     selectedDate,
     latestDateName,
     scrollContainerRef,
-    disabled: Boolean(focusedDateName),
+    disabled: isMobile || Boolean(focusedDateName),
   });
+  const visibleDates = useMemo(
+    () => (isMobile ? [selectedDate] : lazyVisibleDates),
+    [isMobile, lazyVisibleDates, selectedDate],
+  );
   const pendingSelectedScrollRef = useRef(selectedDate);
   const selectedScrollStartedRef = useRef(false);
   const selectedScrollGenerationRef = useRef(0);
@@ -41,6 +49,14 @@ export default function StreamSingleList({
       selectedScrollRafRef.current = null;
     }
   }
+
+  useMobileStreamDatePager({
+    enabled: isMobile,
+    selectedDate,
+    latestDateName,
+    scrollContainerRef,
+    onSelectDate,
+  });
 
   function isDateReady(dateName) {
     const editorKey = `${streamName}/${dateName}`;
@@ -108,9 +124,9 @@ export default function StreamSingleList({
 
     const container = scrollContainerRef.current;
     if (container) {
-      container.scrollTo({ top: container.scrollTop, behavior: "auto" });
+      container.scrollTo({ top: isMobile ? 0 : container.scrollTop, behavior: "auto" });
     }
-  }, [selectedDate, scrollContainerRef]);
+  }, [isMobile, selectedDate, scrollContainerRef]);
 
   useEffect(() => () => {
     cancelSelectedScrollFrame();
@@ -174,12 +190,17 @@ export default function StreamSingleList({
     if (event.target.closest?.(".ProseMirror")) {
       return;
     }
-    const editor = event.currentTarget.querySelector(".ProseMirror");
-    if (!editor) {
+    if (event.button !== undefined && event.button !== 0) {
       return;
     }
-    event.preventDefault();
-    editor.focus();
+
+    const didFocus = editorFocusRef.current?.({ atEnd: true });
+    if (!didFocus) {
+      event.currentTarget.querySelector(".ProseMirror")?.focus();
+    }
+    if (event.pointerType === "mouse") {
+      event.preventDefault();
+    }
   }
 
   function handleEditorReadyChange(editorKey, ready) {
@@ -203,7 +224,7 @@ export default function StreamSingleList({
   }
 
   return (
-    <div className={`stream-day-list${focusedDateName ? " stream-day-list--has-focus" : ""}`}>
+    <div className={`stream-day-list${isMobile ? " stream-day-list--mobile-single" : ""}${focusedDateName ? " stream-day-list--has-focus" : ""}`}>
       {visibleDates.map((dateName) => {
         const editorKey = `${streamName}/${dateName}`;
         const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
@@ -233,7 +254,7 @@ export default function StreamSingleList({
               <h2 className="stream-day-entry-title">{formatDateLabel(dateName)}</h2>
             </div>
             <div className="stream-day-entry-body">
-              <div className="stream-single-pane" onMouseDown={focusPaneEditor}>
+              <div className="stream-single-pane" onPointerDown={focusPaneEditor}>
                 <p className="stream-panel-label">{streamName}</p>
                 <div className={`stream-editor-pane${shouldBlurDiary ? " stream-editor-pane--privacy-blurred" : ""}`}>
                   <StreamSingleEditor
@@ -245,6 +266,7 @@ export default function StreamSingleList({
                     onNavigate={onNavigate}
                     onError={onError}
                     onRefresh={onRefresh}
+                    focusEditorRef={editorFocusRef}
                     onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
                     onFocusChange={(focused) => {
                       if (focused) {
