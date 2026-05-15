@@ -786,6 +786,7 @@ export default function App() {
     }
     setSelection({ kind: "page", pageId });
     setActionError(null);
+    if (isMobile) setSidebarCollapsed(true);
   }
 
   async function handleCreateStream(streamName) {
@@ -840,6 +841,7 @@ export default function App() {
     setSelection({ kind: "stream_dual", dateName });
     setActionError(null);
     void refreshStreamWorkspace();
+    if (isMobile) setSidebarCollapsed(true);
   }
 
   function handleSelectStreamSingle(streamName, dateName) {
@@ -847,6 +849,7 @@ export default function App() {
     setSelection({ kind: "stream_single", streamName, dateName });
     setActionError(null);
     void refreshStreamWorkspace();
+    if (isMobile) setSidebarCollapsed(true);
   }
 
   function handleTogglePageTree(pageId) {

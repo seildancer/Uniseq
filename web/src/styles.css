@@ -2601,6 +2601,31 @@ code {
     margin: 0 -18px 8px;
     padding-left: 48px;
   }
+
+  .onboard-topbar {
+    height: calc(56px + env(safe-area-inset-top, 0px));
+  }
+
+  .workspace-sidebar-chrome {
+    min-height: 56px;
+  }
+
+  .window-control-icon {
+    width: 18px;
+    height: 18px;
+  }
+
+  .workspace-sidebar-icon {
+    width: 22px;
+    height: 22px;
+  }
+
+  .workspace-sidebar-control-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+  }
 }
 
 .modal-overlay {
