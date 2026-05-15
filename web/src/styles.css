@@ -378,6 +378,7 @@ h2 {
 .window-controls {
   display: flex;
   align-items: stretch;
+  align-self: stretch;
 }
 
 .window-control-button {
