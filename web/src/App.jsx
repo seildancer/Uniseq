@@ -272,6 +272,7 @@ function PageTree({
   onRename,
   onMove,
   onDelete,
+  onAddSubpage,
   pickerMode = false,
   pickerValue = "",
   onPickerSelect,
@@ -401,6 +402,7 @@ function PageTree({
                     className="page-tree-action-btn"
                     type="button"
                     aria-label="Add subpage"
+                    onClick={() => onAddSubpage?.(page.page_id)}
                   >
                     +
                   </button>
@@ -421,6 +423,7 @@ function PageTree({
                 onRename={onRename}
                 onMove={onMove}
                 onDelete={onDelete}
+                onAddSubpage={onAddSubpage}
                 pickerMode={pickerMode}
                 pickerValue={pickerValue}
                 onPickerSelect={onPickerSelect}
@@ -800,10 +803,10 @@ export default function App() {
     setStreamOrder(nextOrderedStreamNames);
   }
 
-  async function handleCreatePage(title) {
+  async function handleCreatePage(title, parentPageId) {
     const trimmed = title.trim();
     if (!trimmed) return;
-    const pageId = `pages:${trimmed}`;
+    const pageId = parentPageId ? `${parentPageId}/${trimmed}` : `pages:${trimmed}`;
     setBusyAction("create");
     setActionError(null);
     try {
@@ -1929,6 +1932,10 @@ export default function App() {
                         onRename={openRenameModal}
                         onMove={openMoveModal}
                         onDelete={openDeleteModal}
+                        onAddSubpage={(parentPageId) => {
+                          setRenameValue("");
+                          setModal({ type: "new_page", parentPageId });
+                        }}
                         dragState={dragState?.active ? dragState : null}
                         onDragItemPointerDown={handleDragItemPointerDown}
                       />
@@ -2199,7 +2206,7 @@ export default function App() {
 
               {modal.type === "new_page" && (
                 <>
-                  <h3>New page</h3>
+                  <h3>{modal.parentPageId ? "New subpage" : "New page"}</h3>
                   <div className="field">
                     <input
                       type="text"
@@ -2210,7 +2217,7 @@ export default function App() {
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
                           e.preventDefault();
-                          void handleCreatePage(renameValue);
+                          void handleCreatePage(renameValue, modal.parentPageId);
                         }
                         if (e.key === "Escape") {
                           closeModal();
@@ -2230,7 +2237,7 @@ export default function App() {
                       className="primary-button"
                       type="button"
                       disabled={busyAction === "create" || !renameValue.trim()}
-                      onClick={() => void handleCreatePage(renameValue)}
+                      onClick={() => void handleCreatePage(renameValue, modal.parentPageId)}
                     >
                       {busyAction === "create" ? "Creating..." : "Create"}
                     </button>
