@@ -96,7 +96,9 @@ export default function SidebarCalendar({ selectedDate, streamPagesByDate, onSel
           aria-label="Previous month"
           onClick={() => navigateMonth(-1)}
         >
-          {"<"}
+          <svg viewBox="0 0 8 12" width="7" height="11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M6 1.5 2 6 6 10.5" />
+          </svg>
         </button>
         <span className="stream-calendar-month-label">{MONTH_NAMES[viewMonth]} {viewYear}</span>
         <button
@@ -105,7 +107,9 @@ export default function SidebarCalendar({ selectedDate, streamPagesByDate, onSel
           aria-label="Next month"
           onClick={() => navigateMonth(1)}
         >
-          {">"}
+          <svg viewBox="0 0 8 12" width="7" height="11" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2 1.5 6 6 2 10.5" />
+          </svg>
         </button>
       </div>
       <div className="stream-calendar-day-headers">

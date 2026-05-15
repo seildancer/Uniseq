@@ -41,7 +41,7 @@ export default function EditorBreadcrumb({ items }) {
     <div className="editor-breadcrumb" aria-label="Breadcrumb">
       {items.map((item, index) => (
         <span key={`${item}-${index}`} className="editor-breadcrumb-item">
-          {index > 0 ? <span className="editor-breadcrumb-separator">{">"}</span> : null}
+          {index > 0 ? <span className="editor-breadcrumb-separator" aria-hidden="true">›</span> : null}
           <span>{item}</span>
         </span>
       ))}

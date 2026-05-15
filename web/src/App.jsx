@@ -299,7 +299,9 @@ function PageTree({
                         : "page-tree-caret"
                     }
                   >
-                    &gt;
+                    <svg viewBox="0 0 8 12" width="7" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M2 1.5 6 6 2 10.5" />
+                    </svg>
                   </span>
                 </button>
               ) : (
@@ -378,7 +380,9 @@ function PageTree({
                     aria-label="Add subpage"
                     onClick={() => onAddSubpage?.(page.page_id)}
                   >
-                    +
+                    <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                      <path d="M5 1v8M1 5h8" />
+                    </svg>
                   </button>
                 </div>
               )}
@@ -1890,7 +1894,9 @@ export default function App() {
                         setModal({ type: "new_page" });
                       }}
                     >
-                      +
+                      <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                        <path d="M5 1v8M1 5h8" />
+                      </svg>
                     </button>
                   </div>
 

@@ -393,7 +393,9 @@ export default function StreamWorkspace({
                 title="New stream"
                 onClick={startCreating}
               >
-                +
+                <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                  <path d="M5 1v8M1 5h8" />
+                </svg>
               </button>
             </div>
 
@@ -432,10 +434,21 @@ export default function StreamWorkspace({
                               type="button"
                               className={`stream-blur-toggle${diaryBlurEnabled ? " stream-blur-toggle--active" : ""}`}
                               aria-pressed={diaryBlurEnabled}
-                              title={diaryBlurEnabled ? "Diary blur is on" : "Diary blur is off"}
+                              title={diaryBlurEnabled ? "Diary blur on — click to reveal" : "Diary blur off — click to hide"}
                               onClick={onDiaryBlurToggle}
                             >
-                              blur
+                              {diaryBlurEnabled ? (
+                                <svg viewBox="0 0 16 12" width="13" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M2 1.5 14 10.5" />
+                                  <path d="M5 4C3.2 5.2 1.5 6.5 1.5 6.5C4 10.5 12 10.5 14.5 6.5" />
+                                  <path d="M9.5 2.5C11.5 3.5 13.5 5.2 14.5 6.5" />
+                                </svg>
+                              ) : (
+                                <svg viewBox="0 0 16 12" width="13" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M1.5 6C4 1.5 12 1.5 14.5 6C12 10.5 4 10.5 1.5 6Z" />
+                                  <circle cx="8" cy="6" r="2" />
+                                </svg>
+                              )}
                             </button>
                           ) : null}
                           {!isPrimary ? (
