@@ -1316,7 +1316,14 @@ h2 {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  overflow: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
+}
+
+.editor-panel-scroll--mobile-stream::-webkit-scrollbar {
+  display: none;
 }
 
 .editor-panel-scroll--mobile-stream > .stream-day-list,
@@ -1585,8 +1592,9 @@ h2 {
 }
 
 .stream-day-list--mobile-single .stream-day-entry {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 100%;
+  min-height: 100%;
+  scroll-snap-align: start;
 }
 
 .stream-day-list--mobile-single .stream-day-entry-body,

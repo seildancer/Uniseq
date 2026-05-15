@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import MilkdownMarkdownEditor from "./MilkdownMarkdownEditor";
 import { useMarkdownEditorBridge } from "../hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "../hooks/useEditorPersistence";
@@ -108,9 +108,14 @@ export default function StreamSingleEditor({
     onRefresh,
   });
 
+  const onReadyChangeRef = useRef(onReadyChange);
   useEffect(() => {
-    onReadyChange?.(!loading);
-  }, [loading, onReadyChange]);
+    onReadyChangeRef.current = onReadyChange;
+  }, [onReadyChange]);
+
+  useEffect(() => {
+    onReadyChangeRef.current?.(!loading);
+  }, [loading]);
 
   if (loading) {
     return null;

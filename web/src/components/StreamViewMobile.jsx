@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
-import { useMobileStreamDatePager } from "../hooks/useMobileStreamDatePager.js";
-import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
+import { addDaysToDateName, compareDateNames, formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import {
   isDiaryStream,
   streamPageExists,
   streamPageId,
 } from "../utils/streamWorkspace.js";
+
+const SNAP_BUFFER_DAYS = 1;
 
 export default function StreamViewMobile({
   selectedDate,
@@ -29,22 +30,58 @@ export default function StreamViewMobile({
     () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
     [selectedDate, streamPagesByDate],
   );
-  const visibleDates = useMemo(() => [selectedDate], [selectedDate]);
+  const visibleDates = useMemo(() => {
+    const dates = [];
+    for (let i = SNAP_BUFFER_DAYS; i >= -SNAP_BUFFER_DAYS; i -= 1) {
+      const candidate = addDaysToDateName(selectedDate, i);
+      if (latestDateName && compareDateNames(candidate, latestDateName) > 0) {
+        continue;
+      }
+      dates.push(candidate);
+    }
+    return dates;
+  }, [selectedDate, latestDateName]);
 
-  useMobileStreamDatePager({
-    enabled: true,
-    selectedDate,
-    latestDateName,
-    scrollContainerRef,
-    onSelectDate,
-  });
+  const selectedDateRef = useRef(selectedDate);
+  selectedDateRef.current = selectedDate;
 
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTo({ top: 0, behavior: "auto" });
+    if (!container) return;
+
+    const selectedEntry = dayRefs.current.get(selectedDate);
+    if (selectedEntry) {
+      selectedEntry.scrollIntoView({ block: "start", behavior: "auto" });
     }
   }, [selectedDate, scrollContainerRef]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || typeof onSelectDate !== "function") return;
+
+    function handleScrollEnd() {
+      let closestDate = null;
+      let closestDist = Infinity;
+      const containerRect = container.getBoundingClientRect();
+
+      for (const [dateName, node] of dayRefs.current) {
+        if (!node) continue;
+        const rect = node.getBoundingClientRect();
+        const dist = Math.abs(rect.top - containerRect.top);
+        if (dist < closestDist) {
+          closestDist = dist;
+          closestDate = dateName;
+        }
+      }
+
+      if (closestDate && closestDate !== selectedDateRef.current) {
+        onSelectDate(closestDate);
+      }
+    }
+
+    container.addEventListener("scrollend", handleScrollEnd);
+    return () => container.removeEventListener("scrollend", handleScrollEnd);
+  }, [scrollContainerRef, onSelectDate]);
 
   useEffect(() => {
     if (focusedEditor && !streamNames.includes(focusedEditor.streamName)) {
