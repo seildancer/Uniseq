@@ -1644,6 +1644,21 @@ export default function App() {
   if (mode === "booting") {
     return (
       <main className="app-shell">
+        <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
+          {showDesktopWindowControls ? (
+            <div className="window-controls" data-no-window-drag="true">
+              <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
+                <WindowMinimizeIcon />
+              </button>
+              <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
+                {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+              </button>
+              <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
+                <WindowCloseIcon />
+              </button>
+            </div>
+          ) : null}
+        </div>
         <section className="boot-panel minimal-panel">
           <h1>Uniseq</h1>
           <p className="status-copy">Opening last workspace...</p>
@@ -2386,6 +2401,21 @@ export default function App() {
 
   return (
     <main className="app-shell">
+      <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
+        {showDesktopWindowControls ? (
+          <div className="window-controls" data-no-window-drag="true">
+            <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
+              <WindowMinimizeIcon />
+            </button>
+            <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
+              {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+            </button>
+            <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
+              <WindowCloseIcon />
+            </button>
+          </div>
+        ) : null}
+      </div>
       <section className="hero-panel minimal-panel">
         <h1 className="onboard-title">Uniseq</h1>
 
@@ -2405,15 +2435,6 @@ export default function App() {
 
         <div className="onboard-tabs" role="tablist">
           <button
-            className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={onboardingTab === "open"}
-            onClick={() => setOnboardingTab("open")}
-          >
-            Open existing
-          </button>
-          <button
             className={`onboard-tab${onboardingTab === "create" ? " onboard-tab--active" : ""}`}
             type="button"
             role="tab"
@@ -2421,6 +2442,15 @@ export default function App() {
             onClick={() => setOnboardingTab("create")}
           >
             Make new
+          </button>
+          <button
+            className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={onboardingTab === "open"}
+            onClick={() => setOnboardingTab("open")}
+          >
+            Open existing
           </button>
         </div>
 
@@ -2436,34 +2466,40 @@ export default function App() {
             </button>
           ) : (
             <form className="create-form" onSubmit={handleCreateWorkspace}>
-              <div className="inline-field">
+              <div className="field">
+                <span>Location</span>
+                <div className="inline-field">
+                  <input
+                    type="text"
+                    value={createState.parentPath}
+                    readOnly
+                    placeholder="Choose a folder"
+                    title={createState.parentPath}
+                  />
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={handleChooseCreateParent}
+                    disabled={busyAction === "pick-parent"}
+                  >
+                    {busyAction === "pick-parent" ? "Choosing..." : "Browse"}
+                  </button>
+                </div>
+              </div>
+              <div className="field">
+                <span>Workspace name</span>
                 <input
                   type="text"
-                  value={createState.parentPath}
-                  readOnly
-                  placeholder="Location"
+                  value={createState.folderName}
+                  onChange={(event) =>
+                    setCreateState((current) => ({
+                      ...current,
+                      folderName: event.target.value,
+                    }))
+                  }
+                  placeholder="My Notes"
                 />
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={handleChooseCreateParent}
-                  disabled={busyAction === "pick-parent"}
-                >
-                  {busyAction === "pick-parent" ? "Choosing..." : "Choose"}
-                </button>
               </div>
-              <input
-                className="onboard-name-input"
-                type="text"
-                value={createState.folderName}
-                onChange={(event) =>
-                  setCreateState((current) => ({
-                    ...current,
-                    folderName: event.target.value,
-                  }))
-                }
-                placeholder="Name"
-              />
               <button className="primary-button" type="submit" disabled={createDisabled}>
                 {busyAction === "create" ? "Creating..." : "Create"}
               </button>

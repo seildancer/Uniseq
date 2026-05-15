@@ -345,19 +345,10 @@ h2 {
   width: 100%;
 }
 
-.onboard-name-input {
-  width: 100%;
-  min-height: 42px;
-  padding: 0 12px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--ink);
-}
-
-.onboard-name-input:focus-visible {
-  outline: 2px solid rgba(31, 111, 95, 0.42);
-  outline-offset: 2px;
+.field input[readonly] {
+  background: var(--panel);
+  color: var(--muted);
+  cursor: default;
 }
 
 .section-heading {
@@ -414,6 +405,20 @@ h2 {
 .workspace-shell .ProseMirror * {
   -webkit-user-select: text;
   user-select: text;
+}
+
+.onboard-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  -webkit-user-select: none;
+  user-select: none;
+  z-index: 10;
 }
 
 .window-controls {
