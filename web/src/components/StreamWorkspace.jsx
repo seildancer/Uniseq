@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamDualEditor from "./StreamDualEditor.jsx";
-import StreamSingleList from "./StreamSingleList.jsx";
+import StreamDualEditorMobile from "./StreamDualEditorMobile.jsx";
 import { areArraysEqual } from "../utils/arrays.js";
 import {
   isDiaryStream,
@@ -170,39 +170,32 @@ export default function StreamWorkspace({
   }
 
   const streamEditor = streamSelection
-    ? (
-      streamSelection.kind === "stream_dual" ? (
-        <StreamDualEditor
-          selectedDate={selectedStreamDate}
-          isMobile={isMobile}
-          dualStreamNames={dualStreamNames}
-          streamPagesByDate={streamPagesByDate}
-          pages={regularPages}
-          reloadToken={streamReloadToken}
-          scrollContainerRef={editorScrollRef}
-          onNavigate={onNavigatePage}
-          onError={onError}
-          onRefresh={onRefresh}
-          onSelectDate={onSelectStreamDual}
-          diaryBlurEnabled={diaryBlurEnabled}
-        />
-      ) : (
-        <StreamSingleList
-          streamName={streamSelection.streamName}
-          selectedDate={selectedStreamDate}
-          isMobile={isMobile}
-          streamPagesByDate={streamPagesByDate}
-          pages={regularPages}
-          reloadToken={streamReloadToken}
-          scrollContainerRef={editorScrollRef}
-          onNavigate={onNavigatePage}
-          onError={onError}
-          onRefresh={onRefresh}
-          onSelectDate={(dateName) => onSelectStreamSingle(streamSelection.streamName, dateName)}
-          diaryBlurEnabled={diaryBlurEnabled}
-        />
-      )
-    )
+    ? (() => {
+      const streamNames = streamSelection.kind === "stream_dual"
+        ? dualStreamNames
+        : [streamSelection.streamName];
+      const handleSelectDate = streamSelection.kind === "stream_dual"
+        ? onSelectStreamDual
+        : (dateName) => onSelectStreamSingle(streamSelection.streamName, dateName);
+
+      const editorProps = {
+        selectedDate: selectedStreamDate,
+        streamNames,
+        streamPagesByDate: streamPagesByDate,
+        pages: regularPages,
+        reloadToken: streamReloadToken,
+        scrollContainerRef: editorScrollRef,
+        onNavigate: onNavigatePage,
+        onError,
+        onRefresh,
+        onSelectDate: handleSelectDate,
+        diaryBlurEnabled,
+      };
+
+      return isMobile
+        ? <StreamDualEditorMobile {...editorProps} />
+        : <StreamDualEditor {...editorProps} />;
+    })()
     : null;
 
   function clearPendingStreamDragState() {

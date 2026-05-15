@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
-import { useMobileStreamDatePager } from "../hooks/useMobileStreamDatePager.js";
 import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import {
   isDiaryStream,
@@ -11,8 +10,7 @@ import {
 
 export default function StreamDualEditor({
   selectedDate,
-  isMobile = false,
-  dualStreamNames,
+  streamNames,
   streamPagesByDate,
   pages,
   reloadToken,
@@ -23,7 +21,8 @@ export default function StreamDualEditor({
   onSelectDate,
   diaryBlurEnabled = true,
 }) {
-  const [mobileTab, setMobileTab] = useState(() => dualStreamNames[0] ?? null);
+  const isDual = streamNames.length > 1;
+  const [mobileTab, setMobileTab] = useState(() => streamNames[0] ?? null);
   const [focusedEditor, setFocusedEditor] = useState(null);
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
@@ -37,11 +36,11 @@ export default function StreamDualEditor({
     selectedDate,
     latestDateName,
     scrollContainerRef,
-    disabled: isMobile || Boolean(focusedEditor),
+    disabled: Boolean(focusedEditor),
   });
   const visibleDates = useMemo(
-    () => (isMobile ? [selectedDate] : lazyVisibleDates),
-    [isMobile, lazyVisibleDates, selectedDate],
+    () => lazyVisibleDates,
+    [lazyVisibleDates],
   );
   const pendingSelectedScrollRef = useRef(selectedDate);
   const selectedScrollStartedRef = useRef(false);
@@ -55,16 +54,8 @@ export default function StreamDualEditor({
     }
   }
 
-  useMobileStreamDatePager({
-    enabled: isMobile,
-    selectedDate,
-    latestDateName,
-    scrollContainerRef,
-    onSelectDate,
-  });
-
   function isDateReady(dateName) {
-    return dualStreamNames.every((streamName) => {
+    return streamNames.every((streamName) => {
       const editorKey = `${streamName}/${dateName}`;
       const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
         ? streamPageId(streamName, dateName)
@@ -131,9 +122,9 @@ export default function StreamDualEditor({
 
     const container = scrollContainerRef.current;
     if (container) {
-      container.scrollTo({ top: isMobile ? 0 : container.scrollTop, behavior: "auto" });
+      container.scrollTo({ top: container.scrollTop, behavior: "auto" });
     }
-  }, [isMobile, selectedDate, scrollContainerRef]);
+  }, [selectedDate, scrollContainerRef]);
 
   useEffect(() => () => {
     cancelSelectedScrollFrame();
@@ -146,17 +137,18 @@ export default function StreamDualEditor({
   }, [focusedEditor, visibleDates]);
 
   useEffect(() => {
-    if (mobileTab && dualStreamNames.includes(mobileTab)) {
+    if (!isDual) return;
+    if (mobileTab && streamNames.includes(mobileTab)) {
       return;
     }
-    setMobileTab(dualStreamNames[0] ?? null);
-  }, [dualStreamNames, mobileTab]);
+    setMobileTab(streamNames[0] ?? null);
+  }, [isDual, streamNames, mobileTab]);
 
   useEffect(() => {
-    if (focusedEditor && !dualStreamNames.includes(focusedEditor.streamName)) {
+    if (focusedEditor && !streamNames.includes(focusedEditor.streamName)) {
       setFocusedEditor(null);
     }
-  }, [dualStreamNames, focusedEditor]);
+  }, [streamNames, focusedEditor]);
 
   useLayoutEffect(() => {
     if (focusedEditor) {
@@ -180,7 +172,7 @@ export default function StreamDualEditor({
         queueFinalSelectedScroll(dateName, generation);
       }
     }
-  }, [focusedEditor, selectedDate, visibleDates, editorReadyByKey, dualStreamNames, streamPagesByDate]);
+  }, [focusedEditor, selectedDate, visibleDates, editorReadyByKey, streamNames, streamPagesByDate]);
 
   useLayoutEffect(() => {
     if (focusedEditor) {
@@ -253,10 +245,10 @@ export default function StreamDualEditor({
   }
 
   return (
-    <div className={`stream-dual-wrap${isMobile ? " stream-dual-wrap--mobile" : ""}`}>
-      {!isMobile && dualStreamNames.length > 0 ? (
+    <div className="stream-dual-wrap">
+      {isDual ? (
         <div className="stream-dual-tabs">
-          {dualStreamNames.map((streamName) => (
+          {streamNames.map((streamName) => (
             <button
               key={streamName}
               type="button"
@@ -269,11 +261,11 @@ export default function StreamDualEditor({
         </div>
       ) : null}
 
-      <div className={`stream-day-list${isMobile ? " stream-day-list--mobile-single" : ""}${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
+      <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
           const isSelected = selectedDate === dateName;
-          const paneStates = dualStreamNames.map((streamName) => {
+          const paneStates = streamNames.map((streamName) => {
             const editorKey = `${streamName}/${dateName}`;
             const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
               ? streamPageId(streamName, dateName)
@@ -316,21 +308,11 @@ export default function StreamDualEditor({
               </div>
 
               <div className="stream-day-entry-body">
-                <div
-                  className="stream-dual-pane"
-                  style={isMobile
-                    ? {
-                      gridTemplateRows: paneStates.map((pane) => (
-                        pane.streamName === focusedStreamName ? "minmax(0, 9fr)" : "minmax(0, 1fr)"
-                      )).join(" ")
-                        || "minmax(0, 1fr) minmax(0, 1fr)",
-                    }
-                    : undefined}
-                >
+                <div className="stream-dual-pane">
                   {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
                     <div
                       key={editorKey}
-                      className={`stream-dual-panel${!isMobile && mobileTab !== streamName ? " stream-dual-panel--hidden-mobile" : ""}${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
+                      className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
                       onPointerDown={(event) => focusPaneEditor(event, editorKey)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
@@ -350,9 +332,7 @@ export default function StreamDualEditor({
                           onFocusChange={(focused) => {
                             if (focused) {
                               enterFocusMode(dateName, streamName);
-                              if (!isMobile) {
-                                setMobileTab(streamName);
-                              }
+                              setMobileTab(streamName);
                               return;
                             }
                             setFocusedEditor((current) => {
