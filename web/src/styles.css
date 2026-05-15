@@ -2307,6 +2307,23 @@ code {
   min-height: 0;
 }
 
+.milkdown-editor .image-resize-handle {
+  background: white;
+  border: 1.5px solid #888;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.milkdown-editor div:hover > .image-resize-handle {
+  opacity: 1;
+}
+
+[data-theme="dark"] .milkdown-editor .image-resize-handle {
+  background: #333;
+  border-color: #aaa;
+}
+
 .milkdown-editor--linked-ref .ProseMirror {
   min-height: 0;
   padding: 4px 6px;
