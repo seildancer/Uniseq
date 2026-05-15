@@ -63,9 +63,7 @@ export function applyImageSizing(root) {
     }
 
     image.style.width = `${parsedWidth}px`;
-    image.style.maxWidth = "100%";
-    image.style.height = "auto";
-    image.style.aspectRatio = `${parsedWidth} / ${parsedHeight}`;
+    image.style.height = `${parsedHeight}px`;
     image.removeAttribute("title");
   }
 }

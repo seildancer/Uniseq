@@ -13,6 +13,7 @@ import createDeleteKeyPlugin from "../plugins/deleteKeyPlugin";
 import createIndentPlugin from "../plugins/indentPlugin";
 import createWikilinkPlugin, { resetWikilinkFocus } from "../plugins/wikilinkPlugin";
 import blockHighlightPlugin, { resetBlockHighlightFocus } from "../plugins/blockHighlightPlugin";
+import imageSizingPlugin from "../plugins/imageSizingPlugin";
 import taskListClickPlugin from "../plugins/taskListClickPlugin";
 import AutocompleteEditor from "./Autocomplete";
 import { WorkspaceContext } from "../WorkspaceContext.js";
@@ -65,6 +66,7 @@ function MilkdownMarkdownEditorInner({
       .use(listener)
       .use(history)
       .use(blockHighlightPlugin)
+      .use(imageSizingPlugin)
       .use(remarkBreaks.plugin)
   );
 

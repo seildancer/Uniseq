@@ -19,7 +19,7 @@ function buildImageDecorations(doc) {
 
     decorations.push(
       Decoration.node(pos, pos + node.nodeSize, {
-        style: `width: ${parsedWidth}px; max-width: 100%; height: auto; aspect-ratio: ${parsedWidth} / ${parsedHeight};`,
+        style: `width: ${parsedWidth}px; height: ${parsedHeight}px;`,
         title: "",
       })
     );
