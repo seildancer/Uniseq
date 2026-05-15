@@ -1866,7 +1866,7 @@ h2 {
 .editor-title-form {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   max-width: 100%;
 }
 
@@ -1903,10 +1903,17 @@ h2 {
 .editor-title-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
+  margin-left: 2px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
+}
+
+.editor-title-action {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
 }
 
 .editor-title-form:focus-within .editor-title-actions {

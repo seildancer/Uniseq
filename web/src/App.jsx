@@ -1956,6 +1956,14 @@ export default function App() {
                               event.preventDefault();
                               void handleEditorRenameSave();
                             }}
+                            onBlur={(event) => {
+                              if (busyAction === "rename") return;
+                              const nextFocused = event.relatedTarget;
+                              if (nextFocused instanceof Node && event.currentTarget.contains(nextFocused)) {
+                                return;
+                              }
+                              resetEditorRenameValue();
+                            }}
                           >
                             <input
                               ref={editorTitleInputRef}
@@ -1975,26 +1983,45 @@ export default function App() {
                             />
                             <div className="editor-title-actions">
                               <button
-                                className="primary-button"
+                                className="stream-create-action editor-title-action"
                                 type="submit"
+                                aria-label="Save title"
+                                title="Save title"
                                 disabled={
                                   busyAction === "rename" ||
                                   !editorRenameValue.trim() ||
                                   editorRenameValue.trim() === readPageLeafName(loadedPage.page_id)
                                 }
                               >
-                                {busyAction === "rename" ? "Saving..." : "Save"}
+                                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                                  <path
+                                    d="M3 8.5 6.25 11.75 13 5"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
                               </button>
                               <button
-                                className="secondary-button"
+                                className="stream-create-action editor-title-action"
                                 type="button"
+                                aria-label="Cancel title edit"
+                                title="Cancel title edit"
                                 onClick={() => {
                                   resetEditorRenameValue();
                                   editorTitleInputRef.current?.blur();
                                 }}
                                 disabled={busyAction === "rename"}
                               >
-                                Cancel
+                                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true">
+                                  <path
+                                    d="M4 4 12 12M12 4 4 12"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                  />
+                                </svg>
                               </button>
                             </div>
                           </form>
