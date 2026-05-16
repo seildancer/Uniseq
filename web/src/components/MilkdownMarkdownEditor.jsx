@@ -78,14 +78,32 @@ function MilkdownMarkdownEditorInner({
       return undefined;
     }
 
-    const focusEditor = ({ atEnd = true } = {}) => {
+    const focusEditor = ({ atEnd = true, point = null } = {}) => {
       const editor = get();
       if (!editor) {
         return false;
       }
 
       const view = editor.action((ctx) => ctx.get(editorViewCtx));
-      if (atEnd) {
+      if (point) {
+        const rect = view.dom.getBoundingClientRect();
+        const left = rect.left + (rect.width * point.xRatio);
+        const top = rect.top + (rect.height * point.yRatio);
+        const target = view.posAtCoords({ left, top });
+        if (target?.pos != null) {
+          view.dispatch(
+            view.state.tr
+              .setSelection(TextSelection.create(view.state.doc, target.pos))
+              .scrollIntoView(),
+          );
+        } else if (atEnd) {
+          view.dispatch(
+            view.state.tr
+              .setSelection(TextSelection.atEnd(view.state.doc))
+              .scrollIntoView(),
+          );
+        }
+      } else if (atEnd) {
         view.dispatch(
           view.state.tr
             .setSelection(TextSelection.atEnd(view.state.doc))

@@ -10,6 +10,7 @@ import {
 const NEIGHBOR_DAY_COUNT = 1;
 const SCROLL_SETTLE_MS = 140;
 const PROGRAMMATIC_SCROLL_MS = 260;
+const FOCUS_RETRY_LIMIT = 24;
 
 function editorKeyFor(streamName, dateName) {
   return `${streamName}/${dateName}`;
@@ -84,8 +85,11 @@ export default function StreamViewMobile({
   const selectedDateRef = useRef(selectedDate);
   const focusedEditorRef = useRef(null);
   const shouldFocusScreenEditorRef = useRef(false);
+  const pendingFocusRequestRef = useRef(null);
   const scrollSettleTimerRef = useRef(null);
   const programmaticScrollTimerRef = useRef(null);
+  const focusRetryTimerRef = useRef(null);
+  const focusRetryCountRef = useRef(0);
   const isProgrammaticScrollRef = useRef(false);
 
   selectedDateRef.current = selectedDate;
@@ -116,6 +120,10 @@ export default function StreamViewMobile({
     if (programmaticScrollTimerRef.current !== null) {
       window.clearTimeout(programmaticScrollTimerRef.current);
       programmaticScrollTimerRef.current = null;
+    }
+    if (focusRetryTimerRef.current !== null) {
+      window.clearTimeout(focusRetryTimerRef.current);
+      focusRetryTimerRef.current = null;
     }
   }
 
@@ -177,13 +185,73 @@ export default function StreamViewMobile({
     return focusRef;
   }
 
-  function openFocusScreen(dateName, streamName) {
+  function tryFocusEntry(dateName, streamName) {
+    const editorKey = editorKeyFor(streamName, dateName);
+    return editorFocusRefs.current.get(editorKey)?.current?.(pendingFocusRequestRef.current ?? { atEnd: true }) ?? false;
+  }
+
+  function scheduleFocusRetry(dateName, streamName) {
+    if (focusRetryCountRef.current >= FOCUS_RETRY_LIMIT) {
+      shouldFocusScreenEditorRef.current = false;
+      pendingFocusRequestRef.current = null;
+      focusRetryTimerRef.current = null;
+      return;
+    }
+
+    focusRetryCountRef.current += 1;
+    focusRetryTimerRef.current = window.setTimeout(() => {
+      focusRetryTimerRef.current = null;
+      if (!focusedEditorRef.current) {
+        shouldFocusScreenEditorRef.current = false;
+        pendingFocusRequestRef.current = null;
+        return;
+      }
+      if (tryFocusEntry(dateName, streamName)) {
+        shouldFocusScreenEditorRef.current = false;
+        pendingFocusRequestRef.current = null;
+        focusRetryCountRef.current = 0;
+        return;
+      }
+      scheduleFocusRetry(dateName, streamName);
+    }, 32);
+  }
+
+  function openFocusScreen(dateName, streamName, focusRequest = { atEnd: true }) {
     if (dateName !== selectedDateRef.current) {
       onSelectDate?.(dateName);
     }
     scrollDateIntoView(dateName, "auto");
     shouldFocusScreenEditorRef.current = true;
+    pendingFocusRequestRef.current = focusRequest;
+    focusRetryCountRef.current = 0;
     setFocusedEditor({ dateName, streamName });
+  }
+
+  function focusRequestFromPointerEvent(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = Math.max(rect.width, 1);
+    const height = Math.max(rect.height, 1);
+    const clientX = event.clientX ?? rect.left;
+    const clientY = event.clientY ?? rect.top;
+    return {
+      atEnd: false,
+      point: {
+        xRatio: Math.min(Math.max((clientX - rect.left) / width, 0), 1),
+        yRatio: Math.min(Math.max((clientY - rect.top) / height, 0), 1),
+      },
+    };
+  }
+
+  function handleBrowsePaneClick(event, dateName, streamName) {
+    openFocusScreen(dateName, streamName, focusRequestFromPointerEvent(event));
+  }
+
+  function handleBrowsePaneKeyDown(event, dateName, streamName) {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    openFocusScreen(dateName, streamName);
   }
 
   useLayoutEffect(() => {
@@ -220,12 +288,22 @@ export default function StreamViewMobile({
     if (!focusedEditor || !shouldFocusScreenEditorRef.current) {
       return;
     }
-    const focusRef = editorFocusRefs.current.get(editorKeyFor(focusedEditor.streamName, focusedEditor.dateName));
     const timerId = window.setTimeout(() => {
-      focusRef?.current?.({ atEnd: true });
-      shouldFocusScreenEditorRef.current = false;
+      if (tryFocusEntry(focusedEditor.dateName, focusedEditor.streamName)) {
+        shouldFocusScreenEditorRef.current = false;
+        pendingFocusRequestRef.current = null;
+        focusRetryCountRef.current = 0;
+        return;
+      }
+      scheduleFocusRetry(focusedEditor.dateName, focusedEditor.streamName);
     }, 0);
-    return () => window.clearTimeout(timerId);
+    return () => {
+      window.clearTimeout(timerId);
+      if (focusRetryTimerRef.current !== null) {
+        window.clearTimeout(focusRetryTimerRef.current);
+        focusRetryTimerRef.current = null;
+      }
+    };
   }, [focusedEditor]);
 
   useEffect(() => {
@@ -334,7 +412,10 @@ export default function StreamViewMobile({
                     <div
                       key={editorKey}
                       className="stream-dual-panel"
-                      onClick={() => openFocusScreen(dateName, streamName)}
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => handleBrowsePaneClick(event, dateName, streamName)}
+                      onKeyDown={(event) => handleBrowsePaneKeyDown(event, dateName, streamName)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
                       <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
