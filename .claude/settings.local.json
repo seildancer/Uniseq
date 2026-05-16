@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(npm install *)",
+      "Bash(cargo build *)",
+      "Bash(npm run *)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Recurse -Directory)",
+      "Bash(Select-Object -First 30)",
+      "Bash(Format-Table FullName)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Directory)",
+      "Bash(Select-Object Name)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\" -Recurse -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Force)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(cargo check *)",
+      "Bash(New-Item -ItemType File \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\\\\WorkspaceContext.js\" -Force)",
+      "Bash(Out-Null)",
+      "Bash(Write-Output \"ok\")",
+      "Bash(Get-ChildItem -Path . -Recurse -Directory -ErrorAction SilentlyContinue)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\\\\web\\\\src\" -Force -Recurse)",
+      "Bash(Select-Object -Property FullName, PSIsContainer)",
+      "Bash(ConvertTo-Json)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Recurse -Depth 2)",
+      "Bash(Select-Object FullName)"
+    ]
+  }
+}

@@ -1,8 +1,16 @@
+[package]
+name = "uniseq-backend"
+version = "0.1.0"
+edition = "2024"
+description = "File-first backend core types for Uniseq"
+
 [workspace]
-members = ["crates/uniseq_engine", "src-tauri"]
+members = [".", "src-tauri"]
 resolver = "2"
 
-[workspace.package]
-edition = "2021"
-license = "MIT"
-repository = "https://github.com/uniseq/uniseq"
+[lib]
+name = "uniseq_backend"
+path = "src/lib.rs"
+
+[dependencies]
+notify = "8.2.0"
