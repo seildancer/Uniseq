@@ -25,6 +25,19 @@ const INITIAL_CREATE_STATE = {
   folderName: "",
 };
 
+const INITIAL_REMOTE_STATE = {
+  provider: "uniseq",
+  syncRootUrl: "",
+  uniseqAccount: "",
+  workspaces: [],
+  selectedWorkspaceId: "",
+  newWorkspaceName: "",
+  loadedRootUrl: "",
+  authDiscovery: null,
+  authToken: "",
+  authLoadedRootUrl: "",
+};
+
 const ROOT_PARENT_KEY = "__root__";
 const DRAG_LONG_PRESS_MS = 260;
 const DRAG_MOVE_SLOP_PX = 8;
@@ -35,6 +48,7 @@ const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
 const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
+const UNISEQ_SYNC_ROOT_PREFIX = import.meta.env.VITE_SYNC_ROOT_PREFIX ?? "https://sync.example.com";
 
 const appWindow = getCurrentWindow();
 
@@ -223,6 +237,60 @@ function formatError(error) {
   }
 
   return error.path ? `${error.message} (${error.path})` : error.message;
+}
+
+function syncRootFromRemoteState(remoteState) {
+  if (remoteState.provider === "uniseq") {
+    const account = remoteState.uniseqAccount.trim().replace(/^\/+|\/+$/g, "");
+    return account ? `${UNISEQ_SYNC_ROOT_PREFIX}/${account}` : "";
+  }
+  return remoteState.syncRootUrl.trim();
+}
+
+function selectedRemoteWorkspace(remoteState) {
+  return remoteState.workspaces.find((workspace) => workspace.id === remoteState.selectedWorkspaceId) ?? null;
+}
+
+function syncAuthKindFromDiscovery(discovery) {
+  return discovery?.auth?.type === "bearer" ? "bearer" : "none";
+}
+
+function syncRequiresBearer(remoteState) {
+  return syncAuthKindFromDiscovery(remoteState.authDiscovery) === "bearer";
+}
+
+function syncStatusLabel(status) {
+  switch (status?.kind) {
+    case "synced":
+      return "Synced";
+    case "syncing":
+      return "Syncing";
+    case "conflict":
+      return "Conflict";
+    case "ready":
+      return "Ready";
+    case "error":
+      return "Error";
+    default:
+      return status?.enabled ? "Sync" : "Off";
+  }
+}
+
+function syncProviderLabel(provider) {
+  return provider === "uniseq" ? "Uniseq Sync" : "Custom URL";
+}
+
+function remoteProviderStatePatch(provider) {
+  return {
+    provider,
+    workspaces: [],
+    selectedWorkspaceId: "",
+    newWorkspaceName: "",
+    loadedRootUrl: "",
+    authDiscovery: null,
+    authToken: "",
+    authLoadedRootUrl: "",
+  };
 }
 
 function describeSearchMatch(matchedField) {
@@ -509,7 +577,10 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
+  const [remoteState, setRemoteState] = useState(INITIAL_REMOTE_STATE);
   const [onboardingTab, setOnboardingTab] = useState("create");
+  const [syncStatus, setSyncStatus] = useState(null);
+  const [syncConflictDetail, setSyncConflictDetail] = useState(null);
   const [expandedPageIds, setExpandedPageIds] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -878,7 +949,14 @@ export default function App() {
     setLinkedRefs([]);
     setLoadedPageId(null);
     await loadWorkspaceLists();
+    await loadSyncStatus().catch(() => setSyncStatus(null));
     setMode("workspace");
+  }
+
+  async function loadSyncStatus() {
+    const status = await invoke("sync_status");
+    setSyncStatus(status);
+    return status;
   }
 
   async function handleOpenDefaultWorkspace() {
@@ -963,6 +1041,7 @@ export default function App() {
       setLinkedRefs([]);
       setLoadedPageId(null);
       await loadWorkspaceLists();
+      await loadSyncStatus().catch(() => setSyncStatus(null));
       setStartupError(null);
       setMode("workspace");
     } catch (error) {
@@ -970,6 +1049,108 @@ export default function App() {
     } finally {
       setBusyAction("");
     }
+  }
+
+  async function handleOpenRemoteWorkspace(event) {
+    event.preventDefault();
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    if (!syncRootUrl) return;
+    setBusyAction("open-remote");
+    setActionError(null);
+
+    try {
+      const workspace = await ensureRemoteWorkspace();
+      const openedWorkspace = await invoke("open_remote_workspace", {
+        provider: remoteState.provider,
+        syncRootUrl,
+        remoteWorkspaceId: workspace.id,
+        remoteWorkspaceName: workspace.name,
+        authKind: syncAuthKindFromDiscovery(remoteState.authDiscovery),
+        authToken: remoteState.authToken,
+      });
+      setWorkspace(openedWorkspace);
+      resetSelectionHistory(defaultStreamSelection());
+      setLastStreamDate(todayDateName());
+      setStreamReloadToken(0);
+      setSelectedPageText("");
+      setSelectedPageRevision(null);
+      setLinkedRefs([]);
+      setLoadedPageId(null);
+      await loadWorkspaceLists();
+      await loadSyncStatus().catch(() => setSyncStatus(null));
+      setStartupError(null);
+      setMode("workspace");
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function loadRemoteWorkspaces() {
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    if (!syncRootUrl) return [];
+    setBusyAction("list-remote-workspaces");
+    setActionError(null);
+    try {
+      const discovery = await invoke("discover_sync_service", {
+        provider: remoteState.provider,
+        syncRootUrl,
+      });
+      const authKind = syncAuthKindFromDiscovery(discovery);
+      setRemoteState((current) => ({
+        ...current,
+        authDiscovery: discovery,
+        authLoadedRootUrl: syncRootUrl,
+      }));
+      if (authKind === "bearer" && !remoteState.authToken.trim()) {
+        return [];
+      }
+      const workspaces = await invoke("list_remote_workspaces", {
+        provider: remoteState.provider,
+        syncRootUrl,
+        authToken: remoteState.authToken,
+      });
+      const normalized = Array.isArray(workspaces) ? workspaces : [];
+      setRemoteState((current) => ({
+        ...current,
+        workspaces: normalized,
+        selectedWorkspaceId: normalized[0]?.id ?? "",
+        loadedRootUrl: syncRootUrl,
+      }));
+      return normalized;
+    } catch (error) {
+      setActionError(normalizeError(error));
+      return [];
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function ensureRemoteWorkspace() {
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    const selected = selectedRemoteWorkspace(remoteState);
+    if (selected) {
+      return selected;
+    }
+    const workspaceName = remoteState.newWorkspaceName.trim();
+    if (!workspaceName) {
+      throw new Error("Choose or create a remote workspace.");
+    }
+    const created = await invoke("create_remote_workspace", {
+      provider: remoteState.provider,
+      syncRootUrl,
+      workspaceName,
+      authToken: remoteState.authToken,
+    });
+    setRemoteState((current) => ({
+      ...current,
+      workspaces: [...current.workspaces, created],
+      selectedWorkspaceId: created.id,
+      newWorkspaceName: "",
+      loadedRootUrl: syncRootUrl,
+    }));
+    return created;
   }
 
   async function handleCloseWorkspace() {
@@ -986,6 +1167,8 @@ export default function App() {
     setSelectedPageRevision(null);
     setLinkedRefs([]);
     setLoadedPageId(null);
+    setSyncStatus(null);
+    setSyncConflictDetail(null);
     setStartupError(null);
     setActionError(null);
     setExpandedPageIds({});
@@ -1125,6 +1308,251 @@ export default function App() {
     setSearchQuery("");
     setSearchResults([]);
     setSearchLoading(false);
+    setSyncConflictDetail(null);
+  }
+
+  async function handleConfigureSync(event) {
+    event.preventDefault();
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    if (!syncRootUrl) return;
+    setBusyAction("configure-sync");
+    setActionError(null);
+    try {
+      const workspace = await ensureRemoteWorkspace();
+      const status = await invoke("configure_workspace_sync", {
+        provider: remoteState.provider,
+        syncRootUrl,
+        remoteWorkspaceId: workspace.id,
+        remoteWorkspaceName: workspace.name,
+        authKind: syncAuthKindFromDiscovery(remoteState.authDiscovery),
+        authToken: remoteState.authToken,
+      });
+      setSyncStatus(status);
+      closeModal();
+      await handleSyncNow();
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleSyncNow() {
+    setBusyAction("sync");
+    setActionError(null);
+    try {
+      setSyncStatus((current) => current ? { ...current, kind: "syncing" } : current);
+      const summary = await invoke("sync_now");
+      setSyncStatus(summary.status);
+      if (summary.pulled > 0 || summary.deleted_local > 0) {
+        await loadWorkspaceLists().catch(() => { });
+        if (loadedPageId) {
+          await loadPageContent(loadedPageId).catch(() => { });
+          await loadPageLinkedRefs(loadedPageId).catch(() => { });
+        }
+      }
+      if (summary.conflicts?.length > 0) {
+        setModal({ type: "sync" });
+      }
+    } catch (error) {
+      setActionError(normalizeError(error));
+      await loadSyncStatus().catch(() => { });
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function setWorkspaceSyncEnabled(enabled) {
+    setBusyAction("sync-toggle");
+    setActionError(null);
+    try {
+      const status = await invoke("set_workspace_sync_enabled", { enabled });
+      setSyncStatus(status);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function loadSyncConflictDetail(path) {
+    setBusyAction("sync-conflict");
+    setActionError(null);
+    try {
+      const detail = await invoke("sync_conflict_detail", { path });
+      setSyncConflictDetail(detail);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function resolveSyncConflict(path, resolution) {
+    setBusyAction("resolve-sync");
+    setActionError(null);
+    try {
+      const summary = await invoke("resolve_sync_conflict", { path, resolution });
+      setSyncStatus(summary.status);
+      setSyncConflictDetail(null);
+      if (resolution === "use_remote") {
+        await loadWorkspaceLists().catch(() => { });
+        if (loadedPageId) {
+          await loadPageContent(loadedPageId).catch(() => { });
+          await loadPageLinkedRefs(loadedPageId).catch(() => { });
+        }
+      }
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function resolveAllSyncConflicts(resolution) {
+    const conflicts = syncStatus?.conflicts ?? [];
+    for (const conflict of conflicts) {
+      // Stop if the user closed the modal or if a later conflict fails.
+      // eslint-disable-next-line no-await-in-loop
+      await resolveSyncConflict(conflict.path, resolution);
+    }
+    await loadSyncStatus().catch(() => { });
+  }
+
+  function renderRemoteSetupFields() {
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    const workspacesLoaded = remoteState.loadedRootUrl === syncRootUrl && syncRootUrl;
+    const authDiscoveryLoaded = remoteState.authLoadedRootUrl === syncRootUrl && syncRootUrl;
+    const bearerRequired = authDiscoveryLoaded && syncRequiresBearer(remoteState);
+    const authInstructions = remoteState.authDiscovery?.auth?.instructions;
+    return (
+      <>
+        <div className="remote-provider-toggle" role="tablist">
+          <button
+            className={remoteState.provider === "uniseq" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+            type="button"
+            onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("uniseq") }))}
+          >
+            Uniseq Sync
+          </button>
+          <button
+            className={remoteState.provider === "custom" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+            type="button"
+            onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("custom") }))}
+          >
+            Custom URL
+          </button>
+        </div>
+        {remoteState.provider === "uniseq" ? (
+          <div className="field">
+            <span>Account root</span>
+            <input
+              type="text"
+              value={remoteState.uniseqAccount}
+              placeholder="johndoe"
+              onChange={(event) => setRemoteState((current) => ({
+                ...current,
+                uniseqAccount: event.target.value,
+                workspaces: [],
+                selectedWorkspaceId: "",
+                loadedRootUrl: "",
+                authDiscovery: null,
+                authToken: "",
+                authLoadedRootUrl: "",
+              }))}
+            />
+          </div>
+        ) : (
+          <div className="field">
+            <span>Sync root URL</span>
+            <input
+              type="url"
+              value={remoteState.syncRootUrl}
+              placeholder="https://selfhosted.example.com/johndoe"
+              onChange={(event) => setRemoteState((current) => ({
+                ...current,
+                syncRootUrl: event.target.value,
+                workspaces: [],
+                selectedWorkspaceId: "",
+                loadedRootUrl: "",
+                authDiscovery: null,
+                authToken: "",
+                authLoadedRootUrl: "",
+              }))}
+            />
+          </div>
+        )}
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!syncRootUrl || busyAction === "list-remote-workspaces" || (bearerRequired && !remoteState.authToken.trim())}
+          onClick={() => void loadRemoteWorkspaces()}
+        >
+          {busyAction === "list-remote-workspaces" ? "Loading..." : bearerRequired ? "Continue" : "Load workspaces"}
+        </button>
+        {bearerRequired ? (
+          <div className="remote-auth-panel">
+            <div className="field">
+              <span>Access token</span>
+              <input
+                type="password"
+                value={remoteState.authToken}
+                placeholder="Bearer token"
+                onChange={(event) => setRemoteState((current) => ({
+                  ...current,
+                  authToken: event.target.value,
+                  workspaces: [],
+                  selectedWorkspaceId: "",
+                  loadedRootUrl: "",
+                }))}
+              />
+            </div>
+            {remoteState.authDiscovery?.auth?.login_url ? (
+              <a href={remoteState.authDiscovery.auth.login_url} target="_blank" rel="noreferrer">
+                Open login
+              </a>
+            ) : null}
+            {authInstructions ? (
+              <p className="modal-hint">{authInstructions}</p>
+            ) : null}
+          </div>
+        ) : null}
+        {workspacesLoaded && remoteState.workspaces.length > 0 ? (
+          <div className="field">
+            <span>Remote workspace</span>
+            <select
+              value={remoteState.selectedWorkspaceId}
+              onChange={(event) => setRemoteState((current) => ({
+                ...current,
+                selectedWorkspaceId: event.target.value,
+                newWorkspaceName: "",
+              }))}
+            >
+              {remoteState.workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.name || workspace.id}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        {workspacesLoaded ? (
+          <div className="field">
+            <span>New workspace</span>
+            <input
+              type="text"
+              value={remoteState.newWorkspaceName}
+              placeholder={remoteState.workspaces.length > 0 ? "Create instead" : "Workspace name"}
+              onChange={(event) => setRemoteState((current) => ({
+                ...current,
+                newWorkspaceName: event.target.value,
+                selectedWorkspaceId: event.target.value.trim() ? "" : current.selectedWorkspaceId,
+              }))}
+            />
+          </div>
+        ) : null}
+      </>
+    );
   }
 
   async function renamePage(pageId, newTitle, onSuccess) {
@@ -1855,6 +2283,21 @@ export default function App() {
   }, [mode, loadedPageId, linkedRefs, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (mode !== "workspace" || !syncStatus?.enabled) {
+      return undefined;
+    }
+
+    const id = setInterval(() => {
+      if (busyAction || modal?.type === "sync") {
+        return;
+      }
+      void handleSyncNow();
+    }, 20000);
+
+    return () => clearInterval(id);
+  }, [mode, syncStatus?.enabled, busyAction, modal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     if (!selectedPageId) {
       return;
     }
@@ -1925,6 +2368,19 @@ export default function App() {
 
   const visibleError =
     startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
+  const remoteSyncRootUrl = syncRootFromRemoteState(remoteState);
+  const remoteWorkspace = selectedRemoteWorkspace(remoteState);
+  const remoteWorkspaceName = remoteWorkspace?.name ?? remoteState.newWorkspaceName.trim();
+  const remoteWorkspaceId = remoteWorkspace?.id ?? "";
+  const canUseRemoteWorkspace = Boolean(remoteWorkspaceId || remoteState.newWorkspaceName.trim());
+  const remoteBearerRequired = syncRequiresBearer(remoteState);
+  const remoteDisabled =
+    busyAction === "open-remote" ||
+    busyAction === "configure-sync" ||
+    !remoteSyncRootUrl ||
+    (remoteBearerRequired && !remoteState.authToken.trim()) ||
+    !canUseRemoteWorkspace;
+  const syncConflicts = syncStatus?.conflicts ?? [];
 
   if (mode === "booting") {
     return (
@@ -2018,6 +2474,33 @@ export default function App() {
                 >
                   {darkMode ? "Light mode" : "Dark mode"}
                 </button>
+                <button
+                  className="topbar-menu-item"
+                  type="button"
+                  onClick={() => {
+                    setRemoteState((current) => ({
+                      ...current,
+                      provider: syncStatus?.provider ?? current.provider,
+                      syncRootUrl: syncStatus?.sync_root_url ?? current.syncRootUrl,
+                      workspaces: syncStatus?.remote_workspace_id
+                        ? [{
+                          id: syncStatus.remote_workspace_id,
+                          name: syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id,
+                        }]
+                        : current.workspaces,
+                      selectedWorkspaceId: syncStatus?.remote_workspace_id ?? current.selectedWorkspaceId,
+                      loadedRootUrl: syncStatus?.sync_root_url ?? current.loadedRootUrl,
+                      authDiscovery: syncStatus?.auth
+                        ? { version: 1, auth: { type: syncStatus.auth.kind } }
+                        : current.authDiscovery,
+                      authLoadedRootUrl: syncStatus?.sync_root_url ?? current.authLoadedRootUrl,
+                    }));
+                    setModal({ type: "sync" });
+                    setMenuOpen(false);
+                  }}
+                >
+                  {syncStatus?.sync_root_url ? "Sync" : "Setup remote"}
+                </button>
                 <div className="topbar-menu-divider"></div>
                 <div className="topbar-menu-info">
                   <div className="topbar-menu-path">{workspace.root_path}</div>
@@ -2028,6 +2511,10 @@ export default function App() {
                   <div className="topbar-menu-info-row">
                     <span>Watcher</span>
                     <span>{workspace.watcher_status.mode ?? "starting"}</span>
+                  </div>
+                  <div className="topbar-menu-info-row">
+                    <span>Sync</span>
+                    <span>{syncStatusLabel(syncStatus)}</span>
                   </div>
                 </div>
                 <div className="topbar-menu-divider"></div>
@@ -2340,7 +2827,7 @@ export default function App() {
           {modal && (
             <div className="modal-overlay" onClick={closeModal}>
               <div
-                className={`modal${modal.type === "search" ? " modal--search" : ""}`}
+                className={`modal${modal.type === "search" ? " modal--search" : ""}${modal.type === "sync" ? " modal--sync" : ""}`}
                 onClick={(e) => e.stopPropagation()}
               >
                 {modal.type === "rename" && (
@@ -2549,6 +3036,151 @@ export default function App() {
                   </>
                 )}
 
+                {modal.type === "sync" && (
+                  <>
+                    <h3>{syncStatus?.sync_root_url ? "Sync" : "Setup remote"}</h3>
+                    {syncStatus?.sync_root_url ? (
+                      <div className="sync-panel">
+                        <div className="sync-summary">
+                          <div>
+                            <span>Status</span>
+                            <strong>{syncStatusLabel(syncStatus)}</strong>
+                          </div>
+                          <div>
+                            <span>Provider</span>
+                            <strong>{syncProviderLabel(syncStatus.provider)}</strong>
+                          </div>
+                          <div>
+                            <span>Auth</span>
+                            <strong>
+                              {syncStatus.auth?.kind === "bearer"
+                                ? syncStatus.auth.has_bearer_token ? "Bearer token" : "Bearer token missing"
+                                : "None"}
+                            </strong>
+                          </div>
+                          <div>
+                            <span>Workspace</span>
+                            <strong title={syncStatus.remote_workspace_url ?? ""}>
+                              {syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id}
+                            </strong>
+                          </div>
+                        </div>
+                        {syncStatus.last_error ? (
+                          <p className="modal-hint sync-error">{syncStatus.last_error}</p>
+                        ) : null}
+                        {syncConflicts.length > 0 ? (
+                          <div className="sync-conflicts">
+                            <div className="sync-conflict-toolbar">
+                              <span>{syncConflicts.length} conflict{syncConflicts.length === 1 ? "" : "s"}</span>
+                              <div>
+                                <button
+                                  className="secondary-button"
+                                  type="button"
+                                  disabled={busyAction === "resolve-sync"}
+                                  onClick={() => void resolveAllSyncConflicts("use_local")}
+                                >
+                                  Use local for all
+                                </button>
+                                <button
+                                  className="secondary-button"
+                                  type="button"
+                                  disabled={busyAction === "resolve-sync"}
+                                  onClick={() => void resolveAllSyncConflicts("use_remote")}
+                                >
+                                  Use remote for all
+                                </button>
+                              </div>
+                            </div>
+                            <div className="modal-list sync-conflict-list">
+                              {syncConflicts.map((conflict) => (
+                                <button
+                                  key={conflict.path}
+                                  className="sync-conflict-row"
+                                  type="button"
+                                  onClick={() => void loadSyncConflictDetail(conflict.path)}
+                                >
+                                  <span>{conflict.path}</span>
+                                  <small>{conflict.message}</small>
+                                </button>
+                              ))}
+                            </div>
+                            {syncConflictDetail ? (
+                              <div className="sync-diff">
+                                <div className="sync-diff-head">
+                                  <strong>{syncConflictDetail.path}</strong>
+                                  <div>
+                                    <button
+                                      className="secondary-button"
+                                      type="button"
+                                      disabled={busyAction === "resolve-sync"}
+                                      onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_local")}
+                                    >
+                                      Use local
+                                    </button>
+                                    <button
+                                      className="primary-button"
+                                      type="button"
+                                      disabled={busyAction === "resolve-sync"}
+                                      onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_remote")}
+                                    >
+                                      Use remote
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="sync-diff-grid">
+                                  <div>
+                                    <span>Local</span>
+                                    <pre>{syncConflictDetail.local_content}</pre>
+                                  </div>
+                                  <div>
+                                    <span>Remote</span>
+                                    <pre>{syncConflictDetail.remote_content}</pre>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p className="modal-hint">No conflicts.</p>
+                        )}
+                        <div className="modal-actions">
+                          <button
+                            className="secondary-button"
+                            type="button"
+                            disabled={busyAction === "sync-toggle"}
+                            onClick={() => void setWorkspaceSyncEnabled(!syncStatus.enabled)}
+                          >
+                            {syncStatus.enabled ? "Disable sync" : "Enable sync"}
+                          </button>
+                          <button className="secondary-button" type="button" onClick={closeModal}>
+                            Close
+                          </button>
+                          <button
+                            className="primary-button"
+                            type="button"
+                            disabled={busyAction === "sync" || !syncStatus.enabled}
+                            onClick={() => void handleSyncNow()}
+                          >
+                            {busyAction === "sync" ? "Syncing..." : "Sync now"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <form className="sync-setup-form" onSubmit={handleConfigureSync}>
+                        {renderRemoteSetupFields()}
+                        <div className="modal-actions">
+                          <button className="secondary-button" type="button" onClick={closeModal}>
+                            Cancel
+                          </button>
+                          <button className="primary-button" type="submit" disabled={remoteDisabled}>
+                            {busyAction === "configure-sync" ? "Connecting..." : "Connect"}
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </>
+                )}
+
                 {modal.type === "search" && (
                   <>
                     <h3>Search</h3>
@@ -2685,6 +3317,21 @@ export default function App() {
             >
               {busyAction === "open" ? "Opening..." : "Open My Notes"}
             </button>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setOnboardingTab("remote")}
+            >
+              Open from remote
+            </button>
+            {onboardingTab === "remote" ? (
+              <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
+                {renderRemoteSetupFields()}
+                <button className="primary-button" type="submit" disabled={remoteDisabled}>
+                  {busyAction === "open-remote" ? "Opening..." : "Open remote"}
+                </button>
+              </form>
+            ) : null}
           </div>
         ) : (
           <>
@@ -2696,7 +3343,7 @@ export default function App() {
                 aria-selected={onboardingTab === "create"}
                 onClick={() => setOnboardingTab("create")}
               >
-                Make new
+                Create local
               </button>
               <button
                 className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
@@ -2705,7 +3352,16 @@ export default function App() {
                 aria-selected={onboardingTab === "open"}
                 onClick={() => setOnboardingTab("open")}
               >
-                Open existing
+                Open local
+              </button>
+              <button
+                className={`onboard-tab${onboardingTab === "remote" ? " onboard-tab--active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={onboardingTab === "remote"}
+                onClick={() => setOnboardingTab("remote")}
+              >
+                Create/open remote
               </button>
             </div>
 
@@ -2719,6 +3375,13 @@ export default function App() {
                 >
                   {busyAction === "open" ? "Opening..." : "Choose folder"}
                 </button>
+              ) : onboardingTab === "remote" ? (
+                <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
+                  {renderRemoteSetupFields()}
+                  <button className="primary-button" type="submit" disabled={remoteDisabled}>
+                    {busyAction === "open-remote" ? "Opening..." : "Open remote"}
+                  </button>
+                </form>
               ) : (
                 <form className="create-form" onSubmit={handleCreateWorkspace}>
                   <div className="field">

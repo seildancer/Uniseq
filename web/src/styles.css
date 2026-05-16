@@ -276,7 +276,8 @@ h2 {
   font-size: 0.85rem;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   min-height: 42px;
   padding: 0 12px;
@@ -287,6 +288,7 @@ h2 {
 }
 
 .field input:focus-visible,
+.field select:focus-visible,
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
 .ghost-button:focus-visible {
@@ -301,7 +303,7 @@ h2 {
 }
 
 .minimal-panel {
-  max-width: 400px;
+  width: fit-content;
 }
 
 .status-copy {
@@ -353,6 +355,24 @@ h2 {
 
 .onboard-panel .create-form {
   width: 100%;
+}
+
+.remote-provider-toggle {
+  display: flex;
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.remote-auth-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0 0;
+}
+
+.remote-auth-panel a {
+  color: var(--accent);
+  font-size: 0.9rem;
+  text-decoration: none;
 }
 
 .field input[readonly] {
@@ -2825,6 +2845,13 @@ code {
   max-height: none;
 }
 
+.modal--sync {
+  max-width: min(980px, calc(100vw - 48px));
+  width: min(980px, calc(100vw - 48px));
+  max-height: min(88vh, 900px);
+  overflow: auto;
+}
+
 .modal h3 {
   margin: 0;
   font-size: 1.1rem;
@@ -2881,6 +2908,141 @@ code {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 4px;
+}
+
+.sync-panel,
+.sync-setup-form {
+  display: grid;
+  gap: 14px;
+}
+
+.sync-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sync-summary div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.sync-summary span,
+.sync-diff-grid span,
+.sync-conflict-row small,
+.sync-conflict-toolbar {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.sync-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.92rem;
+}
+
+.sync-error {
+  color: #c0392b;
+}
+
+.sync-conflicts {
+  display: grid;
+  gap: 10px;
+}
+
+.sync-conflict-toolbar,
+.sync-diff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sync-conflict-toolbar div,
+.sync-diff-head div {
+  display: flex;
+  gap: 8px;
+}
+
+.sync-conflict-list {
+  max-height: 180px;
+}
+
+.sync-conflict-row {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sync-conflict-row:hover,
+.sync-conflict-row:focus-visible {
+  background: var(--hover);
+}
+
+.sync-conflict-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-diff {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.sync-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sync-diff-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.sync-diff pre {
+  min-height: 220px;
+  max-height: 360px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font: 0.82rem/1.45 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .sync-summary,
+  .sync-diff-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-conflict-toolbar,
+  .sync-diff-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .mobile-keyboard-bar {

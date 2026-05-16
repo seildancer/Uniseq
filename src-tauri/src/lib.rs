@@ -18,8 +18,11 @@ use uniseq_backend::{
     WorkspaceSession, create_workspace_root, prepare_workspace_root,
 };
 
+mod sync;
+
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
-const PAGE_ORDER_FILE_NAME: &str = "workspace-page-order.json";
+const PAGE_ORDER_FILE_NAME: &str = "page-order.json";
+const OLD_PAGE_ORDER_STORE_FILE_NAME: &str = "workspace-page-order.json";
 const ROOT_PARENT_ORDER_KEY: &str = "__root__";
 
 #[derive(Default)]
@@ -205,6 +208,13 @@ enum WorkspaceEventDto {
     WatcherDegradedToPolling { reason: WatcherFallbackReasonDto },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SyncProviderKindDto {
+    Uniseq,
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct ErrorDto {
     code: &'static str,
@@ -293,15 +303,12 @@ impl WorkspaceController {
     fn page_order(&self, app: &AppHandle) -> CommandResult<PageOrderDto> {
         let workspace_root = self.session()?.workspace_root();
         let pages = self.session()?.all_pages();
-        let mut store = read_page_order_store(app)?;
-        let workspace_order = store
-            .workspaces
-            .entry(workspace_root_key(&workspace_root))
-            .or_insert_with(WorkspacePageOrder::default);
-        let normalized = normalize_workspace_page_order(workspace_order, &pages);
-        if normalized != *workspace_order {
-            *workspace_order = normalized.clone();
-            write_page_order_store(app, &store)?;
+        let should_materialize_workspace_order =
+            !workspace_page_order_path(&workspace_root).exists();
+        let workspace_order = read_workspace_page_order(app, &workspace_root)?;
+        let normalized = normalize_workspace_page_order(&workspace_order, &pages);
+        if should_materialize_workspace_order || normalized != workspace_order {
+            write_workspace_page_order(&workspace_root, &normalized)?;
         }
         Ok(PageOrderDto {
             sibling_order_by_parent: normalized.sibling_order_by_parent,
@@ -661,17 +668,13 @@ impl WorkspaceController {
 
         let workspace_root = self.session()?.workspace_root();
         let pages = self.session()?.all_pages();
-        let mut store = read_page_order_store(app)?;
-        let workspace_order = store
-            .workspaces
-            .entry(workspace_root_key(&workspace_root))
-            .or_insert_with(WorkspacePageOrder::default);
+        let mut workspace_order = read_workspace_page_order(app, &workspace_root)?;
         workspace_order.sibling_order_by_parent.insert(
             parent_order_key(canonical_parent_page_id.as_deref()),
             ordered_child_page_ids,
         );
-        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
-        write_page_order_store(app, &store)
+        workspace_order = normalize_workspace_page_order(&workspace_order, &pages);
+        write_workspace_page_order(&workspace_root, &workspace_order)
     }
 
     fn page_incoming_refs(&self, page_id: String) -> CommandResult<Vec<IncomingPageRefDto>> {
@@ -745,6 +748,91 @@ impl WorkspaceController {
         Ok(true)
     }
 
+    fn configure_sync(
+        &self,
+        provider: SyncProviderKindDto,
+        sync_root_url: String,
+        remote_workspace_id: String,
+        remote_workspace_name: String,
+        auth_kind: Option<sync::SyncAuthKind>,
+        auth_token: Option<String>,
+    ) -> CommandResult<sync::SyncStatus> {
+        let workspace_root = self.session()?.workspace_root();
+        let config = sync::SyncConfig::new_with_auth(
+            sync::SyncProviderKind::from(provider),
+            sync_root_url,
+            remote_workspace_id,
+            remote_workspace_name,
+            sync::SyncAuthConfig {
+                kind: auth_kind.unwrap_or_default(),
+            },
+        );
+        sync::write_sync_config(&workspace_root, &config).map_err(ErrorDto::from)?;
+        sync::write_sync_auth_secrets(
+            &workspace_root,
+            &sync::SyncAuthSecrets {
+                bearer_token: normalize_auth_token(auth_token),
+            },
+        )
+        .map_err(ErrorDto::from)?;
+        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+    }
+
+    fn set_sync_enabled(&self, enabled: bool) -> CommandResult<sync::SyncStatus> {
+        let workspace_root = self.session()?.workspace_root();
+        let mut config = sync::read_sync_config(&workspace_root)
+            .map_err(ErrorDto::from)?
+            .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+        config.enabled = enabled;
+        sync::write_sync_config(&workspace_root, &config).map_err(ErrorDto::from)?;
+        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+    }
+
+    fn sync_status(&self) -> CommandResult<sync::SyncStatus> {
+        let workspace_root = self.session()?.workspace_root();
+        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+    }
+
+    fn sync_now(&mut self) -> CommandResult<sync::SyncRunSummary> {
+        let workspace_root = self.session()?.workspace_root();
+        let config = sync::read_sync_config(&workspace_root)
+            .map_err(ErrorDto::from)?
+            .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+        let provider = sync_provider_for_config(&workspace_root, &config)?;
+        let summary = sync::sync_once(&workspace_root, &provider).map_err(ErrorDto::from)?;
+        if summary.pulled > 0 || summary.deleted_local > 0 {
+            self.reopen_workspace()?;
+        }
+        Ok(summary)
+    }
+
+    fn sync_conflict_detail(&self, path: String) -> CommandResult<sync::SyncConflictDetail> {
+        let workspace_root = self.session()?.workspace_root();
+        let config = sync::read_sync_config(&workspace_root)
+            .map_err(ErrorDto::from)?
+            .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+        let provider = sync_provider_for_config(&workspace_root, &config)?;
+        sync::conflict_detail(&workspace_root, &provider, &path).map_err(ErrorDto::from)
+    }
+
+    fn resolve_sync_conflict(
+        &mut self,
+        path: String,
+        resolution: sync::SyncConflictResolution,
+    ) -> CommandResult<sync::SyncRunSummary> {
+        let workspace_root = self.session()?.workspace_root();
+        let config = sync::read_sync_config(&workspace_root)
+            .map_err(ErrorDto::from)?
+            .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+        let provider = sync_provider_for_config(&workspace_root, &config)?;
+        let summary = sync::resolve_conflict(&workspace_root, &provider, &path, resolution)
+            .map_err(ErrorDto::from)?;
+        if summary.pulled > 0 {
+            self.reopen_workspace()?;
+        }
+        Ok(summary)
+    }
+
     fn session(&self) -> CommandResult<&WorkspaceSession> {
         self.session
             .as_ref()
@@ -765,14 +853,10 @@ impl WorkspaceController {
     ) -> CommandResult<()> {
         let workspace_root = self.session()?.workspace_root();
         let pages = self.session()?.all_pages();
-        let mut store = read_page_order_store(app)?;
-        let workspace_order = store
-            .workspaces
-            .entry(workspace_root_key(&workspace_root))
-            .or_insert_with(WorkspacePageOrder::default);
-        remap_workspace_page_order_subtree(workspace_order, source_page_id, target_page_id);
-        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
-        write_page_order_store(app, &store)
+        let mut workspace_order = read_workspace_page_order(app, &workspace_root)?;
+        remap_workspace_page_order_subtree(&mut workspace_order, source_page_id, target_page_id);
+        workspace_order = normalize_workspace_page_order(&workspace_order, &pages);
+        write_workspace_page_order(&workspace_root, &workspace_order)
     }
 
     fn remove_page_order_subtree(
@@ -782,14 +866,10 @@ impl WorkspaceController {
     ) -> CommandResult<()> {
         let workspace_root = self.session()?.workspace_root();
         let pages = self.session()?.all_pages();
-        let mut store = read_page_order_store(app)?;
-        let workspace_order = store
-            .workspaces
-            .entry(workspace_root_key(&workspace_root))
-            .or_insert_with(WorkspacePageOrder::default);
-        remove_workspace_page_order_subtree(workspace_order, source_page_id);
-        *workspace_order = normalize_workspace_page_order(workspace_order, &pages);
-        write_page_order_store(app, &store)
+        let mut workspace_order = read_workspace_page_order(app, &workspace_root)?;
+        remove_workspace_page_order_subtree(&mut workspace_order, source_page_id);
+        workspace_order = normalize_workspace_page_order(&workspace_order, &pages);
+        write_workspace_page_order(&workspace_root, &workspace_order)
     }
 }
 
@@ -1058,6 +1138,15 @@ impl From<WorkspaceEvent> for WorkspaceEventDto {
     }
 }
 
+impl From<SyncProviderKindDto> for sync::SyncProviderKind {
+    fn from(value: SyncProviderKindDto) -> Self {
+        match value {
+            SyncProviderKindDto::Uniseq => Self::Uniseq,
+            SyncProviderKindDto::Custom => Self::Custom,
+        }
+    }
+}
+
 impl ErrorDto {
     fn no_workspace_open() -> Self {
         Self {
@@ -1078,6 +1167,14 @@ impl ErrorDto {
     fn app_config_unavailable(message: impl Into<String>) -> Self {
         Self {
             code: "app_config_unavailable",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn sync(message: impl Into<String>) -> Self {
+        Self {
+            code: "sync_error",
             message: message.into(),
             path: None,
         }
@@ -1200,6 +1297,16 @@ impl From<CoreError> for ErrorDto {
     }
 }
 
+impl From<sync::SyncError> for ErrorDto {
+    fn from(value: sync::SyncError) -> Self {
+        Self {
+            code: "sync_error",
+            message: value.message().to_owned(),
+            path: None,
+        }
+    }
+}
+
 #[tauri::command]
 fn open_workspace(
     app: AppHandle,
@@ -1228,6 +1335,48 @@ fn create_workspace(
 }
 
 #[tauri::command]
+fn open_remote_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    remote_workspace_id: String,
+    remote_workspace_name: String,
+    auth_kind: Option<sync::SyncAuthKind>,
+    auth_token: Option<String>,
+) -> CommandResult<WorkspaceOpenDto> {
+    let config = sync::SyncConfig::new_with_auth(
+        sync::SyncProviderKind::from(provider),
+        sync_root_url,
+        remote_workspace_id,
+        remote_workspace_name,
+        sync::SyncAuthConfig {
+            kind: auth_kind.unwrap_or_default(),
+        },
+    );
+    let root_path =
+        remote_workspace_path(&app, &config.sync_root_url, &config.remote_workspace_id)?;
+    prepare_workspace_root(&root_path).map_err(ErrorDto::from)?;
+    sync::write_sync_config(&root_path, &config).map_err(ErrorDto::from)?;
+    sync::write_sync_auth_secrets(
+        &root_path,
+        &sync::SyncAuthSecrets {
+            bearer_token: normalize_auth_token(auth_token),
+        },
+    )
+    .map_err(ErrorDto::from)?;
+    let provider = sync_provider_for_config(&root_path, &config)?;
+    sync::initial_pull(&root_path, &provider).map_err(ErrorDto::from)?;
+    let opened = state
+        .controller
+        .lock()
+        .unwrap()
+        .open_workspace(root_path.to_string_lossy().to_string())?;
+    write_last_workspace_path(&app, &opened.root_path)?;
+    Ok(opened)
+}
+
+#[tauri::command]
 fn close_workspace(app: AppHandle, state: State<'_, AppState>) -> bool {
     let closed = state.controller.lock().unwrap().close_workspace();
     if closed {
@@ -1244,6 +1393,101 @@ fn get_last_workspace_path(app: AppHandle) -> CommandResult<Option<String>> {
 #[tauri::command]
 fn clear_last_workspace_path(app: AppHandle) -> CommandResult<bool> {
     clear_persisted_last_workspace_path(&app)
+}
+
+#[tauri::command]
+fn configure_workspace_sync(
+    state: State<'_, AppState>,
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    remote_workspace_id: String,
+    remote_workspace_name: String,
+    auth_kind: Option<sync::SyncAuthKind>,
+    auth_token: Option<String>,
+) -> CommandResult<sync::SyncStatus> {
+    state.controller.lock().unwrap().configure_sync(
+        provider,
+        sync_root_url,
+        remote_workspace_id,
+        remote_workspace_name,
+        auth_kind,
+        auth_token,
+    )
+}
+
+#[tauri::command]
+fn discover_sync_service(
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+) -> CommandResult<sync::SyncServiceDiscovery> {
+    let _provider_kind = provider;
+    sync::HttpSyncProvider::discover(sync_root_url).map_err(ErrorDto::from)
+}
+
+#[tauri::command]
+fn list_remote_workspaces(
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    auth_token: Option<String>,
+) -> CommandResult<Vec<sync::RemoteWorkspace>> {
+    let _provider_kind = provider;
+    let provider = sync::HttpSyncProvider::new_account_with_auth(sync_root_url, auth_token)
+        .map_err(ErrorDto::from)?;
+    provider.list_workspaces().map_err(ErrorDto::from)
+}
+
+#[tauri::command]
+fn create_remote_workspace(
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    workspace_name: String,
+    auth_token: Option<String>,
+) -> CommandResult<sync::RemoteWorkspace> {
+    let _provider_kind = provider;
+    let provider = sync::HttpSyncProvider::new_account_with_auth(sync_root_url, auth_token)
+        .map_err(ErrorDto::from)?;
+    provider
+        .create_workspace(&workspace_name)
+        .map_err(ErrorDto::from)
+}
+
+#[tauri::command]
+fn sync_status(state: State<'_, AppState>) -> CommandResult<sync::SyncStatus> {
+    state.controller.lock().unwrap().sync_status()
+}
+
+#[tauri::command]
+fn set_workspace_sync_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> CommandResult<sync::SyncStatus> {
+    state.controller.lock().unwrap().set_sync_enabled(enabled)
+}
+
+#[tauri::command]
+fn sync_now(state: State<'_, AppState>) -> CommandResult<sync::SyncRunSummary> {
+    state.controller.lock().unwrap().sync_now()
+}
+
+#[tauri::command]
+fn sync_conflict_detail(
+    state: State<'_, AppState>,
+    path: String,
+) -> CommandResult<sync::SyncConflictDetail> {
+    state.controller.lock().unwrap().sync_conflict_detail(path)
+}
+
+#[tauri::command]
+fn resolve_sync_conflict(
+    state: State<'_, AppState>,
+    path: String,
+    resolution: sync::SyncConflictResolution,
+) -> CommandResult<sync::SyncRunSummary> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .resolve_sync_conflict(path, resolution)
 }
 
 #[tauri::command]
@@ -1527,12 +1771,63 @@ fn open_url(url: String) {
 #[tauri::command]
 fn get_default_workspace_path(app: AppHandle) -> CommandResult<String> {
     let data_dir = app.path().app_data_dir().map_err(|error| {
-        ErrorDto::app_config_unavailable(format!(
-            "failed to resolve app data directory: {error}"
-        ))
+        ErrorDto::app_config_unavailable(format!("failed to resolve app data directory: {error}"))
     })?;
     let workspace_path = data_dir.join("workspace");
     Ok(workspace_path.to_string_lossy().replace('\\', "/"))
+}
+
+fn remote_workspace_path(
+    app: &AppHandle,
+    sync_root_url: &str,
+    remote_workspace_id: &str,
+) -> CommandResult<PathBuf> {
+    let data_dir = app.path().app_data_dir().map_err(|error| {
+        ErrorDto::app_config_unavailable(format!("failed to resolve app data directory: {error}"))
+    })?;
+    Ok(data_dir
+        .join("remote-workspaces")
+        .join(safe_remote_folder_name(&format!(
+            "{sync_root_url}/{remote_workspace_id}"
+        ))))
+}
+
+fn safe_remote_folder_name(sync_root_url: &str) -> String {
+    let mut output = String::new();
+    for ch in sync_root_url.chars() {
+        if ch.is_ascii_alphanumeric() {
+            output.push(ch.to_ascii_lowercase());
+        } else if matches!(ch, '-' | '_' | '.') {
+            output.push(ch);
+        } else if !output.ends_with('-') {
+            output.push('-');
+        }
+    }
+    let output = output.trim_matches('-');
+    if output.is_empty() {
+        "remote".to_owned()
+    } else {
+        output.chars().take(80).collect()
+    }
+}
+
+fn sync_provider_for_config(
+    workspace_root: &Path,
+    config: &sync::SyncConfig,
+) -> CommandResult<sync::HttpSyncProvider> {
+    let secrets = sync::read_sync_auth_secrets(workspace_root).map_err(ErrorDto::from)?;
+    sync::HttpSyncProvider::new_workspace_with_auth(
+        config.sync_root_url.clone(),
+        config.remote_workspace_id.clone(),
+        secrets.bearer_token,
+    )
+    .map_err(ErrorDto::from)
+}
+
+fn normalize_auth_token(token: Option<String>) -> Option<String> {
+    token
+        .map(|token| token.trim().to_owned())
+        .filter(|token| !token.is_empty())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1543,9 +1838,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_workspace,
             create_workspace,
+            open_remote_workspace,
             close_workspace,
             get_last_workspace_path,
             clear_last_workspace_path,
+            configure_workspace_sync,
+            discover_sync_service,
+            list_remote_workspaces,
+            create_remote_workspace,
+            sync_status,
+            set_workspace_sync_enabled,
+            sync_now,
+            sync_conflict_detail,
+            resolve_sync_conflict,
             all_pages,
             all_streams,
             page_order,
@@ -1669,12 +1974,55 @@ fn days_since_date_name(date_name: &str) -> Option<u64> {
     (age >= 0).then_some(age as u64)
 }
 
-fn page_order_store_path(app: &AppHandle) -> CommandResult<PathBuf> {
-    Ok(app_storage_dir(app)?.join(PAGE_ORDER_FILE_NAME))
+fn workspace_page_order_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("uniseq").join(PAGE_ORDER_FILE_NAME)
 }
 
-fn read_page_order_store(app: &AppHandle) -> CommandResult<PageOrderStore> {
-    let path = page_order_store_path(app)?;
+fn old_page_order_store_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(app_storage_dir(app)?.join(OLD_PAGE_ORDER_STORE_FILE_NAME))
+}
+
+fn read_workspace_page_order(
+    app: &AppHandle,
+    workspace_root: &Path,
+) -> CommandResult<WorkspacePageOrder> {
+    let path = workspace_page_order_path(workspace_root);
+    match fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).map_err(|error| ErrorDto {
+            code: "page_order_store_invalid",
+            message: format!("failed to parse workspace page order: {error}"),
+            path: Some(workspace_path_to_string(&path)),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let old_store = read_old_page_order_store(app)?;
+            Ok(old_store
+                .workspaces
+                .get(&workspace_root_key(workspace_root))
+                .cloned()
+                .unwrap_or_default())
+        }
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
+}
+
+fn write_workspace_page_order(
+    workspace_root: &Path,
+    workspace_order: &WorkspacePageOrder,
+) -> CommandResult<()> {
+    let path = workspace_page_order_path(workspace_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
+    }
+    let contents = serde_json::to_string_pretty(workspace_order).map_err(|error| ErrorDto {
+        code: "page_order_store_invalid",
+        message: format!("failed to serialize workspace page order: {error}"),
+        path: Some(workspace_path_to_string(&path)),
+    })?;
+    fs::write(&path, contents).map_err(|error| ErrorDto::io(&path, &error))
+}
+
+fn read_old_page_order_store(app: &AppHandle) -> CommandResult<PageOrderStore> {
+    let path = old_page_order_store_path(app)?;
     match fs::read_to_string(&path) {
         Ok(contents) => serde_json::from_str(&contents).map_err(|error| ErrorDto {
             code: "page_order_store_invalid",
@@ -1684,19 +2032,6 @@ fn read_page_order_store(app: &AppHandle) -> CommandResult<PageOrderStore> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(PageOrderStore::default()),
         Err(error) => Err(ErrorDto::io(&path, &error)),
     }
-}
-
-fn write_page_order_store(app: &AppHandle, store: &PageOrderStore) -> CommandResult<()> {
-    let path = page_order_store_path(app)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
-    }
-    let contents = serde_json::to_string_pretty(store).map_err(|error| ErrorDto {
-        code: "page_order_store_invalid",
-        message: format!("failed to serialize page order store: {error}"),
-        path: Some(workspace_path_to_string(&path)),
-    })?;
-    fs::write(&path, contents).map_err(|error| ErrorDto::io(&path, &error))
 }
 
 fn normalize_workspace_page_order(
