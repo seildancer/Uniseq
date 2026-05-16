@@ -1331,6 +1331,11 @@ h2 {
   scroll-snap-type: none;
 }
 
+.editor-panel-scroll--mobile-stream.editor-panel-scroll--focus-locked {
+  overflow: hidden;
+  scroll-snap-type: none;
+}
+
 .editor-panel-scroll--mobile-stream::-webkit-scrollbar {
   display: none;
 }
@@ -1661,6 +1666,78 @@ h2 {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+
+.stream-mobile-focus-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.stream-mobile-focus-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  justify-content: space-between;
+  padding-bottom: 12px;
+}
+
+.stream-mobile-focus-back {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.stream-mobile-focus-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.stream-mobile-focus-label {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.stream-mobile-focus-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.stream-mobile-focus-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding-bottom: calc(12px + var(--mobile-keyboard-obstruction));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-padding-bottom: calc(12px + var(--mobile-keyboard-obstruction));
+}
+
+.stream-mobile-focus-editor,
+.stream-mobile-focus-editor .stream-editor-pane,
+.stream-mobile-focus-editor .milkdown-editor,
+.stream-mobile-focus-editor .milkdown-editor [data-milkdown-root] {
+  min-height: 100%;
+}
+
+.stream-mobile-focus-editor .milkdown-editor .ProseMirror {
+  min-height: 100%;
+  max-height: none;
+  overflow: visible;
 }
 
 .stream-dual-wrap--mobile .stream-dual-panel + .stream-dual-panel {

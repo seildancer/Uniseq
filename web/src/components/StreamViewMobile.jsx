@@ -15,13 +15,54 @@ function editorKeyFor(streamName, dateName) {
   return `${streamName}/${dateName}`;
 }
 
-function isEditorTarget(target) {
-  return Boolean(target?.closest?.(".ProseMirror"));
-}
+function MobileFocusScreen({
+  focusedEditor,
+  editorKey,
+  existingPageId,
+  pages,
+  reloadToken,
+  onNavigate,
+  onError,
+  onRefresh,
+  focusEditorRef,
+  onClose,
+}) {
+  return (
+    <section className="stream-mobile-focus-screen">
+      <div className="stream-mobile-focus-header">
+        <div className="stream-mobile-focus-heading">
+          <p className="stream-mobile-focus-label">{focusedEditor.streamName}</p>
+          <h2 className="stream-mobile-focus-title">{formatDateLabel(focusedEditor.dateName)}</h2>
+        </div>
+        <button
+          type="button"
+          className="stream-mobile-focus-back"
+          onClick={onClose}
+          aria-label="Back to stream dates"
+        >
+          Back
+        </button>
+      </div>
 
-function isEditorDomFocused() {
-  const activeElement = document.activeElement;
-  return Boolean(activeElement?.closest?.(".milkdown-editor, .ProseMirror"));
+      <div className="stream-mobile-focus-body">
+        <div className="stream-mobile-focus-editor">
+          <StreamSingleEditor
+            key={editorKey}
+            streamName={focusedEditor.streamName}
+            dateName={focusedEditor.dateName}
+            existingPageId={existingPageId}
+            pages={pages}
+            reloadToken={reloadToken}
+            onNavigate={onNavigate}
+            onError={onError}
+            onRefresh={onRefresh}
+            focusEditorRef={focusEditorRef}
+            onFocusChange={() => {}}
+          />
+        </div>
+      </div>
+    </section>
+  );
 }
 
 export default function StreamViewMobile({
@@ -42,6 +83,7 @@ export default function StreamViewMobile({
   const editorFocusRefs = useRef(new Map());
   const selectedDateRef = useRef(selectedDate);
   const focusedEditorRef = useRef(null);
+  const shouldFocusScreenEditorRef = useRef(false);
   const scrollSettleTimerRef = useRef(null);
   const programmaticScrollTimerRef = useRef(null);
   const isProgrammaticScrollRef = useRef(false);
@@ -135,24 +177,13 @@ export default function StreamViewMobile({
     return focusRef;
   }
 
-  function enterFocusMode(dateName, streamName) {
+  function openFocusScreen(dateName, streamName) {
     if (dateName !== selectedDateRef.current) {
       onSelectDate?.(dateName);
     }
     scrollDateIntoView(dateName, "auto");
+    shouldFocusScreenEditorRef.current = true;
     setFocusedEditor({ dateName, streamName });
-  }
-
-  function focusPaneEditor(event, dateName, streamName, editorKey) {
-    if (isEditorTarget(event.target)) {
-      return;
-    }
-
-    const didFocus = editorFocusRefs.current.get(editorKey)?.current?.({ atEnd: true });
-    if (!didFocus) {
-      event.currentTarget.querySelector(".ProseMirror")?.focus();
-    }
-    enterFocusMode(dateName, streamName);
   }
 
   useLayoutEffect(() => {
@@ -169,13 +200,33 @@ export default function StreamViewMobile({
   }, []);
 
   useEffect(() => {
-    if (!focusedEditor) {
-      return;
-    }
-    if (!streamNames.includes(focusedEditor.streamName) || !visibleDates.includes(focusedEditor.dateName)) {
+    if (focusedEditor && !streamNames.includes(focusedEditor.streamName)) {
       setFocusedEditor(null);
     }
-  }, [focusedEditor, streamNames, visibleDates]);
+  }, [focusedEditor, streamNames]);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) {
+      return undefined;
+    }
+    container.classList.toggle("editor-panel-scroll--focus-locked", Boolean(focusedEditor));
+    return () => {
+      container.classList.remove("editor-panel-scroll--focus-locked");
+    };
+  }, [focusedEditor, scrollContainerRef]);
+
+  useEffect(() => {
+    if (!focusedEditor || !shouldFocusScreenEditorRef.current) {
+      return;
+    }
+    const focusRef = editorFocusRefs.current.get(editorKeyFor(focusedEditor.streamName, focusedEditor.dateName));
+    const timerId = window.setTimeout(() => {
+      focusRef?.current?.({ atEnd: true });
+      shouldFocusScreenEditorRef.current = false;
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [focusedEditor]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -184,11 +235,7 @@ export default function StreamViewMobile({
     }
 
     function handleScroll() {
-      if (
-        isProgrammaticScrollRef.current
-        || focusedEditorRef.current
-        || isEditorDomFocused()
-      ) {
+      if (isProgrammaticScrollRef.current || focusedEditorRef.current) {
         return;
       }
 
@@ -197,7 +244,7 @@ export default function StreamViewMobile({
       }
       scrollSettleTimerRef.current = window.setTimeout(() => {
         scrollSettleTimerRef.current = null;
-        if (focusedEditorRef.current || isEditorDomFocused()) {
+        if (focusedEditorRef.current) {
           return;
         }
         const nextDate = closestVisibleDate();
@@ -217,27 +264,49 @@ export default function StreamViewMobile({
     };
   }, [onSelectDate, scrollContainerRef]);
 
+  if (focusedEditor) {
+    const editorKey = editorKeyFor(focusedEditor.streamName, focusedEditor.dateName);
+    const existingPageId = streamPageExists(
+      streamPagesByDate,
+      focusedEditor.dateName,
+      focusedEditor.streamName,
+    )
+      ? streamPageId(focusedEditor.streamName, focusedEditor.dateName)
+      : null;
+
+    return (
+      <div className="stream-dual-wrap stream-dual-wrap--mobile">
+        <MobileFocusScreen
+          focusedEditor={focusedEditor}
+          editorKey={editorKey}
+          existingPageId={existingPageId}
+          pages={pages}
+          reloadToken={reloadToken}
+          onNavigate={onNavigate}
+          onError={onError}
+          onRefresh={onRefresh}
+          focusEditorRef={editorFocusRefForKey(editorKey)}
+          onClose={() => setFocusedEditor(null)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="stream-dual-wrap stream-dual-wrap--mobile">
-      <div className={`stream-day-list stream-day-list--mobile-single${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
+      <div className="stream-day-list stream-day-list--mobile-single">
         {visibleDates.map((dateName) => {
-          const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
-          const isSelected = selectedDate === dateName;
           const paneStates = streamNames.map((streamName) => {
             const editorKey = editorKeyFor(streamName, dateName);
             const existingPageId = streamPageExists(streamPagesByDate, dateName, streamName)
               ? streamPageId(streamName, dateName)
               : null;
-            const shouldBlur = diaryBlurEnabled
-              && isDiaryStream(streamName)
-              && Boolean(existingPageId)
-              && focusedStreamName !== streamName;
 
             return {
               editorKey,
               existingPageId,
               focusEditorRef: editorFocusRefForKey(editorKey),
-              shouldBlur,
+              shouldBlur: diaryBlurEnabled && isDiaryStream(streamName) && Boolean(existingPageId),
               streamName,
             };
           });
@@ -253,26 +322,19 @@ export default function StreamViewMobile({
                   dayRefs.current.delete(dateName);
                 }
               }}
-              className={`stream-day-entry stream-day-entry--ready${focusedStreamName ? " stream-day-entry--focused" : ""}${isSelected ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}`}
+              className={`stream-day-entry stream-day-entry--ready${selectedDate === dateName ? " stream-day-entry--selected" : ""}${isEmpty ? " stream-day-entry--empty" : ""}`}
             >
               <div className="stream-day-entry-header">
                 <h2 className="stream-day-entry-title">{formatDateLabel(dateName)}</h2>
               </div>
 
               <div className="stream-day-entry-body">
-                <div
-                  className="stream-dual-pane"
-                  style={{
-                    gridTemplateRows: paneStates.map((pane) => (
-                      pane.streamName === focusedStreamName ? "minmax(0, 9fr)" : "minmax(0, 1fr)"
-                    )).join(" ") || "minmax(0, 1fr)",
-                  }}
-                >
+                <div className="stream-dual-pane">
                   {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
                     <div
                       key={editorKey}
-                      className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
-                      onClick={(event) => focusPaneEditor(event, dateName, streamName, editorKey)}
+                      className="stream-dual-panel"
+                      onClick={() => openFocusScreen(dateName, streamName)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
                       <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
@@ -288,14 +350,8 @@ export default function StreamViewMobile({
                           focusEditorRef={focusEditorRef}
                           onFocusChange={(focused) => {
                             if (focused) {
-                              enterFocusMode(dateName, streamName);
-                              return;
+                              openFocusScreen(dateName, streamName);
                             }
-                            setFocusedEditor((current) => (
-                              current?.dateName === dateName && current?.streamName === streamName
-                                ? null
-                                : current
-                            ));
                           }}
                         />
                       </div>
