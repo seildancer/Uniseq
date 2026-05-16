@@ -1,7 +1,7 @@
 @import "prosemirror-view/style/prosemirror.css";
 
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #ffffff;
   --panel: #f5f5f2;
   --panel-strong: #f5f5f2;

@@ -482,7 +482,11 @@ export default function App() {
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
 
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
+  const [darkMode, setDarkMode] = useState(() => {
+    const stored = localStorage.getItem("theme");
+    if (stored) return stored === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   const [mode, setMode] = useState("booting");
   const [workspace, setWorkspace] = useState(null);
   const [pages, setPages] = useState([]);
