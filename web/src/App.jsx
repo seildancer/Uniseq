@@ -429,6 +429,22 @@ function WindowMinimizeIcon() {
   );
 }
 
+function WindowBackIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M7.75 2.5 4 6l3.75 3.5" />
+    </svg>
+  );
+}
+
+function WindowForwardIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M4.25 2.5 8 6l-3.75 3.5" />
+    </svg>
+  );
+}
+
 function WindowMaximizeIcon() {
   return (
     <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
@@ -474,7 +490,10 @@ export default function App() {
   const [streamNames, setStreamNames] = useState([]);
   const [streamOrder, setStreamOrder] = useState([]);
   const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
-  const [selection, setSelection] = useState(() => defaultStreamSelection());
+  const [selectionHistoryState, setSelectionHistoryState] = useState(() => ({
+    entries: [defaultStreamSelection()],
+    index: 0,
+  }));
   const [lastStreamDate, setLastStreamDate] = useState(() => todayDateName());
   const [streamReloadToken, setStreamReloadToken] = useState(0);
   const [selectedPageText, setSelectedPageText] = useState("");
@@ -531,6 +550,7 @@ export default function App() {
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
   const regularPagesById = new Map(regularPages.map((page) => [page.page_id, page]));
   const pagesById = new Map(pages.map((page) => [page.page_id, page]));
+  const selection = selectionHistoryState.entries[selectionHistoryState.index] ?? defaultStreamSelection();
   const selectedPageId = selection.kind === "page" ? selection.pageId : "";
   const streamSelection = selection.kind === "page" ? null : selection;
   const selectedStreamDate = readSelectedStreamDate(selection, lastStreamDate);
@@ -570,6 +590,200 @@ export default function App() {
     return prefix >= 0
       ? pageId.slice(0, prefix + 1) + newTitle
       : "pages:" + newTitle;
+  }
+
+  function areSelectionsEqual(left, right) {
+    if (!left || !right || left.kind !== right.kind) {
+      return false;
+    }
+
+    if (left.kind === "page") {
+      return left.pageId === right.pageId;
+    }
+
+    if (left.kind === "stream_dual") {
+      return left.dateName === right.dateName;
+    }
+
+    return left.streamName === right.streamName && left.dateName === right.dateName;
+  }
+
+  function resetSelectionHistory(nextSelection) {
+    setSelectionHistoryState({
+      entries: [nextSelection],
+      index: 0,
+    });
+  }
+
+  function pushSelection(nextSelection) {
+    setSelectionHistoryState((current) => {
+      const currentSelection = current.entries[current.index] ?? defaultStreamSelection();
+      if (areSelectionsEqual(currentSelection, nextSelection)) {
+        return current;
+      }
+
+      const entries = current.entries.slice(0, current.index + 1);
+      entries.push(nextSelection);
+      return {
+        entries,
+        index: entries.length - 1,
+      };
+    });
+  }
+
+  function replaceSelection(nextSelectionOrUpdater) {
+    setSelectionHistoryState((current) => {
+      const currentSelection = current.entries[current.index] ?? defaultStreamSelection();
+      const nextSelection = typeof nextSelectionOrUpdater === "function"
+        ? nextSelectionOrUpdater(currentSelection)
+        : nextSelectionOrUpdater;
+      if (!nextSelection || areSelectionsEqual(currentSelection, nextSelection)) {
+        return current;
+      }
+
+      const entries = [...current.entries];
+      entries[current.index] = nextSelection;
+      return {
+        entries,
+        index: current.index,
+      };
+    });
+  }
+
+  function transformSelectionHistory(transformSelection, fallbackSelection = defaultStreamSelection()) {
+    setSelectionHistoryState((current) => {
+      const entries = [];
+      let index = 0;
+
+      current.entries.forEach((entry, entryIndex) => {
+        const nextEntry = transformSelection(entry, entryIndex);
+        if (!nextEntry) {
+          return;
+        }
+
+        if (entries.length > 0 && areSelectionsEqual(entries[entries.length - 1], nextEntry)) {
+          if (entryIndex <= current.index) {
+            index = entries.length - 1;
+          }
+          return;
+        }
+
+        entries.push(nextEntry);
+        if (entryIndex <= current.index) {
+          index = entries.length - 1;
+        }
+      });
+
+      if (entries.length === 0) {
+        return {
+          entries: [fallbackSelection],
+          index: 0,
+        };
+      }
+
+      return {
+        entries,
+        index: Math.min(Math.max(index, 0), entries.length - 1),
+      };
+    });
+  }
+
+  function remapPageSelectionEntry(entry, sourcePageId, targetPageId) {
+    if (entry.kind !== "page") {
+      return entry;
+    }
+
+    return {
+      kind: "page",
+      pageId: remapSubtreePageId(entry.pageId, sourcePageId, targetPageId),
+    };
+  }
+
+  function removePageSelectionEntry(entry, removedPageId) {
+    if (entry.kind === "page" && isPageInSubtree(entry.pageId, removedPageId)) {
+      return null;
+    }
+
+    return entry;
+  }
+
+  function remapStreamSelectionEntry(entry, sourceStreamName, targetStreamName) {
+    if (entry.kind !== "stream_single" || entry.streamName !== sourceStreamName) {
+      return entry;
+    }
+
+    return {
+      ...entry,
+      streamName: targetStreamName,
+    };
+  }
+
+  function replaceDeletedStreamSelectionEntry(entry, streamName) {
+    if (entry.kind !== "stream_single" || entry.streamName !== streamName) {
+      return entry;
+    }
+
+    return {
+      kind: "stream_dual",
+      dateName: entry.dateName,
+    };
+  }
+
+  function handleNavigateBack() {
+    setSelectionHistoryState((current) => (
+      current.index === 0
+        ? current
+        : { ...current, index: current.index - 1 }
+    ));
+    setActionError(null);
+  }
+
+  function handleNavigateForward() {
+    setSelectionHistoryState((current) => (
+      current.index >= current.entries.length - 1
+        ? current
+        : { ...current, index: current.index + 1 }
+    ));
+    setActionError(null);
+  }
+
+  function renderWindowControls() {
+    const canNavigateBack = selectionHistoryState.index > 0;
+    const canNavigateForward = selectionHistoryState.index < selectionHistoryState.entries.length - 1;
+
+    return (
+      <div className="window-controls" data-no-window-drag="true">
+        <button
+          className="window-control-button"
+          type="button"
+          aria-label="Go back"
+          title="Go back"
+          disabled={!canNavigateBack}
+          onClick={handleNavigateBack}
+        >
+          <WindowBackIcon />
+        </button>
+        <button
+          className="window-control-button"
+          type="button"
+          aria-label="Go forward"
+          title="Go forward"
+          disabled={!canNavigateForward}
+          onClick={handleNavigateForward}
+        >
+          <WindowForwardIcon />
+        </button>
+        <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
+          <WindowMinimizeIcon />
+        </button>
+        <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
+          {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+        </button>
+        <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
+          <WindowCloseIcon />
+        </button>
+      </div>
+    );
   }
 
   async function loadWorkspaceLists() {
@@ -652,7 +866,7 @@ export default function App() {
   async function openWorkspaceRoot(rootPath) {
     const openedWorkspace = await invoke("open_workspace", { rootPath });
     setWorkspace(openedWorkspace);
-    setSelection(defaultStreamSelection());
+    resetSelectionHistory(defaultStreamSelection());
     setLastStreamDate(todayDateName());
     setStreamReloadToken(0);
     setSelectedPageText("");
@@ -737,7 +951,7 @@ export default function App() {
         folderName: createState.folderName,
       });
       setWorkspace(openedWorkspace);
-      setSelection(defaultStreamSelection());
+      resetSelectionHistory(defaultStreamSelection());
       setLastStreamDate(todayDateName());
       setStreamReloadToken(0);
       setSelectedPageText("");
@@ -761,7 +975,7 @@ export default function App() {
     setPageOrderByParent({});
     setStreamNames([]);
     setStreamOrder([]);
-    setSelection(defaultStreamSelection());
+    resetSelectionHistory(defaultStreamSelection());
     setLastStreamDate(todayDateName());
     setStreamReloadToken(0);
     setSelectedPageText("");
@@ -798,7 +1012,7 @@ export default function App() {
       suppressPageClickRef.current = false;
       return;
     }
-    setSelection({ kind: "page", pageId });
+    pushSelection({ kind: "page", pageId });
     setActionError(null);
     if (isMobile) setSidebarCollapsed(true);
   }
@@ -816,6 +1030,7 @@ export default function App() {
   async function handleDeleteStream(streamName) {
     try {
       await invoke("delete_stream", { streamName });
+      transformSelectionHistory((entry) => replaceDeletedStreamSelectionEntry(entry, streamName));
       await loadWorkspaceLists();
       if (
         streamSelection?.kind === "stream_single" &&
@@ -841,7 +1056,7 @@ export default function App() {
     try {
       await invoke("create_page", { pageId });
       await loadWorkspaceLists();
-      setSelection({ kind: "page", pageId });
+      pushSelection({ kind: "page", pageId });
       closeModal();
     } catch (error) {
       setActionError(normalizeError(error));
@@ -852,7 +1067,7 @@ export default function App() {
 
   function handleSelectStreamDual(dateName) {
     setLastStreamDate(dateName);
-    setSelection({ kind: "stream_dual", dateName });
+    pushSelection({ kind: "stream_dual", dateName });
     setActionError(null);
     void refreshStreamWorkspace();
     if (isMobile) setSidebarCollapsed(true);
@@ -860,7 +1075,7 @@ export default function App() {
 
   function handleSelectStreamSingle(streamName, dateName) {
     setLastStreamDate(dateName);
-    setSelection({ kind: "stream_single", streamName, dateName });
+    pushSelection({ kind: "stream_single", streamName, dateName });
     setActionError(null);
     void refreshStreamWorkspace();
     if (isMobile) setSidebarCollapsed(true);
@@ -922,11 +1137,7 @@ export default function App() {
       await invoke("rename_page", { pageId, newTitle: trimmedTitle });
       const newPageId = renamedPageIdForTitle(pageId, trimmedTitle);
       setPageOrderByParent((current) => remapPageOrderEntries(current, pageId, newPageId));
-      setSelection((current) => (
-        current.kind === "page"
-          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, pageId, newPageId) }
-          : current
-      ));
+      transformSelectionHistory((entry) => remapPageSelectionEntry(entry, pageId, newPageId));
       setLoadedPageId((current) => remapSubtreePageId(current, pageId, newPageId));
       await loadWorkspaceLists();
       onSuccess?.(newPageId);
@@ -978,11 +1189,7 @@ export default function App() {
       setStreamOrder((current) => current.map((name) => (
         name === modal.streamName ? trimmedName : name
       )));
-      setSelection((current) => (
-        current.kind === "stream_single" && current.streamName === modal.streamName
-          ? { ...current, streamName: trimmedName }
-          : current
-      ));
+      transformSelectionHistory((entry) => remapStreamSelectionEntry(entry, modal.streamName, trimmedName));
       await loadWorkspaceLists();
       closeModal();
     } catch (error) {
@@ -1019,11 +1226,7 @@ export default function App() {
         ? newParentPageId + "/" + leafName
         : "pages:" + leafName;
       setPageOrderByParent((current) => remapPageOrderEntries(current, modal.pageId, newPageId));
-      setSelection((current) => (
-        current.kind === "page"
-          ? { kind: "page", pageId: remapSubtreePageId(current.pageId, modal.pageId, newPageId) }
-          : current
-      ));
+      transformSelectionHistory((entry) => remapPageSelectionEntry(entry, modal.pageId, newPageId));
       setLoadedPageId((current) => remapSubtreePageId(current, modal.pageId, newPageId));
       await loadWorkspaceLists();
       closeModal();
@@ -1041,8 +1244,11 @@ export default function App() {
     try {
       await invoke("delete_page", { pageId: modal.pageId });
       setPageOrderByParent((current) => removePageOrderEntries(current, modal.pageId));
+      transformSelectionHistory(
+        (entry) => removePageSelectionEntry(entry, modal.pageId),
+        { kind: "page", pageId: "" },
+      );
       if (isPageInSubtree(selectedPageId, modal.pageId)) {
-        setSelection({ kind: "page", pageId: "" });
         setSelectedPageText("");
         setSelectedPageRevision(null);
       }
@@ -1067,10 +1273,10 @@ export default function App() {
     try {
       await invoke("merge_page", { sourcePageId, targetPageId });
       setPageOrderByParent((current) => removePageOrderEntries(current, sourcePageId));
-      setSelection((current) => (
-        current.kind === "page" && current.pageId === sourcePageId
+      transformSelectionHistory((entry) => (
+        entry.kind === "page" && entry.pageId === sourcePageId
           ? { kind: "page", pageId: targetPageId }
-          : current
+          : entry
       ));
       if (loadedPageId === sourcePageId) {
         setLoadedPageId(targetPageId);
@@ -1192,11 +1398,7 @@ export default function App() {
           newParentPageId: newParentPageId ?? null,
         });
         setPageOrderByParent((current) => remapPageOrderEntries(current, sourcePageId, newPageId));
-        setSelection((current) => (
-          current.kind === "page"
-            ? { kind: "page", pageId: remapSubtreePageId(current.pageId, sourcePageId, newPageId) }
-            : current
-        ));
+        transformSelectionHistory((entry) => remapPageSelectionEntry(entry, sourcePageId, newPageId));
         setLoadedPageId((current) => remapSubtreePageId(current, sourcePageId, newPageId));
       }
 
@@ -1573,13 +1775,13 @@ export default function App() {
     }
 
     if (regularPages.length === 0) {
-      setSelection({ kind: "page", pageId: "" });
+      replaceSelection({ kind: "page", pageId: "" });
       setSelectedPageText("");
       return;
     }
 
     if (!regularPages.some((page) => page.page_id === selectedPageId)) {
-      setSelection({ kind: "page", pageId: regularPages[0].page_id });
+      replaceSelection({ kind: "page", pageId: regularPages[0].page_id });
     }
   }, [mode, pages, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1628,12 +1830,15 @@ export default function App() {
           }
         } else if (event.type === "page_removed") {
           await loadWorkspaceLists().catch(() => { });
+          transformSelectionHistory(
+            (entry) => removePageSelectionEntry(entry, event.page_id),
+            { kind: "page", pageId: "" },
+          );
           if (event.page_id === loadedPageId) {
             setSelectedPageText("");
             setSelectedPageRevision(null);
             setLinkedRefs([]);
             setLoadedPageId(null);
-            setSelection({ kind: "page", pageId: "" });
           }
           if (linkedRefs.some((entry) => entry.source_page_id === event.page_id)) {
             await loadPageLinkedRefs(loadedPageId).catch(() => { });
@@ -1721,19 +1926,7 @@ export default function App() {
     return (
       <main className="app-shell">
         <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
-          {showDesktopWindowControls ? (
-            <div className="window-controls" data-no-window-drag="true">
-              <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
-                <WindowMinimizeIcon />
-              </button>
-              <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
-                {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
-              </button>
-              <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
-                <WindowCloseIcon />
-              </button>
-            </div>
-          ) : null}
+          {showDesktopWindowControls ? renderWindowControls() : null}
         </div>
         <section className="boot-panel minimal-panel">
           <h1>Uniseq</h1>
@@ -1884,34 +2077,7 @@ export default function App() {
             <EditorBreadcrumb items={breadcrumbItems} />
             <div className="editor-panel-drag-region" />
           </div>
-          {showDesktopWindowControls ? (
-            <div className="window-controls" data-no-window-drag="true">
-              <button
-                className="window-control-button"
-                type="button"
-                aria-label="Minimize window"
-                onClick={handleMinimizeWindow}
-              >
-                <WindowMinimizeIcon />
-              </button>
-              <button
-                className="window-control-button"
-                type="button"
-                aria-label={windowIsMaximized ? "Restore window" : "Maximize window"}
-                onClick={handleToggleMaximizeWindow}
-              >
-                {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
-              </button>
-              <button
-                className="window-control-button window-control-button--close"
-                type="button"
-                aria-label="Close window"
-                onClick={handleCloseWindow}
-              >
-                <WindowCloseIcon />
-              </button>
-            </div>
-          ) : null}
+          {showDesktopWindowControls ? renderWindowControls() : null}
         </div>
       );
     }
@@ -2486,19 +2652,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
-        {showDesktopWindowControls ? (
-          <div className="window-controls" data-no-window-drag="true">
-            <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
-              <WindowMinimizeIcon />
-            </button>
-            <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
-              {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
-            </button>
-            <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
-              <WindowCloseIcon />
-            </button>
-          </div>
-        ) : null}
+        {showDesktopWindowControls ? renderWindowControls() : null}
       </div>
       <section className="hero-panel minimal-panel">
         <img src="/uniseq.svg" alt="Uniseq" className="onboard-logo" />

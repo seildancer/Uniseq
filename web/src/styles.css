@@ -468,6 +468,17 @@ h2 {
   color: var(--ink);
 }
 
+.window-control-button:disabled {
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+  cursor: default;
+}
+
+.window-control-button:disabled:hover,
+.window-control-button:disabled:focus-visible {
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+
 .window-control-button:focus-visible {
   outline: none;
   background: color-mix(in srgb, var(--line) 82%, transparent);
