@@ -81,7 +81,7 @@ button:disabled {
 .app-shell--workspace {
   --mobile-visible-height: 100dvh;
   --mobile-keyboard-height: 0px;
-  --mobile-keyboard-bar-height: 44px;
+  --mobile-keyboard-bar-height: 36px;
   --mobile-keyboard-bar-offset: calc(var(--mobile-keyboard-bar-height) + env(safe-area-inset-bottom, 0px));
   --mobile-keyboard-obstruction: 0px;
   height: 100%;
@@ -2876,34 +2876,27 @@ code {
   position: fixed;
   left: 0;
   right: 0;
-  height: 44px;
+  height: 36px;
   z-index: 300;
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  justify-content: flex-start;
   background: color-mix(in srgb, var(--panel) 95%, var(--line) 5%);
   border-top: 1px solid var(--line);
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 -1px 4px rgba(0, 0, 0, 0.06);
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .mobile-keyboard-bar-btn {
-  flex: 1;
-  padding: 0;
+  padding: 0 14px;
   border: 0;
-  border-right: 1px solid var(--line);
   background: transparent;
-  color: var(--ink);
-  font-size: 0.9rem;
-  font-weight: 500;
+  color: color-mix(in srgb, var(--ink) 60%, var(--panel));
   display: flex;
   align-items: center;
   justify-content: center;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-}
-
-.mobile-keyboard-bar-btn:last-child {
-  border-right: 0;
 }
 
 .mobile-keyboard-bar-btn:active {
