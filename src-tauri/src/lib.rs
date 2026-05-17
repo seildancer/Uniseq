@@ -756,6 +756,8 @@ impl WorkspaceController {
         remote_workspace_name: String,
         auth_kind: Option<sync::SyncAuthKind>,
         auth_token: Option<String>,
+        refresh_token: Option<String>,
+        supabase_publishable_key: Option<String>,
     ) -> CommandResult<sync::SyncStatus> {
         let workspace_root = self.session()?.workspace_root();
         let config = sync::SyncConfig::new_with_auth(
@@ -772,6 +774,8 @@ impl WorkspaceController {
             &workspace_root,
             &sync::SyncAuthSecrets {
                 bearer_token: normalize_auth_token(auth_token),
+                refresh_token: normalize_auth_token(refresh_token),
+                supabase_publishable_key: normalize_auth_token(supabase_publishable_key),
             },
         )
         .map_err(ErrorDto::from)?;
@@ -799,7 +803,18 @@ impl WorkspaceController {
             .map_err(ErrorDto::from)?
             .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
         let provider = sync_provider_for_config(&workspace_root, &config)?;
-        let summary = sync::sync_once(&workspace_root, &provider).map_err(ErrorDto::from)?;
+        let result = sync::sync_once(&workspace_root, &provider);
+        let summary = match result {
+            Err(ref e) if e.auth_expired => {
+                let secrets = sync::read_sync_auth_secrets(&workspace_root).map_err(ErrorDto::from)?;
+                let new_secrets = sync::refresh_supabase_auth(&config.sync_root_url, &secrets)
+                    .map_err(ErrorDto::from)?;
+                sync::write_sync_auth_secrets(&workspace_root, &new_secrets).map_err(ErrorDto::from)?;
+                let new_provider = sync_provider_for_config(&workspace_root, &config)?;
+                sync::sync_once(&workspace_root, &new_provider).map_err(ErrorDto::from)?
+            }
+            other => other.map_err(ErrorDto::from)?,
+        };
         if summary.pulled > 0 || summary.deleted_local > 0 {
             self.reopen_workspace()?;
         }
@@ -1344,6 +1359,9 @@ fn open_remote_workspace(
     remote_workspace_name: String,
     auth_kind: Option<sync::SyncAuthKind>,
     auth_token: Option<String>,
+    refresh_token: Option<String>,
+    supabase_publishable_key: Option<String>,
+    local_root_path: Option<String>,
 ) -> CommandResult<WorkspaceOpenDto> {
     let config = sync::SyncConfig::new_with_auth(
         sync::SyncProviderKind::from(provider),
@@ -1354,14 +1372,18 @@ fn open_remote_workspace(
             kind: auth_kind.unwrap_or_default(),
         },
     );
-    let root_path =
-        remote_workspace_path(&app, &config.sync_root_url, &config.remote_workspace_id)?;
+    let root_path = match local_root_path.filter(|p| !p.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => remote_workspace_path(&app, &config.sync_root_url, &config.remote_workspace_id)?,
+    };
     prepare_workspace_root(&root_path).map_err(ErrorDto::from)?;
     sync::write_sync_config(&root_path, &config).map_err(ErrorDto::from)?;
     sync::write_sync_auth_secrets(
         &root_path,
         &sync::SyncAuthSecrets {
             bearer_token: normalize_auth_token(auth_token),
+            refresh_token: normalize_auth_token(refresh_token),
+            supabase_publishable_key: normalize_auth_token(supabase_publishable_key),
         },
     )
     .map_err(ErrorDto::from)?;
@@ -1404,6 +1426,8 @@ fn configure_workspace_sync(
     remote_workspace_name: String,
     auth_kind: Option<sync::SyncAuthKind>,
     auth_token: Option<String>,
+    refresh_token: Option<String>,
+    supabase_publishable_key: Option<String>,
 ) -> CommandResult<sync::SyncStatus> {
     state.controller.lock().unwrap().configure_sync(
         provider,
@@ -1412,6 +1436,8 @@ fn configure_workspace_sync(
         remote_workspace_name,
         auth_kind,
         auth_token,
+        refresh_token,
+        supabase_publishable_key,
     )
 }
 

@@ -42,6 +42,10 @@ pub struct SyncAuthConfig {
 pub struct SyncAuthSecrets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bearer_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supabase_publishable_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -203,6 +207,7 @@ pub enum SyncConflictResolution {
 #[derive(Debug)]
 pub struct SyncError {
     message: String,
+    pub auth_expired: bool,
 }
 
 type SyncResult<T> = Result<T, SyncError>;
@@ -303,6 +308,14 @@ impl SyncError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            auth_expired: false,
+        }
+    }
+
+    pub fn new_auth_expired(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            auth_expired: true,
         }
     }
 
@@ -476,6 +489,9 @@ impl HttpSyncProvider {
 impl SyncProvider for HttpSyncProvider {
     fn list(&self) -> SyncResult<Vec<RemoteFileMeta>> {
         let response = self.with_auth(self.client.get(self.files_url()?)).send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
         if !response.status().is_success() {
             return Err(SyncError::new(format!(
                 "remote list failed with status {}",
@@ -489,6 +505,9 @@ impl SyncProvider for HttpSyncProvider {
         let response = self
             .with_auth(self.client.get(self.file_url(path)?))
             .send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
         if !response.status().is_success() {
             return Err(SyncError::new(format!(
                 "remote pull failed for '{path}' with status {}",
@@ -539,6 +558,9 @@ impl SyncProvider for HttpSyncProvider {
             builder = builder.header("x-uniseq-base-remote-version", base);
         }
         let response = builder.body(request.content).send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
         if !response.status().is_success() && response.status() != reqwest::StatusCode::CONFLICT {
             return Err(SyncError::new(format!(
                 "remote push failed for '{}' with status {}",
@@ -559,6 +581,9 @@ impl SyncProvider for HttpSyncProvider {
                 base_remote_version: request.base_remote_version.as_deref(),
             })
             .send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
         if !response.status().is_success() && response.status() != reqwest::StatusCode::CONFLICT {
             return Err(SyncError::new(format!(
                 "remote delete failed for '{}' with status {}",
@@ -568,6 +593,68 @@ impl SyncProvider for HttpSyncProvider {
         }
         push_response_from_response(response)
     }
+}
+
+#[derive(Serialize)]
+struct RefreshBody<'a> {
+    refresh_token: &'a str,
+}
+
+#[derive(Deserialize)]
+struct SupabaseTokenResponse {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
+pub fn refresh_supabase_auth(
+    sync_root_url: &str,
+    secrets: &SyncAuthSecrets,
+) -> SyncResult<SyncAuthSecrets> {
+    let refresh_token = secrets
+        .refresh_token
+        .as_deref()
+        .ok_or_else(|| SyncError::new("session expired — please sign in again"))?;
+    let publishable_key = secrets
+        .supabase_publishable_key
+        .as_deref()
+        .ok_or_else(|| SyncError::new("session expired — please sign in again"))?;
+    let supabase_url = supabase_url_from_sync_root(sync_root_url)
+        .ok_or_else(|| SyncError::new("cannot determine Supabase URL from sync root"))?;
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let response = client
+        .post(format!("{}/auth/v1/token?grant_type=refresh_token", supabase_url))
+        .header("apikey", publishable_key)
+        .header("Content-Type", "application/json")
+        .json(&RefreshBody { refresh_token })
+        .send()?;
+    if !response.status().is_success() {
+        return Err(SyncError::new(format!(
+            "token refresh failed with status {} — please sign in again",
+            response.status()
+        )));
+    }
+    let data: SupabaseTokenResponse = response.json()?;
+    let new_access = data
+        .access_token
+        .ok_or_else(|| SyncError::new("token refresh response missing access_token"))?;
+    Ok(SyncAuthSecrets {
+        bearer_token: Some(new_access),
+        refresh_token: data.refresh_token.or_else(|| secrets.refresh_token.clone()),
+        supabase_publishable_key: secrets.supabase_publishable_key.clone(),
+    })
+}
+
+fn supabase_url_from_sync_root(sync_root_url: &str) -> Option<String> {
+    let trimmed = sync_root_url.trim();
+    let after_scheme = trimmed.find("://").map(|i| i + 3)?;
+    let host_end = trimmed[after_scheme..]
+        .find('/')
+        .map(|i| after_scheme + i)
+        .unwrap_or(trimmed.len());
+    Some(trimmed[..host_end].to_owned())
 }
 
 pub fn read_sync_config(root: &Path) -> SyncResult<Option<SyncConfig>> {

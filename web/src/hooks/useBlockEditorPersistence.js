@@ -53,6 +53,7 @@ export function useBlockEditorPersistence({
         });
         latestTextRef.current = cleanedText;
         persistedTextRef.current = cleanedText;
+        window.dispatchEvent(new CustomEvent("uniseq:write"));
         return true;
       } catch (error) {
         if (error?.code === "structural_conflict") {

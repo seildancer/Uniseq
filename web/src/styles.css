@@ -375,10 +375,67 @@ h2 {
   text-decoration: none;
 }
 
+.remote-auth-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.remote-open-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.remote-open-actions .primary-button {
+  flex: 1;
+}
+
 .field input[readonly] {
   background: var(--panel);
   color: var(--muted);
   cursor: default;
+}
+
+.workspace-picker {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-y: auto;
+  max-height: 180px;
+}
+
+.workspace-picker-item {
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--line);
+  transition: background 80ms ease;
+}
+
+.workspace-picker-item:last-child {
+  border-bottom: none;
+}
+
+.workspace-picker-item:hover {
+  background: var(--hover);
+}
+
+.workspace-picker-item--selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.workspace-picker-item--new {
+  color: var(--muted);
+}
+
+.workspace-picker-item--new.workspace-picker-item--selected {
+  color: var(--accent);
 }
 
 .section-heading {

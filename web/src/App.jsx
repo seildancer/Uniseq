@@ -25,6 +25,11 @@ const INITIAL_CREATE_STATE = {
   folderName: "",
 };
 
+const INITIAL_REMOTE_LOCAL_STATE = {
+  parentPath: "",
+  folderName: "",
+};
+
 const INITIAL_REMOTE_STATE = {
   provider: "uniseq",
   syncRootUrl: "",
@@ -35,7 +40,12 @@ const INITIAL_REMOTE_STATE = {
   loadedRootUrl: "",
   authDiscovery: null,
   authToken: "",
+  refreshToken: "",
   authLoadedRootUrl: "",
+  loginEmail: "",
+  loginPassword: "",
+  loginMode: "login",
+  loggedInEmail: "",
 };
 
 const ROOT_PARENT_KEY = "__root__";
@@ -49,6 +59,8 @@ const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
 const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
 const UNISEQ_SYNC_ROOT_PREFIX = import.meta.env.VITE_SYNC_ROOT_PREFIX ?? "https://sync.example.com";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? "";
+const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? "";
 
 const appWindow = getCurrentWindow();
 
@@ -231,6 +243,25 @@ function childPageMergeError() {
   };
 }
 
+async function callSupabaseAuth(email, password, isSignup) {
+  const url = isSignup
+    ? `${SUPABASE_URL}/auth/v1/signup`
+    : `${SUPABASE_URL}/auth/v1/token?grant_type=password`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: SUPABASE_PUBLISHABLE_KEY,
+    },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error_description ?? data.message ?? data.msg ?? "Authentication failed");
+  }
+  return data;
+}
+
 function formatError(error) {
   if (!error) {
     return "";
@@ -283,13 +314,19 @@ function syncProviderLabel(provider) {
 function remoteProviderStatePatch(provider) {
   return {
     provider,
+    uniseqAccount: "",
     workspaces: [],
     selectedWorkspaceId: "",
     newWorkspaceName: "",
     loadedRootUrl: "",
     authDiscovery: null,
     authToken: "",
+    refreshToken: "",
     authLoadedRootUrl: "",
+    loginEmail: "",
+    loginPassword: "",
+    loginMode: "login",
+    loggedInEmail: "",
   };
 }
 
@@ -577,6 +614,8 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
+  const [remoteLocalState, setRemoteLocalState] = useState(INITIAL_REMOTE_LOCAL_STATE);
+  const [remoteOpenStep, setRemoteOpenStep] = useState("remote");
   const [remoteState, setRemoteState] = useState(INITIAL_REMOTE_STATE);
   const [onboardingTab, setOnboardingTab] = useState("create");
   const [syncStatus, setSyncStatus] = useState(null);
@@ -611,6 +650,15 @@ export default function App() {
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
+  const lastSyncAtRef = useRef(0);
+  const syncEnabledRef = useRef(false);
+  const busyActionRef = useRef("");
+  const modalRef = useRef(null);
+  const syncAfterWriteTimerRef = useRef(null);
+
+  syncEnabledRef.current = syncStatus?.enabled ?? false;
+  busyActionRef.current = busyAction;
+  modalRef.current = modal;
 
   const mobileViewportStyle = useMemo(() => (
     isMobile
@@ -1022,6 +1070,31 @@ export default function App() {
     }
   }
 
+  async function handleChooseRemoteLocalParent() {
+    setBusyAction("pick-remote-parent");
+    setActionError(null);
+
+    try {
+      const selected = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Choose where to save the workspace locally",
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
+      setRemoteLocalState((current) => ({
+        ...current,
+        parentPath: selected,
+      }));
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function handleCreateWorkspace(event) {
     event.preventDefault();
     setBusyAction("create");
@@ -1060,6 +1133,9 @@ export default function App() {
 
     try {
       const workspace = await ensureRemoteWorkspace();
+      const localRootPath = showDesktopWindowControls && remoteLocalState.parentPath && remoteLocalState.folderName.trim()
+        ? `${remoteLocalState.parentPath}/${remoteLocalState.folderName.trim()}`
+        : null;
       const openedWorkspace = await invoke("open_remote_workspace", {
         provider: remoteState.provider,
         syncRootUrl,
@@ -1067,6 +1143,9 @@ export default function App() {
         remoteWorkspaceName: workspace.name,
         authKind: syncAuthKindFromDiscovery(remoteState.authDiscovery),
         authToken: remoteState.authToken,
+        refreshToken: remoteState.refreshToken || null,
+        supabasePublishableKey: remoteState.provider === "uniseq" ? SUPABASE_PUBLISHABLE_KEY : null,
+        localRootPath,
       });
       setWorkspace(openedWorkspace);
       resetSelectionHistory(defaultStreamSelection());
@@ -1115,7 +1194,7 @@ export default function App() {
       setRemoteState((current) => ({
         ...current,
         workspaces: normalized,
-        selectedWorkspaceId: normalized[0]?.id ?? "",
+        selectedWorkspaceId: normalized[0]?.id ?? "__new__",
         loadedRootUrl: syncRootUrl,
       }));
       return normalized;
@@ -1326,6 +1405,8 @@ export default function App() {
         remoteWorkspaceName: workspace.name,
         authKind: syncAuthKindFromDiscovery(remoteState.authDiscovery),
         authToken: remoteState.authToken,
+        refreshToken: remoteState.refreshToken || null,
+        supabasePublishableKey: remoteState.provider === "uniseq" ? SUPABASE_PUBLISHABLE_KEY : null,
       });
       setSyncStatus(status);
       closeModal();
@@ -1419,12 +1500,80 @@ export default function App() {
     await loadSyncStatus().catch(() => { });
   }
 
+  async function handleUniseqAuth() {
+    const { loginEmail: email, loginPassword: password, loginMode } = remoteState;
+    if (!email.trim() || !password.trim()) return;
+    setBusyAction("uniseq-login");
+    setActionError(null);
+    try {
+      const data = await callSupabaseAuth(email.trim(), password, loginMode === "signup");
+      if (loginMode === "signup" && !data.access_token) {
+        setActionError({ code: "signup_confirm", message: "Check your email to confirm your account, then sign in." });
+        return;
+      }
+      const userId = data.user?.id;
+      const accessToken = data.access_token;
+      if (!userId || !accessToken) {
+        throw new Error("Authentication failed.");
+      }
+      const syncRootUrl = `${UNISEQ_SYNC_ROOT_PREFIX}/${userId}`;
+      const discovery = await invoke("discover_sync_service", {
+        provider: "uniseq",
+        syncRootUrl,
+      }).catch(() => ({ version: 1, auth: { type: "bearer" } }));
+      let workspaces = [];
+      try {
+        const ws = await invoke("list_remote_workspaces", {
+          provider: "uniseq",
+          syncRootUrl,
+          authToken: accessToken,
+        });
+        workspaces = Array.isArray(ws) ? ws : [];
+      } catch (_) { /* no workspaces yet */ }
+      setRemoteState((current) => ({
+        ...current,
+        loggedInEmail: data.user.email ?? email.trim(),
+        uniseqAccount: userId,
+        authToken: accessToken,
+        refreshToken: data.refresh_token ?? "",
+        authDiscovery: discovery,
+        authLoadedRootUrl: syncRootUrl,
+        workspaces,
+        selectedWorkspaceId: workspaces[0]?.id ?? "__new__",
+        newWorkspaceName: "",
+        loadedRootUrl: syncRootUrl,
+      }));
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function handleUniseqSignOut() {
+    setRemoteState((current) => ({
+      ...current,
+      loggedInEmail: "",
+      uniseqAccount: "",
+      authToken: "",
+      refreshToken: "",
+      authDiscovery: null,
+      authLoadedRootUrl: "",
+      workspaces: [],
+      selectedWorkspaceId: "",
+      newWorkspaceName: "",
+      loadedRootUrl: "",
+      loginPassword: "",
+    }));
+  }
+
   function renderRemoteSetupFields() {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     const workspacesLoaded = remoteState.loadedRootUrl === syncRootUrl && syncRootUrl;
     const authDiscoveryLoaded = remoteState.authLoadedRootUrl === syncRootUrl && syncRootUrl;
     const bearerRequired = authDiscoveryLoaded && syncRequiresBearer(remoteState);
     const authInstructions = remoteState.authDiscovery?.auth?.instructions;
+    const isUniseqLoggedIn = remoteState.provider === "uniseq" && !!remoteState.loggedInEmail;
     return (
       <>
         <div className="remote-provider-toggle" role="tablist">
@@ -1444,114 +1593,251 @@ export default function App() {
           </button>
         </div>
         {remoteState.provider === "uniseq" ? (
-          <div className="field">
-            <span>Account root</span>
-            <input
-              type="text"
-              value={remoteState.uniseqAccount}
-              placeholder="johndoe"
-              onChange={(event) => setRemoteState((current) => ({
-                ...current,
-                uniseqAccount: event.target.value,
-                workspaces: [],
-                selectedWorkspaceId: "",
-                loadedRootUrl: "",
-                authDiscovery: null,
-                authToken: "",
-                authLoadedRootUrl: "",
-              }))}
-            />
-          </div>
+          isUniseqLoggedIn ? (
+            <div className="remote-auth-panel">
+              <div className="remote-auth-status">
+                <span>Signed in as <strong>{remoteState.loggedInEmail}</strong></span>
+                <button type="button" className="secondary-button" onClick={handleUniseqSignOut}>
+                  Sign out
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="remote-auth-panel">
+              <div className="remote-provider-toggle" role="tablist">
+                <button
+                  className={remoteState.loginMode === "login" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+                  type="button"
+                  onClick={() => setRemoteState((c) => ({ ...c, loginMode: "login" }))}
+                >
+                  Sign in
+                </button>
+                <button
+                  className={remoteState.loginMode === "signup" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+                  type="button"
+                  onClick={() => setRemoteState((c) => ({ ...c, loginMode: "signup" }))}
+                >
+                  Sign up
+                </button>
+              </div>
+              <div className="field">
+                <span>Email</span>
+                <input
+                  type="email"
+                  value={remoteState.loginEmail}
+                  placeholder="you@example.com"
+                  autoComplete="username"
+                  onChange={(e) => setRemoteState((c) => ({ ...c, loginEmail: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
+                />
+              </div>
+              <div className="field">
+                <span>Password</span>
+                <input
+                  type="password"
+                  value={remoteState.loginPassword}
+                  placeholder="••••••••"
+                  autoComplete={remoteState.loginMode === "signup" ? "new-password" : "current-password"}
+                  onChange={(e) => setRemoteState((c) => ({ ...c, loginPassword: e.target.value }))}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
+                />
+              </div>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={!remoteState.loginEmail.trim() || !remoteState.loginPassword.trim() || busyAction === "uniseq-login"}
+                onClick={() => void handleUniseqAuth()}
+              >
+                {busyAction === "uniseq-login"
+                  ? "Please wait..."
+                  : remoteState.loginMode === "signup"
+                    ? "Sign up"
+                    : "Sign in"}
+              </button>
+            </div>
+          )
         ) : (
-          <div className="field">
-            <span>Sync root URL</span>
-            <input
-              type="url"
-              value={remoteState.syncRootUrl}
-              placeholder="https://selfhosted.example.com/johndoe"
-              onChange={(event) => setRemoteState((current) => ({
-                ...current,
-                syncRootUrl: event.target.value,
-                workspaces: [],
-                selectedWorkspaceId: "",
-                loadedRootUrl: "",
-                authDiscovery: null,
-                authToken: "",
-                authLoadedRootUrl: "",
-              }))}
-            />
-          </div>
-        )}
-        <button
-          className="secondary-button"
-          type="button"
-          disabled={!syncRootUrl || busyAction === "list-remote-workspaces" || (bearerRequired && !remoteState.authToken.trim())}
-          onClick={() => void loadRemoteWorkspaces()}
-        >
-          {busyAction === "list-remote-workspaces" ? "Loading..." : bearerRequired ? "Continue" : "Load workspaces"}
-        </button>
-        {bearerRequired ? (
-          <div className="remote-auth-panel">
+          <>
             <div className="field">
-              <span>Access token</span>
+              <span>Sync root URL</span>
               <input
-                type="password"
-                value={remoteState.authToken}
-                placeholder="Bearer token"
+                type="url"
+                value={remoteState.syncRootUrl}
+                placeholder="https://selfhosted.example.com/johndoe"
                 onChange={(event) => setRemoteState((current) => ({
                   ...current,
-                  authToken: event.target.value,
+                  syncRootUrl: event.target.value,
                   workspaces: [],
                   selectedWorkspaceId: "",
                   loadedRootUrl: "",
+                  authDiscovery: null,
+                  authToken: "",
+                  authLoadedRootUrl: "",
                 }))}
               />
             </div>
-            {remoteState.authDiscovery?.auth?.login_url ? (
-              <a href={remoteState.authDiscovery.auth.login_url} target="_blank" rel="noreferrer">
-                Open login
-              </a>
-            ) : null}
-            {authInstructions ? (
-              <p className="modal-hint">{authInstructions}</p>
-            ) : null}
-          </div>
-        ) : null}
-        {workspacesLoaded && remoteState.workspaces.length > 0 ? (
-          <div className="field">
-            <span>Remote workspace</span>
-            <select
-              value={remoteState.selectedWorkspaceId}
-              onChange={(event) => setRemoteState((current) => ({
-                ...current,
-                selectedWorkspaceId: event.target.value,
-                newWorkspaceName: "",
-              }))}
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!syncRootUrl || busyAction === "list-remote-workspaces" || (bearerRequired && !remoteState.authToken.trim())}
+              onClick={() => void loadRemoteWorkspaces()}
             >
-              {remoteState.workspaces.map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>
-                  {workspace.name || workspace.id}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : null}
+              {busyAction === "list-remote-workspaces" ? "Loading..." : bearerRequired ? "Continue" : "Load workspaces"}
+            </button>
+            {bearerRequired ? (
+              <div className="remote-auth-panel">
+                <div className="field">
+                  <span>Access token</span>
+                  <input
+                    type="password"
+                    value={remoteState.authToken}
+                    placeholder="Bearer token"
+                    onChange={(event) => setRemoteState((current) => ({
+                      ...current,
+                      authToken: event.target.value,
+                      workspaces: [],
+                      selectedWorkspaceId: "",
+                      loadedRootUrl: "",
+                    }))}
+                  />
+                </div>
+                {remoteState.authDiscovery?.auth?.login_url ? (
+                  <a href={remoteState.authDiscovery.auth.login_url} target="_blank" rel="noreferrer">
+                    Open login
+                  </a>
+                ) : null}
+                {authInstructions ? (
+                  <p className="modal-hint">{authInstructions}</p>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        )}
         {workspacesLoaded ? (
           <div className="field">
-            <span>New workspace</span>
-            <input
-              type="text"
-              value={remoteState.newWorkspaceName}
-              placeholder={remoteState.workspaces.length > 0 ? "Create instead" : "Workspace name"}
-              onChange={(event) => setRemoteState((current) => ({
-                ...current,
-                newWorkspaceName: event.target.value,
-                selectedWorkspaceId: event.target.value.trim() ? "" : current.selectedWorkspaceId,
-              }))}
-            />
+            <span>Workspace</span>
+            <ul className="workspace-picker">
+              {remoteState.workspaces.map((ws) => (
+                <li
+                  key={ws.id}
+                  className={`workspace-picker-item${remoteState.selectedWorkspaceId === ws.id ? " workspace-picker-item--selected" : ""}`}
+                  onClick={() => setRemoteState((current) => ({
+                    ...current,
+                    selectedWorkspaceId: ws.id,
+                    newWorkspaceName: "",
+                  }))}
+                >
+                  {ws.name || ws.id}
+                </li>
+              ))}
+              <li
+                className={`workspace-picker-item workspace-picker-item--new${remoteState.selectedWorkspaceId === "__new__" ? " workspace-picker-item--selected" : ""}`}
+                onClick={() => setRemoteState((current) => ({
+                  ...current,
+                  selectedWorkspaceId: "__new__",
+                }))}
+              >
+                + Create new workspace
+              </li>
+            </ul>
+            {remoteState.selectedWorkspaceId === "__new__" ? (
+              <input
+                type="text"
+                value={remoteState.newWorkspaceName}
+                placeholder="Workspace name"
+                autoFocus
+                onChange={(event) => setRemoteState((current) => ({
+                  ...current,
+                  newWorkspaceName: event.target.value,
+                }))}
+              />
+            ) : null}
           </div>
         ) : null}
       </>
+    );
+  }
+
+  function renderOpenRemoteForm() {
+    const selectedWs = selectedRemoteWorkspace(remoteState);
+    const suggestedName = selectedWs?.name ?? remoteState.newWorkspaceName.trim();
+
+    function handleAdvanceToLocalPath() {
+      setRemoteLocalState((current) => ({
+        ...current,
+        folderName: current.folderName || suggestedName,
+      }));
+      setRemoteOpenStep("local-path");
+    }
+
+    return (
+      <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
+        {remoteOpenStep === "local-path" ? (
+          <>
+            <div className="field">
+              <span>Local location</span>
+              <div className="inline-field">
+                <input
+                  type="text"
+                  value={remoteLocalState.parentPath}
+                  readOnly
+                  placeholder="Parent folder"
+                  title={remoteLocalState.parentPath}
+                />
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={handleChooseRemoteLocalParent}
+                  disabled={busyAction === "pick-remote-parent"}
+                >
+                  {busyAction === "pick-remote-parent" ? "Choosing..." : "Browse"}
+                </button>
+              </div>
+            </div>
+            <div className="field">
+              <span>Local folder name</span>
+              <input
+                type="text"
+                value={remoteLocalState.folderName}
+                placeholder="My Notes"
+                autoFocus
+                onChange={(event) => setRemoteLocalState((current) => ({
+                  ...current,
+                  folderName: event.target.value,
+                }))}
+              />
+            </div>
+            <div className="remote-open-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setRemoteOpenStep("remote")}
+              >
+                Back
+              </button>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={remoteLocalPathDisabled}
+              >
+                {busyAction === "open-remote" ? "Opening..." : "Open"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {renderRemoteSetupFields()}
+            <button
+              className="primary-button"
+              type={showDesktopWindowControls ? "button" : "submit"}
+              disabled={remoteDisabled}
+              onClick={showDesktopWindowControls ? handleAdvanceToLocalPath : undefined}
+            >
+              {busyAction === "open-remote" ? "Opening..." : "Open remote"}
+            </button>
+          </>
+        )}
+      </form>
     );
   }
 
@@ -2055,6 +2341,11 @@ export default function App() {
   }, [darkMode]);
 
   useEffect(() => {
+    setRemoteOpenStep("remote");
+    setRemoteLocalState(INITIAL_REMOTE_LOCAL_STATE);
+  }, [onboardingTab]);
+
+  useEffect(() => {
     if (!workspace?.root_path) {
       setStreamOrder([]);
       return;
@@ -2282,6 +2573,14 @@ export default function App() {
     return () => clearInterval(id);
   }, [mode, loadedPageId, linkedRefs, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fire sync once when workspace first opens with sync enabled.
+  useEffect(() => {
+    if (mode !== "workspace" || !syncStatus?.enabled) return;
+    lastSyncAtRef.current = Date.now();
+    void handleSyncNow();
+  }, [mode, syncStatus?.enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 1-minute fallback poll for idle users.
   useEffect(() => {
     if (mode !== "workspace" || !syncStatus?.enabled) {
       return undefined;
@@ -2291,11 +2590,56 @@ export default function App() {
       if (busyAction || modal?.type === "sync") {
         return;
       }
+      lastSyncAtRef.current = Date.now();
       void handleSyncNow();
-    }, 20000);
+    }, 60000);
 
     return () => clearInterval(id);
   }, [mode, syncStatus?.enabled, busyAction, modal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Activity-triggered sync: fire when user returns after 10s+ of idleness.
+  useEffect(() => {
+    if (mode !== "workspace" || !syncStatus?.enabled) return undefined;
+
+    function onActivity() {
+      if (busyAction || modal?.type === "sync") return;
+      if (Date.now() - lastSyncAtRef.current < 10000) return;
+      lastSyncAtRef.current = Date.now();
+      void handleSyncNow();
+    }
+
+    window.addEventListener("mousemove", onActivity);
+    window.addEventListener("click", onActivity);
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("touchstart", onActivity);
+
+    return () => {
+      window.removeEventListener("mousemove", onActivity);
+      window.removeEventListener("click", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("touchstart", onActivity);
+    };
+  }, [mode, syncStatus?.enabled, busyAction, modal]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Write-triggered sync: fire ~1.5s after the last local write.
+  useEffect(() => {
+    if (mode !== "workspace") return undefined;
+
+    function onWrite() {
+      clearTimeout(syncAfterWriteTimerRef.current);
+      syncAfterWriteTimerRef.current = setTimeout(() => {
+        if (!syncEnabledRef.current || busyActionRef.current || modalRef.current?.type === "sync") return;
+        lastSyncAtRef.current = Date.now();
+        void handleSyncNow();
+      }, 1500);
+    }
+
+    window.addEventListener("uniseq:write", onWrite);
+    return () => {
+      window.removeEventListener("uniseq:write", onWrite);
+      clearTimeout(syncAfterWriteTimerRef.current);
+    };
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedPageId) {
@@ -2372,7 +2716,9 @@ export default function App() {
   const remoteWorkspace = selectedRemoteWorkspace(remoteState);
   const remoteWorkspaceName = remoteWorkspace?.name ?? remoteState.newWorkspaceName.trim();
   const remoteWorkspaceId = remoteWorkspace?.id ?? "";
-  const canUseRemoteWorkspace = Boolean(remoteWorkspaceId || remoteState.newWorkspaceName.trim());
+  const canUseRemoteWorkspace = remoteState.selectedWorkspaceId === "__new__"
+    ? Boolean(remoteState.newWorkspaceName.trim())
+    : Boolean(remoteWorkspaceId);
   const remoteBearerRequired = syncRequiresBearer(remoteState);
   const remoteDisabled =
     busyAction === "open-remote" ||
@@ -2380,6 +2726,10 @@ export default function App() {
     !remoteSyncRootUrl ||
     (remoteBearerRequired && !remoteState.authToken.trim()) ||
     !canUseRemoteWorkspace;
+  const remoteLocalPathDisabled =
+    busyAction === "open-remote" ||
+    !remoteLocalState.parentPath ||
+    !remoteLocalState.folderName.trim();
   const syncConflicts = syncStatus?.conflicts ?? [];
 
   if (mode === "booting") {
@@ -3324,14 +3674,7 @@ export default function App() {
             >
               Open from remote
             </button>
-            {onboardingTab === "remote" ? (
-              <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
-                {renderRemoteSetupFields()}
-                <button className="primary-button" type="submit" disabled={remoteDisabled}>
-                  {busyAction === "open-remote" ? "Opening..." : "Open remote"}
-                </button>
-              </form>
-            ) : null}
+            {onboardingTab === "remote" ? renderOpenRemoteForm() : null}
           </div>
         ) : (
           <>
@@ -3343,7 +3686,7 @@ export default function App() {
                 aria-selected={onboardingTab === "create"}
                 onClick={() => setOnboardingTab("create")}
               >
-                Create local
+                Create Local
               </button>
               <button
                 className={`onboard-tab${onboardingTab === "open" ? " onboard-tab--active" : ""}`}
@@ -3352,7 +3695,7 @@ export default function App() {
                 aria-selected={onboardingTab === "open"}
                 onClick={() => setOnboardingTab("open")}
               >
-                Open local
+                Open Local
               </button>
               <button
                 className={`onboard-tab${onboardingTab === "remote" ? " onboard-tab--active" : ""}`}
@@ -3361,7 +3704,7 @@ export default function App() {
                 aria-selected={onboardingTab === "remote"}
                 onClick={() => setOnboardingTab("remote")}
               >
-                Create/open remote
+                Create/Open Remote
               </button>
             </div>
 
@@ -3376,12 +3719,7 @@ export default function App() {
                   {busyAction === "open" ? "Opening..." : "Choose folder"}
                 </button>
               ) : onboardingTab === "remote" ? (
-                <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
-                  {renderRemoteSetupFields()}
-                  <button className="primary-button" type="submit" disabled={remoteDisabled}>
-                    {busyAction === "open-remote" ? "Opening..." : "Open remote"}
-                  </button>
-                </form>
+                renderOpenRemoteForm()
               ) : (
                 <form className="create-form" onSubmit={handleCreateWorkspace}>
                   <div className="field">
