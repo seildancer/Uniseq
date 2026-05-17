@@ -31,6 +31,12 @@ export default function AutocompleteEditor({
   const [autocomplete, setAutocomplete] = useState(null);
   const activeItemRef = useRef(null);
   const suppressNextCheckRef = useRef(false);
+  const rootRef = useRef(null);
+  const dropdownRef = useRef(null);
+
+  function clearAutocomplete() {
+    setAutocomplete(null);
+  }
 
   function getBlockInfo() {
     const editor = get();
@@ -108,16 +114,43 @@ export default function AutocompleteEditor({
     activeItemRef.current?.scrollIntoView({ block: "nearest" });
   }, [autocomplete?.activeIdx]);
 
+  useEffect(() => {
+    if (!autocomplete) {
+      return undefined;
+    }
+
+    function handlePointerDown(event) {
+      const target = event.target;
+      if (rootRef.current?.contains(target) || dropdownRef.current?.contains(target)) {
+        return;
+      }
+      clearAutocomplete();
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+    };
+  }, [autocomplete]);
+
   return (
     <div
+      ref={rootRef}
       className={className}
       onMouseDown={focusEditorFromChrome}
       onFocusCapture={() => onFocusChange?.(true)}
       onBlurCapture={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget)) {
+        if (
+          e.currentTarget.contains(e.relatedTarget)
+          || dropdownRef.current?.contains(e.relatedTarget)
+        ) {
           return;
         }
+        clearAutocomplete();
         onFocusChange?.(false);
+      }}
+      onMouseUpCapture={() => {
+        requestAnimationFrame(checkAutocomplete);
       }}
       onKeyDownCapture={(e) => {
         if (!autocomplete) return;
@@ -156,6 +189,7 @@ export default function AutocompleteEditor({
       {children}
       {autocomplete && createPortal(
         <ul
+          ref={dropdownRef}
           className="autocomplete-dropdown"
           role="listbox"
           style={{ position: "fixed", top: autocomplete.coords.top + 4, left: autocomplete.coords.left }}
