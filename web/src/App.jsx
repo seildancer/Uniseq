@@ -15,6 +15,7 @@ import {
   shouldBumpStreamReloadToken,
 } from "./utils/streamWorkspace.js";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMobileKeyboard } from "./hooks/useMobileKeyboard.js";
@@ -650,15 +651,6 @@ export default function App() {
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
-  const lastSyncAtRef = useRef(0);
-  const syncEnabledRef = useRef(false);
-  const busyActionRef = useRef("");
-  const modalRef = useRef(null);
-  const syncAfterWriteTimerRef = useRef(null);
-
-  syncEnabledRef.current = syncStatus?.enabled ?? false;
-  busyActionRef.current = busyAction;
-  modalRef.current = modal;
 
   const mobileViewportStyle = useMemo(() => (
     isMobile
@@ -2573,71 +2565,33 @@ export default function App() {
     return () => clearInterval(id);
   }, [mode, loadedPageId, linkedRefs, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fire sync once when workspace first opens with sync enabled.
-  useEffect(() => {
-    if (mode !== "workspace" || !syncStatus?.enabled) return;
-    lastSyncAtRef.current = Date.now();
-    void handleSyncNow();
-  }, [mode, syncStatus?.enabled]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 1-minute fallback poll for idle users.
-  useEffect(() => {
-    if (mode !== "workspace" || !syncStatus?.enabled) {
-      return undefined;
-    }
-
-    const id = setInterval(() => {
-      if (busyAction || modal?.type === "sync") {
-        return;
-      }
-      lastSyncAtRef.current = Date.now();
-      void handleSyncNow();
-    }, 60000);
-
-    return () => clearInterval(id);
-  }, [mode, syncStatus?.enabled, busyAction, modal]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Activity-triggered sync: fire when user returns after 10s+ of idleness.
-  useEffect(() => {
-    if (mode !== "workspace" || !syncStatus?.enabled) return undefined;
-
-    function onActivity() {
-      if (busyAction || modal?.type === "sync") return;
-      if (Date.now() - lastSyncAtRef.current < 10000) return;
-      lastSyncAtRef.current = Date.now();
-      void handleSyncNow();
-    }
-
-    window.addEventListener("mousemove", onActivity);
-    window.addEventListener("click", onActivity);
-    window.addEventListener("keydown", onActivity);
-    window.addEventListener("touchstart", onActivity);
-
-    return () => {
-      window.removeEventListener("mousemove", onActivity);
-      window.removeEventListener("click", onActivity);
-      window.removeEventListener("keydown", onActivity);
-      window.removeEventListener("touchstart", onActivity);
-    };
-  }, [mode, syncStatus?.enabled, busyAction, modal]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Write-triggered sync: fire ~1.5s after the last local write.
+  // Listen for sync-status events emitted by the Rust background sync loop.
   useEffect(() => {
     if (mode !== "workspace") return undefined;
+    let unlisten;
+    listen("sync-status", (event) => setSyncStatus(event.payload)).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    function onWrite() {
-      clearTimeout(syncAfterWriteTimerRef.current);
-      syncAfterWriteTimerRef.current = setTimeout(() => {
-        if (!syncEnabledRef.current || busyActionRef.current || modalRef.current?.type === "sync") return;
-        lastSyncAtRef.current = Date.now();
-        void handleSyncNow();
-      }, 1500);
-    }
-
-    window.addEventListener("uniseq:write", onWrite);
+  // Notify the Rust sync loop of user activity so it can trigger a pull sooner.
+  useEffect(() => {
+    if (mode !== "workspace") return undefined;
+    let lastSent = 0;
+    const notify = () => {
+      const now = Date.now();
+      if (now - lastSent < 1000) return;
+      lastSent = now;
+      invoke("notify_user_activity");
+    };
+    window.addEventListener("mousemove", notify);
+    window.addEventListener("click", notify);
+    window.addEventListener("keydown", notify);
+    window.addEventListener("touchstart", notify);
     return () => {
-      window.removeEventListener("uniseq:write", onWrite);
-      clearTimeout(syncAfterWriteTimerRef.current);
+      window.removeEventListener("mousemove", notify);
+      window.removeEventListener("click", notify);
+      window.removeEventListener("keydown", notify);
+      window.removeEventListener("touchstart", notify);
     };
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 

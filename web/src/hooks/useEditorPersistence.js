@@ -47,7 +47,6 @@ export function useEditorPersistence({
       latestTextRef.current = updated.text;
       persistedTextRef.current = updated.text;
       revisionRef.current = updated.revision;
-      window.dispatchEvent(new CustomEvent("uniseq:write"));
     } catch (error) {
       if (error?.code === "structural_conflict") {
         onConflict?.(error);

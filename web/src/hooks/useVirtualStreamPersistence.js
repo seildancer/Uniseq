@@ -29,7 +29,6 @@ export function useVirtualStreamPersistence({
         text: cleanedText,
       });
       createdRef.current = true;
-      window.dispatchEvent(new CustomEvent("uniseq:write"));
       onFirstWrite({
         pageId: `stream:${streamName}/${dateName}`,
         text: result.text,

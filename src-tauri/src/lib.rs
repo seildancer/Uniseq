@@ -2,13 +2,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, mpsc};
 
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uniseq_backend::{
     BlockHandle, BlockSnapshot, CoreError, FileFingerprint, FlatBlockSnapshot,
     IncomingPageRefSnapshot, LinkedRefEntry, OutgoingPageRefSnapshot, PageContentSnapshot,
@@ -28,11 +28,23 @@ const ROOT_PARENT_ORDER_KEY: &str = "__root__";
 #[derive(Default)]
 struct AppState {
     controller: Mutex<WorkspaceController>,
+    sync_lock: Arc<Mutex<()>>,
+}
+
+struct SyncLoop {
+    sender: mpsc::Sender<sync::SyncLoopMessage>,
+}
+
+impl Drop for SyncLoop {
+    fn drop(&mut self) {
+        let _ = self.sender.send(sync::SyncLoopMessage::Stop);
+    }
 }
 
 #[derive(Default)]
 struct WorkspaceController {
     session: Option<WorkspaceSession>,
+    sync_loop: Option<SyncLoop>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -278,6 +290,7 @@ impl WorkspaceController {
     }
 
     fn close_workspace(&mut self) -> bool {
+        self.sync_loop = None;
         self.session.take().is_some()
     }
 
@@ -364,10 +377,14 @@ impl WorkspaceController {
     ) -> CommandResult<PageContentDto> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
-        self.session()?
+        let result = self.session()?
             .write_and_reparse(&page_id, text, expected_revision.map(FileFingerprint::from))
             .map(PageContentDto::from)
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        if result.is_ok() {
+            self.notify_local_write();
+        }
+        result
     }
 
     fn create_stream_page(
@@ -554,10 +571,14 @@ impl WorkspaceController {
                 date_name,
             })
             .map_err(ErrorDto::from)?;
-        self.session()?
+        let result = self.session()?
             .write_and_reparse(&page_id, text, None)
             .map(PageContentDto::from)
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        if result.is_ok() {
+            self.notify_local_write();
+        }
+        result
     }
 
     fn create_page(&self, page_id: String) -> CommandResult<()> {
@@ -718,9 +739,13 @@ impl WorkspaceController {
         replacement_markdown: String,
     ) -> CommandResult<()> {
         let handle = BlockHandle::try_from(handle)?;
-        self.session()?
+        let result = self.session()?
             .write_block_markdown(&handle, replacement_markdown)
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        if result.is_ok() {
+            self.notify_local_write();
+        }
+        result
     }
 
     fn drain_workspace_events(&self) -> CommandResult<Vec<WorkspaceEventDto>> {
@@ -797,30 +822,6 @@ impl WorkspaceController {
         sync::sync_status(&workspace_root).map_err(ErrorDto::from)
     }
 
-    fn sync_now(&mut self) -> CommandResult<sync::SyncRunSummary> {
-        let workspace_root = self.session()?.workspace_root();
-        let config = sync::read_sync_config(&workspace_root)
-            .map_err(ErrorDto::from)?
-            .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
-        let provider = sync_provider_for_config(&workspace_root, &config)?;
-        let result = sync::sync_once(&workspace_root, &provider);
-        let summary = match result {
-            Err(ref e) if e.auth_expired => {
-                let secrets = sync::read_sync_auth_secrets(&workspace_root).map_err(ErrorDto::from)?;
-                let new_secrets = sync::refresh_supabase_auth(&config.sync_root_url, &secrets)
-                    .map_err(ErrorDto::from)?;
-                sync::write_sync_auth_secrets(&workspace_root, &new_secrets).map_err(ErrorDto::from)?;
-                let new_provider = sync_provider_for_config(&workspace_root, &config)?;
-                sync::sync_once(&workspace_root, &new_provider).map_err(ErrorDto::from)?
-            }
-            other => other.map_err(ErrorDto::from)?,
-        };
-        if summary.pulled > 0 || summary.deleted_local > 0 {
-            self.reopen_workspace()?;
-        }
-        Ok(summary)
-    }
-
     fn sync_conflict_detail(&self, path: String) -> CommandResult<sync::SyncConflictDetail> {
         let workspace_root = self.session()?.workspace_root();
         let config = sync::read_sync_config(&workspace_root)
@@ -846,6 +847,37 @@ impl WorkspaceController {
             self.reopen_workspace()?;
         }
         Ok(summary)
+    }
+
+    fn start_sync_loop(&mut self, app: AppHandle, sync_lock: Arc<Mutex<()>>) {
+        self.sync_loop = None; // stop existing loop first
+        let Some(root) = self.session.as_ref().map(|s| s.workspace_root()) else { return };
+        let config_enabled = matches!(
+            sync::read_sync_config(&root),
+            Ok(Some(ref c)) if c.enabled
+        );
+        if !config_enabled {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || sync::run_sync_loop(root, app, sync_lock, rx));
+        self.sync_loop = Some(SyncLoop { sender: tx });
+    }
+
+    fn stop_sync_loop(&mut self) {
+        self.sync_loop = None;
+    }
+
+    fn notify_local_write(&self) {
+        if let Some(loop_) = &self.sync_loop {
+            let _ = loop_.sender.send(sync::SyncLoopMessage::LocalWrite);
+        }
+    }
+
+    fn notify_user_activity(&self) {
+        if let Some(loop_) = &self.sync_loop {
+            let _ = loop_.sender.send(sync::SyncLoopMessage::UserActivity);
+        }
     }
 
     fn session(&self) -> CommandResult<&WorkspaceSession> {
@@ -1328,9 +1360,13 @@ fn open_workspace(
     state: State<'_, AppState>,
     root_path: String,
 ) -> CommandResult<WorkspaceOpenDto> {
-    let opened = state.controller.lock().unwrap().open_workspace(root_path)?;
-    write_last_workspace_path(&app, &opened.root_path)?;
-    Ok(opened)
+    {
+        let mut controller = state.controller.lock().unwrap();
+        let opened = controller.open_workspace(root_path)?;
+        controller.start_sync_loop(app.clone(), Arc::clone(&state.sync_lock));
+        write_last_workspace_path(&app, &opened.root_path)?;
+        Ok(opened)
+    }
 }
 
 #[tauri::command]
@@ -1340,11 +1376,9 @@ fn create_workspace(
     parent_path: String,
     folder_name: String,
 ) -> CommandResult<WorkspaceOpenDto> {
-    let opened = state
-        .controller
-        .lock()
-        .unwrap()
-        .create_workspace(parent_path, folder_name)?;
+    let mut controller = state.controller.lock().unwrap();
+    let opened = controller.create_workspace(parent_path, folder_name)?;
+    controller.start_sync_loop(app.clone(), Arc::clone(&state.sync_lock));
     write_last_workspace_path(&app, &opened.root_path)?;
     Ok(opened)
 }
@@ -1389,11 +1423,9 @@ fn open_remote_workspace(
     .map_err(ErrorDto::from)?;
     let provider = sync_provider_for_config(&root_path, &config)?;
     sync::initial_pull(&root_path, &provider).map_err(ErrorDto::from)?;
-    let opened = state
-        .controller
-        .lock()
-        .unwrap()
-        .open_workspace(root_path.to_string_lossy().to_string())?;
+    let mut controller = state.controller.lock().unwrap();
+    let opened = controller.open_workspace(root_path.to_string_lossy().to_string())?;
+    controller.start_sync_loop(app.clone(), Arc::clone(&state.sync_lock));
     write_last_workspace_path(&app, &opened.root_path)?;
     Ok(opened)
 }
@@ -1419,6 +1451,7 @@ fn clear_last_workspace_path(app: AppHandle) -> CommandResult<bool> {
 
 #[tauri::command]
 fn configure_workspace_sync(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider: SyncProviderKindDto,
     sync_root_url: String,
@@ -1429,7 +1462,8 @@ fn configure_workspace_sync(
     refresh_token: Option<String>,
     supabase_publishable_key: Option<String>,
 ) -> CommandResult<sync::SyncStatus> {
-    state.controller.lock().unwrap().configure_sync(
+    let mut controller = state.controller.lock().unwrap();
+    let status = controller.configure_sync(
         provider,
         sync_root_url,
         remote_workspace_id,
@@ -1438,7 +1472,9 @@ fn configure_workspace_sync(
         auth_token,
         refresh_token,
         supabase_publishable_key,
-    )
+    )?;
+    controller.start_sync_loop(app, Arc::clone(&state.sync_lock));
+    Ok(status)
 }
 
 #[tauri::command]
@@ -1484,15 +1520,51 @@ fn sync_status(state: State<'_, AppState>) -> CommandResult<sync::SyncStatus> {
 
 #[tauri::command]
 fn set_workspace_sync_enabled(
+    app: AppHandle,
     state: State<'_, AppState>,
     enabled: bool,
 ) -> CommandResult<sync::SyncStatus> {
-    state.controller.lock().unwrap().set_sync_enabled(enabled)
+    let mut controller = state.controller.lock().unwrap();
+    let status = controller.set_sync_enabled(enabled)?;
+    if enabled {
+        controller.start_sync_loop(app, Arc::clone(&state.sync_lock));
+    } else {
+        controller.stop_sync_loop();
+    }
+    Ok(status)
 }
 
 #[tauri::command]
-fn sync_now(state: State<'_, AppState>) -> CommandResult<sync::SyncRunSummary> {
-    state.controller.lock().unwrap().sync_now()
+fn sync_now(app: AppHandle, state: State<'_, AppState>) -> CommandResult<sync::SyncRunSummary> {
+    let workspace_root = state.controller.lock().unwrap().session()?.workspace_root();
+    let config = sync::read_sync_config(&workspace_root)
+        .map_err(ErrorDto::from)?
+        .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+    let provider = sync_provider_for_config(&workspace_root, &config)?;
+    let _sync_guard = state.sync_lock.lock().unwrap();
+    let result = sync::sync_once(&workspace_root, &provider);
+    let summary = match result {
+        Err(ref e) if e.auth_expired => {
+            let secrets = sync::read_sync_auth_secrets(&workspace_root).map_err(ErrorDto::from)?;
+            let new_secrets = sync::refresh_supabase_auth(&config.sync_root_url, &secrets)
+                .map_err(ErrorDto::from)?;
+            sync::write_sync_auth_secrets(&workspace_root, &new_secrets).map_err(ErrorDto::from)?;
+            let new_provider = sync_provider_for_config(&workspace_root, &config)?;
+            sync::sync_once(&workspace_root, &new_provider).map_err(ErrorDto::from)?
+        }
+        other => other.map_err(ErrorDto::from)?,
+    };
+    drop(_sync_guard);
+    let _ = app.emit("sync-status", &summary.status);
+    if summary.pulled > 0 || summary.deleted_local > 0 {
+        state.controller.lock().unwrap().reopen_workspace()?;
+    }
+    Ok(summary)
+}
+
+#[tauri::command]
+fn notify_user_activity(state: State<'_, AppState>) {
+    state.controller.lock().unwrap().notify_user_activity();
 }
 
 #[tauri::command]
@@ -1875,6 +1947,7 @@ pub fn run() {
             sync_status,
             set_workspace_sync_enabled,
             sync_now,
+            notify_user_activity,
             sync_conflict_detail,
             resolve_sync_conflict,
             all_pages,

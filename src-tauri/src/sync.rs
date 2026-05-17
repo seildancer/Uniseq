@@ -2,7 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::Hasher;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use tauri::{AppHandle, Emitter};
 
 use serde::{Deserialize, Serialize};
 
@@ -1369,6 +1372,84 @@ fn normalize_bearer_token(token: Option<String>) -> Option<String> {
     token
         .map(|token| token.trim().to_owned())
         .filter(|token| !token.is_empty())
+}
+
+pub enum SyncLoopMessage {
+    LocalWrite,
+    UserActivity,
+    Stop,
+}
+
+pub fn run_sync_loop(
+    root: PathBuf,
+    app: AppHandle,
+    sync_lock: Arc<Mutex<()>>,
+    rx: mpsc::Receiver<SyncLoopMessage>,
+) {
+    let write_debounce = Duration::from_secs(5);
+    let poll_interval = Duration::from_secs(60);
+    let mut pending_write_since: Option<Instant> = None;
+    let mut last_poll_at = Instant::now();
+
+    loop {
+        let now = Instant::now();
+        let write_deadline = pending_write_since.map(|t| t + write_debounce);
+        let poll_deadline = last_poll_at + poll_interval;
+        let next_deadline = write_deadline.map_or(poll_deadline, |wd| wd.min(poll_deadline));
+        let timeout = next_deadline.saturating_duration_since(now);
+
+        match rx.recv_timeout(timeout) {
+            Ok(SyncLoopMessage::LocalWrite) | Ok(SyncLoopMessage::UserActivity) => {
+                pending_write_since = Some(Instant::now());
+            }
+            Ok(SyncLoopMessage::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let now = Instant::now();
+                let should_sync =
+                    write_deadline.map_or(false, |d| now >= d) || now >= poll_deadline;
+                if should_sync {
+                    if let Ok(guard) = sync_lock.try_lock() {
+                        let status = do_background_sync(&root);
+                        drop(guard);
+                        if let Some(status) = status {
+                            let _ = app.emit("sync-status", &status);
+                        }
+                    }
+                    pending_write_since = None;
+                    last_poll_at = Instant::now();
+                }
+            }
+        }
+    }
+}
+
+fn do_background_sync(root: &Path) -> Option<SyncStatus> {
+    let config = match read_sync_config(root) {
+        Ok(Some(c)) if c.enabled => c,
+        _ => return None,
+    };
+    let secrets = read_sync_auth_secrets(root).ok()?;
+    let provider = HttpSyncProvider::new_workspace_with_auth(
+        &config.sync_root_url,
+        &config.remote_workspace_id,
+        secrets.bearer_token.clone(),
+    )
+    .ok()?;
+    match sync_once(root, &provider) {
+        Ok(summary) => Some(summary.status),
+        Err(e) if e.auth_expired => {
+            let new_secrets = refresh_supabase_auth(&config.sync_root_url, &secrets).ok()?;
+            write_sync_auth_secrets(root, &new_secrets).ok()?;
+            let new_provider = HttpSyncProvider::new_workspace_with_auth(
+                &config.sync_root_url,
+                &config.remote_workspace_id,
+                new_secrets.bearer_token,
+            )
+            .ok()?;
+            sync_once(root, &new_provider).ok().map(|s| s.status)
+        }
+        Err(_) => None,
+    }
 }
 
 #[cfg(test)]
