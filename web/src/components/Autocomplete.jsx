@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { editorViewCtx } from "@milkdown/core";
 import { invoke } from "@tauri-apps/api/core";
 import pageLeafName from "../utils/pageLeafName";
@@ -153,7 +154,7 @@ export default function AutocompleteEditor({
       }}
     >
       {children}
-      {autocomplete && (
+      {autocomplete && createPortal(
         <ul
           className="autocomplete-dropdown"
           role="listbox"
@@ -181,7 +182,8 @@ export default function AutocompleteEditor({
               <span className="autocomplete-item-title">+ Create "{autocomplete.createName}"</span>
             </li>
           )}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   );
