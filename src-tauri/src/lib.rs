@@ -1514,6 +1514,22 @@ fn create_remote_workspace(
 }
 
 #[tauri::command]
+fn delete_remote_workspace(
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    workspace_id: String,
+    auth_token: Option<String>,
+) -> CommandResult<bool> {
+    let _provider_kind = provider;
+    let provider = sync::HttpSyncProvider::new_account_with_auth(sync_root_url, auth_token)
+        .map_err(ErrorDto::from)?;
+    provider
+        .delete_workspace(&workspace_id)
+        .map_err(ErrorDto::from)?;
+    Ok(true)
+}
+
+#[tauri::command]
 fn sync_status(state: State<'_, AppState>) -> CommandResult<sync::SyncStatus> {
     state.controller.lock().unwrap().sync_status()
 }
@@ -1944,6 +1960,7 @@ pub fn run() {
             discover_sync_service,
             list_remote_workspaces,
             create_remote_workspace,
+            delete_remote_workspace,
             sync_status,
             set_workspace_sync_enabled,
             sync_now,

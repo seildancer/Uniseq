@@ -448,6 +448,29 @@ impl HttpSyncProvider {
         Ok(response.json()?)
     }
 
+    pub fn delete_workspace(&self, workspace_id: &str) -> SyncResult<()> {
+        let trimmed = workspace_id.trim();
+        if trimmed.is_empty() {
+            return Err(SyncError::new("remote workspace is required"));
+        }
+        let response = self
+            .with_auth(self.client.delete(Self::workspace_url_for(&self.sync_root_url, trimmed)))
+            .send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(SyncError::new("remote workspace not found"));
+        }
+        if !response.status().is_success() {
+            return Err(SyncError::new(format!(
+                "remote workspace delete failed with status {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
     pub fn workspace_url_for(sync_root_url: &str, remote_workspace_id: &str) -> String {
         format!(
             "{}/workspaces/{}",

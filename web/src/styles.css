@@ -409,11 +409,23 @@ h2 {
 }
 
 .workspace-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
   padding: 9px 12px;
   cursor: pointer;
   font-size: 0.9rem;
   border-bottom: 1px solid var(--line);
   transition: background 80ms ease;
+}
+
+.workspace-picker-label {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-picker-item:last-child {
@@ -436,6 +448,40 @@ h2 {
 
 .workspace-picker-item--new.workspace-picker-item--selected {
   color: var(--accent);
+}
+
+.workspace-picker-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 80ms ease, background 80ms ease, color 80ms ease;
+}
+
+.workspace-picker-item:hover .workspace-picker-delete,
+.workspace-picker-item--selected .workspace-picker-delete,
+.workspace-picker-delete:focus-visible {
+  opacity: 1;
+}
+
+.workspace-picker-delete:hover,
+.workspace-picker-delete:focus-visible {
+  background: color-mix(in srgb, #c94141 10%, transparent);
+  color: #c94141;
+  outline: none;
+}
+
+.workspace-picker-delete:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .section-heading {

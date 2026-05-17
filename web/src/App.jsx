@@ -1238,6 +1238,43 @@ export default function App() {
     return created;
   }
 
+  async function handleDeleteRemoteWorkspace(workspace) {
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    const workspaceId = workspace?.id?.trim() ?? "";
+    const workspaceName = (workspace?.name || workspaceId).trim();
+    if (!syncRootUrl || !workspaceId) return;
+    if (!window.confirm(`Delete remote workspace "${workspaceName}"? This removes all remote files in it.`)) {
+      return;
+    }
+
+    setBusyAction("delete-remote-workspace");
+    setActionError(null);
+    try {
+      await invoke("delete_remote_workspace", {
+        provider: remoteState.provider,
+        syncRootUrl,
+        workspaceId,
+        authToken: remoteState.authToken,
+      });
+      setRemoteState((current) => {
+        const workspaces = current.workspaces.filter((entry) => entry.id !== workspaceId);
+        const selectedWorkspaceId = current.selectedWorkspaceId === workspaceId
+          ? (workspaces[0]?.id ?? "__new__")
+          : current.selectedWorkspaceId;
+        return {
+          ...current,
+          workspaces,
+          selectedWorkspaceId,
+          loadedRootUrl: syncRootUrl,
+        };
+      });
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function handleCloseWorkspace() {
     await invoke("close_workspace");
     setWorkspace(null);
@@ -1745,7 +1782,26 @@ export default function App() {
                     newWorkspaceName: "",
                   }))}
                 >
-                  {ws.name || ws.id}
+                  <span className="workspace-picker-label">{ws.name || ws.id}</span>
+                  <button
+                    className="workspace-picker-delete"
+                    type="button"
+                    aria-label={`Delete remote workspace ${ws.name || ws.id}`}
+                    title="Delete remote workspace"
+                    disabled={busyAction === "delete-remote-workspace"}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void handleDeleteRemoteWorkspace(ws);
+                    }}
+                  >
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                      <path d="M3.5 4.5h9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                      <path d="M6 4.5V3.4c0-.5.4-.9.9-.9h2.2c.5 0 .9.4.9.9v1.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M5.1 6.2v5.4c0 .9.7 1.6 1.6 1.6h2.6c.9 0 1.6-.7 1.6-1.6V6.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M7 7.2v4.1M9 7.2v4.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                    </svg>
+                  </button>
                 </li>
               ))}
               <li
