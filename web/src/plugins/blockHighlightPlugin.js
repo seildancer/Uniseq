@@ -5,10 +5,8 @@ import { Decoration, DecorationSet } from "prosemirror-view";
 const blockHighlightKey = new PluginKey("blockHighlight");
 const PLAINTEXT_TYPES = new Set(["paragraph", "heading"]);
 
-let hasFocus = false;
-
 export function resetBlockHighlightFocus() {
-  hasFocus = false;
+  // Focus is tracked per editor instance in plugin state.
 }
 
 // Starting from the focused block node, walk forward in document order until
@@ -55,8 +53,17 @@ function findBlockEnd(doc, blockNode, blockPos, blockDepth) {
 export default $prose(() =>
   new Plugin({
     key: blockHighlightKey,
+    state: {
+      init: () => ({ hasFocus: false }),
+      apply(tr, value) {
+        const next = tr.getMeta(blockHighlightKey);
+        return next ? { ...value, ...next } : value;
+      },
+    },
     props: {
       decorations(state) {
+        const pluginState = blockHighlightKey.getState(state);
+        const hasFocus = pluginState?.hasFocus ?? false;
         if (!hasFocus) return DecorationSet.empty;
         const { selection } = state;
         const $from = selection.$from;
@@ -93,12 +100,20 @@ export default $prose(() =>
         return DecorationSet.empty;
       },
       handleDOMEvents: {
-        focus: () => {
-          hasFocus = true;
+        focus: (view) => {
+          const pluginState = blockHighlightKey.getState(view.state);
+          if (pluginState?.hasFocus) {
+            return false;
+          }
+          view.dispatch(view.state.tr.setMeta(blockHighlightKey, { hasFocus: true }));
           return false;
         },
-        blur: () => {
-          hasFocus = false;
+        blur: (view) => {
+          const pluginState = blockHighlightKey.getState(view.state);
+          if (!pluginState?.hasFocus) {
+            return false;
+          }
+          view.dispatch(view.state.tr.setMeta(blockHighlightKey, { hasFocus: false }));
           return false;
         },
       },

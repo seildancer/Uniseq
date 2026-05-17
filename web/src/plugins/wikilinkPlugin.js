@@ -5,10 +5,8 @@ import pageLeafName from "../utils/pageLeafName";
 
 const wikilinkKey = new PluginKey("wikilinks");
 
-let hasFocus = false;
-
 export function resetWikilinkFocus() {
-  hasFocus = false;
+  // Focus is tracked per editor instance in plugin state.
 }
 
 function isCodeTextNode(node, parent) {
@@ -18,10 +16,19 @@ function isCodeTextNode(node, parent) {
 export default function createWikilinkPlugin(navigateRef, pagesRef) {
   return new Plugin({
     key: wikilinkKey,
+    state: {
+      init: () => ({ hasFocus: false }),
+      apply(tr, value) {
+        const next = tr.getMeta(wikilinkKey);
+        return next ? { ...value, ...next } : value;
+      },
+    },
     props: {
       decorations(state) {
         const decos = [];
         const { from, to } = state.selection;
+        const pluginState = wikilinkKey.getState(state);
+        const hasFocus = pluginState?.hasFocus ?? false;
         state.doc.descendants((node, pos, parent) => {
           if (!node.isText) return;
           if (isCodeTextNode(node, parent)) return;
@@ -52,12 +59,20 @@ export default function createWikilinkPlugin(navigateRef, pagesRef) {
         return DecorationSet.create(state.doc, decos);
       },
       handleDOMEvents: {
-        focus: () => {
-          hasFocus = true;
+        focus: (view) => {
+          const pluginState = wikilinkKey.getState(view.state);
+          if (pluginState?.hasFocus) {
+            return false;
+          }
+          view.dispatch(view.state.tr.setMeta(wikilinkKey, { hasFocus: true }));
           return false;
         },
-        blur: () => {
-          hasFocus = false;
+        blur: (view) => {
+          const pluginState = wikilinkKey.getState(view.state);
+          if (!pluginState?.hasFocus) {
+            return false;
+          }
+          view.dispatch(view.state.tr.setMeta(wikilinkKey, { hasFocus: false }));
           return false;
         },
         click(view, event) {
