@@ -254,7 +254,7 @@ async function callSupabaseAuth(email, password, isSignup) {
       "Content-Type": "application/json",
       apikey: SUPABASE_PUBLISHABLE_KEY,
     },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, ...(isSignup && { email_redirect_to: "uniseq://auth/callback" }) }),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -1124,15 +1124,14 @@ export default function App() {
     }
   }
 
-  async function handleOpenRemoteWorkspace(event) {
-    event.preventDefault();
+  async function openRemoteWorkspace(workspaceOverride = null) {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     if (!syncRootUrl) return;
     setBusyAction("open-remote");
     setActionError(null);
 
     try {
-      const workspace = await ensureRemoteWorkspace();
+      const workspace = workspaceOverride ?? await ensureRemoteWorkspace();
       const localRootPath = showDesktopWindowControls && remoteLocalState.parentPath && remoteLocalState.folderName.trim()
         ? `${remoteLocalState.parentPath}/${remoteLocalState.folderName.trim()}`
         : null;
@@ -1166,6 +1165,11 @@ export default function App() {
     }
   }
 
+  async function handleOpenRemoteWorkspace(event) {
+    event.preventDefault();
+    await openRemoteWorkspace();
+  }
+
   async function loadRemoteWorkspaces() {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     if (!syncRootUrl) return [];
@@ -1194,7 +1198,7 @@ export default function App() {
       setRemoteState((current) => ({
         ...current,
         workspaces: normalized,
-        selectedWorkspaceId: normalized[0]?.id ?? "__new__",
+        selectedWorkspaceId: normalized[0]?.id ?? "",
         loadedRootUrl: syncRootUrl,
       }));
       return normalized;
@@ -1238,6 +1242,40 @@ export default function App() {
     return created;
   }
 
+  async function handleCreateRemoteWorkspace() {
+    const workspaceName = remoteState.newWorkspaceName.trim();
+    if (!workspaceName) return;
+    setBusyAction("create-remote-workspace");
+    setActionError(null);
+    try {
+      await ensureRemoteWorkspace(workspaceName);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  function handleSelectRemoteWorkspace(workspace) {
+    if (!workspace?.id || busyAction === "open-remote" || busyAction === "create-remote-workspace") {
+      return;
+    }
+    setRemoteState((current) => ({
+      ...current,
+      selectedWorkspaceId: workspace.id,
+      newWorkspaceName: "",
+    }));
+    if (showDesktopWindowControls) {
+      setRemoteLocalState((current) => ({
+        ...current,
+        folderName: current.folderName || workspace.name || workspace.id,
+      }));
+      setRemoteOpenStep("local-path");
+      return;
+    }
+    void openRemoteWorkspace(workspace);
+  }
+
   async function handleDeleteRemoteWorkspace(workspace) {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     const workspaceId = workspace?.id?.trim() ?? "";
@@ -1259,7 +1297,7 @@ export default function App() {
       setRemoteState((current) => {
         const workspaces = current.workspaces.filter((entry) => entry.id !== workspaceId);
         const selectedWorkspaceId = current.selectedWorkspaceId === workspaceId
-          ? (workspaces[0]?.id ?? "__new__")
+          ? (workspaces[0]?.id ?? "")
           : current.selectedWorkspaceId;
         return {
           ...current,
@@ -1589,7 +1627,7 @@ export default function App() {
         authDiscovery: discovery,
         authLoadedRootUrl: syncRootUrl,
         workspaces,
-        selectedWorkspaceId: workspaces[0]?.id ?? "__new__",
+        selectedWorkspaceId: workspaces[0]?.id ?? "",
         newWorkspaceName: "",
         loadedRootUrl: syncRootUrl,
       }));
@@ -1776,11 +1814,7 @@ export default function App() {
                 <li
                   key={ws.id}
                   className={`workspace-picker-item${remoteState.selectedWorkspaceId === ws.id ? " workspace-picker-item--selected" : ""}`}
-                  onClick={() => setRemoteState((current) => ({
-                    ...current,
-                    selectedWorkspaceId: ws.id,
-                    newWorkspaceName: "",
-                  }))}
+                  onClick={() => handleSelectRemoteWorkspace(ws)}
                 >
                   <span className="workspace-picker-label">{ws.name || ws.id}</span>
                   <button
@@ -1813,19 +1847,66 @@ export default function App() {
               >
                 + Create new workspace
               </li>
+              {remoteState.selectedWorkspaceId === "__new__" ? (
+                <li className="workspace-picker-create-form">
+                  <input
+                    type="text"
+                    value={remoteState.newWorkspaceName}
+                    placeholder="Workspace name"
+                    autoFocus
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setRemoteState((current) => ({
+                      ...current,
+                      newWorkspaceName: event.target.value,
+                    }))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleCreateRemoteWorkspace();
+                      } else if (event.key === "Escape") {
+                        event.preventDefault();
+                        setRemoteState((current) => ({
+                          ...current,
+                          selectedWorkspaceId: current.workspaces[0]?.id ?? "",
+                          newWorkspaceName: "",
+                        }));
+                      }
+                    }}
+                  />
+                  <div className="workspace-picker-create-actions">
+                    <button
+                      className="primary-button"
+                      type="button"
+                      onClick={() => void handleCreateRemoteWorkspace()}
+                      disabled={!remoteState.newWorkspaceName.trim() || busyAction === "create-remote-workspace"}
+                      aria-label="Create workspace"
+                      title="Create workspace"
+                    >
+                      {busyAction === "create-remote-workspace" ? "..." : (
+                        <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                          <path d="M3.5 8.4 6.6 11.5 12.5 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setRemoteState((current) => ({
+                        ...current,
+                        selectedWorkspaceId: current.workspaces[0]?.id ?? "",
+                        newWorkspaceName: "",
+                      }))}
+                      aria-label="Cancel workspace creation"
+                      title="Cancel workspace creation"
+                    >
+                      <svg viewBox="0 0 16 16" width="12" height="12" fill="none" aria-hidden="true">
+                        <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+                </li>
+              ) : null}
             </ul>
-            {remoteState.selectedWorkspaceId === "__new__" ? (
-              <input
-                type="text"
-                value={remoteState.newWorkspaceName}
-                placeholder="Workspace name"
-                autoFocus
-                onChange={(event) => setRemoteState((current) => ({
-                  ...current,
-                  newWorkspaceName: event.target.value,
-                }))}
-              />
-            ) : null}
           </div>
         ) : null}
       </>
@@ -1833,17 +1914,6 @@ export default function App() {
   }
 
   function renderOpenRemoteForm() {
-    const selectedWs = selectedRemoteWorkspace(remoteState);
-    const suggestedName = selectedWs?.name ?? remoteState.newWorkspaceName.trim();
-
-    function handleAdvanceToLocalPath() {
-      setRemoteLocalState((current) => ({
-        ...current,
-        folderName: current.folderName || suggestedName,
-      }));
-      setRemoteOpenStep("local-path");
-    }
-
     return (
       <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
         {remoteOpenStep === "local-path" ? (
@@ -1859,7 +1929,7 @@ export default function App() {
                   title={remoteLocalState.parentPath}
                 />
                 <button
-                  className="secondary-button"
+                  className="primary-button"
                   type="button"
                   onClick={handleChooseRemoteLocalParent}
                   disabled={busyAction === "pick-remote-parent"}
@@ -1901,14 +1971,6 @@ export default function App() {
         ) : (
           <>
             {renderRemoteSetupFields()}
-            <button
-              className="primary-button"
-              type={showDesktopWindowControls ? "button" : "submit"}
-              disabled={remoteDisabled}
-              onClick={showDesktopWindowControls ? handleAdvanceToLocalPath : undefined}
-            >
-              {busyAction === "open-remote" ? "Opening..." : "Open remote"}
-            </button>
           </>
         )}
       </form>
@@ -2277,6 +2339,53 @@ export default function App() {
       mediaQuery.removeEventListener("change", handleChange);
     };
   }, []);
+
+  useEffect(() => {
+    const unlistenPromise = listen("deep-link-url", async (event) => {
+      let fragment;
+      try {
+        fragment = new URL(event.payload).hash.slice(1);
+      } catch {
+        return;
+      }
+      const params = new URLSearchParams(fragment);
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token") ?? "";
+      if (!accessToken) return;
+      try {
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+          headers: { Authorization: `Bearer ${accessToken}`, apikey: SUPABASE_PUBLISHABLE_KEY },
+        });
+        if (!res.ok) return;
+        const user = await res.json();
+        if (!user.id) return;
+        const syncRootUrl = `${UNISEQ_SYNC_ROOT_PREFIX}/${user.id}`;
+        const discovery = await invoke("discover_sync_service", { provider: "uniseq", syncRootUrl })
+          .catch(() => ({ version: 1, auth: { type: "bearer" } }));
+        let workspaces = [];
+        try {
+          const ws = await invoke("list_remote_workspaces", { provider: "uniseq", syncRootUrl, authToken: accessToken });
+          workspaces = Array.isArray(ws) ? ws : [];
+        } catch (_) { /* no workspaces yet */ }
+        setRemoteState((current) => ({
+          ...current,
+          loggedInEmail: user.email ?? "",
+          uniseqAccount: user.id,
+          authToken: accessToken,
+          refreshToken,
+          authDiscovery: discovery,
+          authLoadedRootUrl: syncRootUrl,
+          workspaces,
+          selectedWorkspaceId: workspaces[0]?.id ?? "",
+          newWorkspaceName: "",
+          loadedRootUrl: syncRootUrl,
+          loginMode: "login",
+        }));
+        setActionError(null);
+      } catch (_) { /* ignore */ }
+    });
+    return () => { void unlistenPromise.then((unlisten) => unlisten()); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!showDesktopWindowControls) return;
@@ -3772,7 +3881,7 @@ export default function App() {
                         title={createState.parentPath}
                       />
                       <button
-                        className="secondary-button"
+                        className="primary-button"
                         type="button"
                         onClick={handleChooseCreateParent}
                         disabled={busyAction === "pick-parent"}

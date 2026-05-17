@@ -27,6 +27,13 @@
       }
     }
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["uniseq"]
+      }
+    }
+  },
   "bundle": {
     "active": false,
     "icon": [

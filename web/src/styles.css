@@ -269,7 +269,6 @@ h2 {
   display: grid;
   gap: 6px;
   color: var(--ink);
-  font-weight: 500;
 }
 
 .field span {
@@ -482,6 +481,23 @@ h2 {
 .workspace-picker-delete:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.workspace-picker-create-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 4%, var(--panel));
+}
+
+.workspace-picker-create-form:last-child {
+  border-bottom: none;
+}
+
+.workspace-picker-create-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .section-heading {
