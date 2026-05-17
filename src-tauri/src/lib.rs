@@ -2435,6 +2435,7 @@ mod tests {
 
         let mut controller = WorkspaceController {
             session: Some(WorkspaceSession::open(&root).unwrap()),
+            sync_loop: None,
         };
         let _ = controller.drain_workspace_events().unwrap();
 

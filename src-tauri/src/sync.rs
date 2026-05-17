@@ -433,6 +433,12 @@ impl HttpSyncProvider {
             .with_auth(self.client.post(self.workspaces_url()))
             .json(&CreateWorkspaceBody { name: trimmed })
             .send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return Err(SyncError::new("remote workspace already exists"));
+        }
         if !response.status().is_success() {
             return Err(SyncError::new(format!(
                 "remote workspace create failed with status {}",
@@ -1386,28 +1392,19 @@ pub fn run_sync_loop(
     sync_lock: Arc<Mutex<()>>,
     rx: mpsc::Receiver<SyncLoopMessage>,
 ) {
-    let write_debounce = Duration::from_secs(5);
-    let poll_interval = Duration::from_secs(60);
-    let mut pending_write_since: Option<Instant> = None;
-    let mut last_poll_at = Instant::now();
+    let min_interval = Duration::from_secs(5);
+    let max_interval = Duration::from_secs(80);
+    let mut interval = min_interval;
+    let mut last_sync_at = Instant::now() - min_interval; // treat as ready on first event
+    let mut activity_pending = false;
 
     loop {
-        let now = Instant::now();
-        let write_deadline = pending_write_since.map(|t| t + write_debounce);
-        let poll_deadline = last_poll_at + poll_interval;
-        let next_deadline = write_deadline.map_or(poll_deadline, |wd| wd.min(poll_deadline));
-        let timeout = next_deadline.saturating_duration_since(now);
+        let timeout = (last_sync_at + interval).saturating_duration_since(Instant::now());
 
         match rx.recv_timeout(timeout) {
             Ok(SyncLoopMessage::LocalWrite) | Ok(SyncLoopMessage::UserActivity) => {
-                pending_write_since = Some(Instant::now());
-            }
-            Ok(SyncLoopMessage::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let now = Instant::now();
-                let should_sync =
-                    write_deadline.map_or(false, |d| now >= d) || now >= poll_deadline;
-                if should_sync {
+                activity_pending = true;
+                if last_sync_at.elapsed() >= min_interval {
                     if let Ok(guard) = sync_lock.try_lock() {
                         let status = do_background_sync(&root);
                         drop(guard);
@@ -1415,9 +1412,27 @@ pub fn run_sync_loop(
                             let _ = app.emit("sync-status", &status);
                         }
                     }
-                    pending_write_since = None;
-                    last_poll_at = Instant::now();
+                    last_sync_at = Instant::now();
+                    interval = min_interval;
+                    activity_pending = false;
                 }
+            }
+            Ok(SyncLoopMessage::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if let Ok(guard) = sync_lock.try_lock() {
+                    let status = do_background_sync(&root);
+                    drop(guard);
+                    if let Some(status) = status {
+                        let _ = app.emit("sync-status", &status);
+                    }
+                }
+                last_sync_at = Instant::now();
+                interval = if activity_pending {
+                    min_interval
+                } else {
+                    (interval * 2).min(max_interval)
+                };
+                activity_pending = false;
             }
         }
     }

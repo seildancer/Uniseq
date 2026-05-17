@@ -283,6 +283,14 @@ function selectedRemoteWorkspace(remoteState) {
   return remoteState.workspaces.find((workspace) => workspace.id === remoteState.selectedWorkspaceId) ?? null;
 }
 
+function workspaceNameFromRootPath(rootPath) {
+  if (!rootPath) {
+    return "";
+  }
+  const parts = rootPath.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? "";
+}
+
 function syncAuthKindFromDiscovery(discovery) {
   return discovery?.auth?.type === "bearer" ? "bearer" : "none";
 }
@@ -1198,13 +1206,16 @@ export default function App() {
     }
   }
 
-  async function ensureRemoteWorkspace() {
+  async function ensureRemoteWorkspace(explicitWorkspaceName = "") {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
-    const selected = selectedRemoteWorkspace(remoteState);
-    if (selected) {
-      return selected;
+    const requestedWorkspaceName = explicitWorkspaceName.trim();
+    if (!requestedWorkspaceName) {
+      const selected = selectedRemoteWorkspace(remoteState);
+      if (selected) {
+        return selected;
+      }
     }
-    const workspaceName = remoteState.newWorkspaceName.trim();
+    const workspaceName = requestedWorkspaceName || remoteState.newWorkspaceName.trim();
     if (!workspaceName) {
       throw new Error("Choose or create a remote workspace.");
     }
@@ -1214,13 +1225,16 @@ export default function App() {
       workspaceName,
       authToken: remoteState.authToken,
     });
-    setRemoteState((current) => ({
-      ...current,
-      workspaces: [...current.workspaces, created],
-      selectedWorkspaceId: created.id,
-      newWorkspaceName: "",
-      loadedRootUrl: syncRootUrl,
-    }));
+    setRemoteState((current) => {
+      const remaining = current.workspaces.filter((workspace) => workspace.id !== created.id);
+      return {
+        ...current,
+        workspaces: [...remaining, created],
+        selectedWorkspaceId: created.id,
+        newWorkspaceName: "",
+        loadedRootUrl: syncRootUrl,
+      };
+    });
     return created;
   }
 
@@ -1386,15 +1400,20 @@ export default function App() {
     event.preventDefault();
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     if (!syncRootUrl) return;
+    const currentWorkspaceName = workspaceNameFromRootPath(workspace?.root_path);
+    if (!currentWorkspaceName) {
+      setActionError({ code: "invalid_workspace_name", message: "Current workspace name is unavailable." });
+      return;
+    }
     setBusyAction("configure-sync");
     setActionError(null);
     try {
-      const workspace = await ensureRemoteWorkspace();
+      const remoteWorkspace = await ensureRemoteWorkspace(currentWorkspaceName);
       const status = await invoke("configure_workspace_sync", {
         provider: remoteState.provider,
         syncRootUrl,
-        remoteWorkspaceId: workspace.id,
-        remoteWorkspaceName: workspace.name,
+        remoteWorkspaceId: remoteWorkspace.id,
+        remoteWorkspaceName: remoteWorkspace.name,
         authKind: syncAuthKindFromDiscovery(remoteState.authDiscovery),
         authToken: remoteState.authToken,
         refreshToken: remoteState.refreshToken || null,
@@ -1492,7 +1511,7 @@ export default function App() {
     await loadSyncStatus().catch(() => { });
   }
 
-  async function handleUniseqAuth() {
+  async function handleUniseqAuth(loadWorkspaces = true) {
     const { loginEmail: email, loginPassword: password, loginMode } = remoteState;
     if (!email.trim() || !password.trim()) return;
     setBusyAction("uniseq-login");
@@ -1514,14 +1533,16 @@ export default function App() {
         syncRootUrl,
       }).catch(() => ({ version: 1, auth: { type: "bearer" } }));
       let workspaces = [];
-      try {
-        const ws = await invoke("list_remote_workspaces", {
-          provider: "uniseq",
-          syncRootUrl,
-          authToken: accessToken,
-        });
-        workspaces = Array.isArray(ws) ? ws : [];
-      } catch (_) { /* no workspaces yet */ }
+      if (loadWorkspaces) {
+        try {
+          const ws = await invoke("list_remote_workspaces", {
+            provider: "uniseq",
+            syncRootUrl,
+            authToken: accessToken,
+          });
+          workspaces = Array.isArray(ws) ? ws : [];
+        } catch (_) { /* no workspaces yet */ }
+      }
       setRemoteState((current) => ({
         ...current,
         loggedInEmail: data.user.email ?? email.trim(),
@@ -1559,8 +1580,10 @@ export default function App() {
     }));
   }
 
-  function renderRemoteSetupFields() {
+  function renderRemoteSetupFields(mode = "open") {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
+    const isSyncSetup = mode === "sync-setup";
+    const syncSetupWorkspaceName = isSyncSetup ? workspaceNameFromRootPath(workspace?.root_path) : "";
     const workspacesLoaded = remoteState.loadedRootUrl === syncRootUrl && syncRootUrl;
     const authDiscoveryLoaded = remoteState.authLoadedRootUrl === syncRootUrl && syncRootUrl;
     const bearerRequired = authDiscoveryLoaded && syncRequiresBearer(remoteState);
@@ -1620,7 +1643,7 @@ export default function App() {
                   placeholder="you@example.com"
                   autoComplete="username"
                   onChange={(e) => setRemoteState((c) => ({ ...c, loginEmail: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(!isSyncSetup); } }}
                 />
               </div>
               <div className="field">
@@ -1631,14 +1654,14 @@ export default function App() {
                   placeholder="••••••••"
                   autoComplete={remoteState.loginMode === "signup" ? "new-password" : "current-password"}
                   onChange={(e) => setRemoteState((c) => ({ ...c, loginPassword: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(!isSyncSetup); } }}
                 />
               </div>
               <button
                 className="secondary-button"
                 type="button"
                 disabled={!remoteState.loginEmail.trim() || !remoteState.loginPassword.trim() || busyAction === "uniseq-login"}
-                onClick={() => void handleUniseqAuth()}
+                onClick={() => void handleUniseqAuth(!isSyncSetup)}
               >
                 {busyAction === "uniseq-login"
                   ? "Please wait..."
@@ -1674,7 +1697,7 @@ export default function App() {
               disabled={!syncRootUrl || busyAction === "list-remote-workspaces" || (bearerRequired && !remoteState.authToken.trim())}
               onClick={() => void loadRemoteWorkspaces()}
             >
-              {busyAction === "list-remote-workspaces" ? "Loading..." : bearerRequired ? "Continue" : "Load workspaces"}
+              {busyAction === "list-remote-workspaces" ? "Loading..." : bearerRequired ? "Continue" : isSyncSetup ? "Check access" : "Load workspaces"}
             </button>
             {bearerRequired ? (
               <div className="remote-auth-panel">
@@ -1705,7 +1728,10 @@ export default function App() {
             ) : null}
           </>
         )}
-        {workspacesLoaded ? (
+        {isSyncSetup && syncSetupWorkspaceName ? (
+          <p className="modal-hint">This will create a remote workspace named <strong>{syncSetupWorkspaceName}</strong>.</p>
+        ) : null}
+        {!isSyncSetup && workspacesLoaded ? (
           <div className="field">
             <span>Workspace</span>
             <ul className="workspace-picker">
@@ -2667,12 +2693,15 @@ export default function App() {
   const visibleError =
     startupError?.cause ?? actionError ?? (startupError ? normalizeError(startupError) : null);
   const remoteSyncRootUrl = syncRootFromRemoteState(remoteState);
+  const currentWorkspaceName = workspaceNameFromRootPath(workspace?.root_path);
   const remoteWorkspace = selectedRemoteWorkspace(remoteState);
   const remoteWorkspaceName = remoteWorkspace?.name ?? remoteState.newWorkspaceName.trim();
   const remoteWorkspaceId = remoteWorkspace?.id ?? "";
-  const canUseRemoteWorkspace = remoteState.selectedWorkspaceId === "__new__"
-    ? Boolean(remoteState.newWorkspaceName.trim())
-    : Boolean(remoteWorkspaceId);
+  const canUseRemoteWorkspace = modal?.type === "sync"
+    ? Boolean(currentWorkspaceName)
+    : remoteState.selectedWorkspaceId === "__new__"
+      ? Boolean(remoteState.newWorkspaceName.trim())
+      : Boolean(remoteWorkspaceId);
   const remoteBearerRequired = syncRequiresBearer(remoteState);
   const remoteDisabled =
     busyAction === "open-remote" ||
@@ -3471,7 +3500,7 @@ export default function App() {
                       </div>
                     ) : (
                       <form className="sync-setup-form" onSubmit={handleConfigureSync}>
-                        {renderRemoteSetupFields()}
+                        {renderRemoteSetupFields("sync-setup")}
                         <div className="modal-actions">
                           <button className="secondary-button" type="button" onClick={closeModal}>
                             Cancel
