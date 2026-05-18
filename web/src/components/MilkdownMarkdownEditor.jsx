@@ -1,5 +1,5 @@
 import { useContext, useEffect, useRef } from "react";
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, editorViewOptionsCtx, prosePluginsCtx, remarkPluginsCtx, remarkStringifyOptionsCtx } from "@milkdown/core";
 import { commonmark } from "@milkdown/preset-commonmark";
 import { gfm } from "@milkdown/preset-gfm";
 import { history } from "@milkdown/plugin-history";
@@ -47,6 +47,7 @@ function MilkdownMarkdownEditorInner({
         ctx.set(rootCtx, root);
         ctx.set(defaultValueCtx, toEditorMarkdown(text, workspaceRoot));
         ctx.update(remarkStringifyOptionsCtx, (opts) => ({ ...opts, bullet: "-" }));
+        ctx.update(editorViewOptionsCtx, (opts) => ({ ...opts, attributes: { spellcheck: "false" } }));
 
         ctx.update(remarkPluginsCtx, (plugins) => [...plugins, breaks]);
         ctx.update(prosePluginsCtx, (plugins) => [
