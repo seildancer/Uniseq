@@ -2606,7 +2606,7 @@ mod tests {
 
     #[test]
     fn open_workspace_reads_pages_and_exposes_watcher_status() {
-        let root = unique_temp_dir("uniseq-desktop-open");
+        let root = unique_temp_dir("uniseq-app-open");
         fs::create_dir_all(root.join("pages")).unwrap();
         write_workspace_file(&root, "pages/A.md", "- [[B]]\n");
         write_workspace_file(&root, "pages/B.md", "");
@@ -2632,7 +2632,7 @@ mod tests {
 
     #[test]
     fn search_pages_returns_ranked_results_from_open_workspace() {
-        let root = unique_temp_dir("uniseq-desktop-search");
+        let root = unique_temp_dir("uniseq-app-search");
         fs::create_dir_all(root.join("pages")).unwrap();
         write_workspace_file(&root, "pages/Alpha.md", "misc");
         write_workspace_file(&root, "pages/Beta.md", "alpha in content");
@@ -2664,7 +2664,7 @@ mod tests {
 
     #[test]
     fn workspace_events_and_watch_errors_are_surfaceable() {
-        let root = unique_temp_dir("uniseq-desktop-events");
+        let root = unique_temp_dir("uniseq-app-events");
         fs::create_dir_all(root.join("pages")).unwrap();
         write_workspace_file(&root, "pages/A.md", "- [[B]]\n");
         write_workspace_file(&root, "pages/B.md", "");
@@ -2697,7 +2697,7 @@ mod tests {
 
     #[test]
     fn create_workspace_bootstraps_pages_directory_and_opens_session() {
-        let root = unique_temp_dir("uniseq-desktop-create");
+        let root = unique_temp_dir("uniseq-app-create");
         fs::create_dir_all(&root).unwrap();
 
         let mut controller = WorkspaceController::default();
@@ -2720,7 +2720,7 @@ mod tests {
 
     #[test]
     fn create_workspace_reopens_existing_workspace_target() {
-        let root = unique_temp_dir("uniseq-desktop-create-existing");
+        let root = unique_temp_dir("uniseq-app-create-existing");
         fs::create_dir_all(root.join("Notebook").join("pages")).unwrap();
         write_workspace_file(&root.join("Notebook"), "pages/A.md", "");
 
@@ -2740,7 +2740,7 @@ mod tests {
 
     #[test]
     fn rename_stream_reopens_workspace_with_updated_stream_pages() {
-        let root = unique_temp_dir("uniseq-desktop-rename-stream");
+        let root = unique_temp_dir("uniseq-app-rename-stream");
         fs::create_dir_all(root.join("pages")).unwrap();
         fs::create_dir_all(root.join("scratch")).unwrap();
         write_workspace_file(&root, "scratch/2026_05_14.md", "hello");
@@ -2778,7 +2778,7 @@ mod tests {
 
     #[test]
     fn invalid_workspace_folder_names_are_rejected() {
-        let root = unique_temp_dir("uniseq-desktop-invalid-name");
+        let root = unique_temp_dir("uniseq-app-invalid-name");
         fs::create_dir_all(&root).unwrap();
 
         let mut controller = WorkspaceController::default();
@@ -2797,7 +2797,7 @@ mod tests {
 
     #[test]
     fn open_workspace_rejects_default_stream_file_collisions() {
-        let root = unique_temp_dir("uniseq-desktop-open-invalid-stream-default");
+        let root = unique_temp_dir("uniseq-app-open-invalid-stream-default");
         fs::create_dir_all(root.join("pages")).unwrap();
         fs::write(root.join("journals"), "").unwrap();
 
@@ -2813,7 +2813,7 @@ mod tests {
 
     #[test]
     fn open_workspace_backfills_assets_and_uniseq() {
-        let root = unique_temp_dir("uniseq-desktop-open-backfill");
+        let root = unique_temp_dir("uniseq-app-open-backfill");
         fs::create_dir_all(root.join("pages")).unwrap();
         write_workspace_file(&root, "pages/A.md", "");
 
@@ -2833,7 +2833,7 @@ mod tests {
 
     #[test]
     fn write_page_content_creates_missing_stream_page_on_demand() {
-        let root = unique_temp_dir("uniseq-desktop-stream-write-on-demand");
+        let root = unique_temp_dir("uniseq-app-stream-write-on-demand");
         fs::create_dir_all(root.join("pages")).unwrap();
 
         let mut controller = WorkspaceController::default();
@@ -2861,7 +2861,7 @@ mod tests {
 
     #[test]
     fn cleanup_empty_stream_pages_removes_only_old_empty_stream_files() {
-        let root = unique_temp_dir("uniseq-desktop-stream-cleanup");
+        let root = unique_temp_dir("uniseq-app-stream-cleanup");
         fs::create_dir_all(root.join("pages")).unwrap();
         write_workspace_file(&root, "diary/2020_01_01.md", "   \n");
         write_workspace_file(&root, "journals/2020_01_01.md", "- keep\n");

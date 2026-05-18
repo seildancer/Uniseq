@@ -1,15 +1,15 @@
 [package]
-name = "uniseq-desktop"
-version = "0.1.0"
+name = "uniseq-app"
+version = "0.1.1"
 edition = "2024"
 publish = false
 
 [lib]
-name = "uniseq_desktop_lib"
+name = "uniseq_app_lib"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "uniseq-desktop"
+name = "uniseq-app"
 path = "src/main.rs"
 
 [build-dependencies]
