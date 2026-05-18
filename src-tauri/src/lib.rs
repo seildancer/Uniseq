@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
 
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1497,7 +1499,6 @@ fn clear_last_workspace_path(app: AppHandle) -> CommandResult<bool> {
 
 #[tauri::command]
 fn configure_workspace_sync(
-    app: AppHandle,
     state: State<'_, AppState>,
     provider: SyncProviderKindDto,
     sync_root_url: String,
@@ -1508,8 +1509,13 @@ fn configure_workspace_sync(
     refresh_token: Option<String>,
     supabase_publishable_key: Option<String>,
 ) -> CommandResult<sync::SyncStatus> {
+    eprintln!(
+        "[uniseq-debug] configure_workspace_sync remote_workspace_id={} remote_workspace_name={}",
+        remote_workspace_id, remote_workspace_name
+    );
     let mut controller = state.controller.lock().unwrap();
-    let status = controller.configure_sync(
+    controller.stop_sync_loop();
+    controller.configure_sync(
         provider,
         sync_root_url,
         remote_workspace_id,
@@ -1518,9 +1524,7 @@ fn configure_workspace_sync(
         auth_token,
         refresh_token,
         supabase_publishable_key,
-    )?;
-    controller.start_sync_loop(app, Arc::clone(&state.sync_lock));
-    Ok(status)
+    )
 }
 
 #[tauri::command]
@@ -1606,13 +1610,60 @@ async fn sync_now(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
 fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
     let state = app.state::<AppState>();
     let workspace_root = state.controller.lock().unwrap().session()?.workspace_root();
+    eprintln!(
+        "[uniseq-debug] sync_now start workspace_root={}",
+        workspace_root.display()
+    );
     let config = sync::read_sync_config(&workspace_root)
         .map_err(ErrorDto::from)?
         .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
+    eprintln!(
+        "[uniseq-debug] sync_now config enabled={} remote_workspace_id={}",
+        config.enabled, config.remote_workspace_id
+    );
     let provider = sync_provider_for_config(&workspace_root, &config)?;
-    let _sync_guard = state.sync_lock.lock().unwrap();
+    eprintln!("[uniseq-debug] sync_now waiting_for_lock");
+    let mut wait_ticks = 0usize;
+    let _sync_guard = loop {
+        match state.sync_lock.try_lock() {
+            Ok(guard) => break guard,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                wait_ticks += 1;
+                let progress = sync::SyncProgress {
+                    operation: sync::SyncProgressOperation::Sync,
+                    phase: sync::SyncProgressPhase::Waiting,
+                    current: 0,
+                    total: 0,
+                    path: None,
+                    detail: Some("Waiting for current sync to finish".to_owned()),
+                };
+                eprintln!(
+                    "[uniseq-debug] sync_now waiting_for_lock tick={wait_ticks}"
+                );
+                if let Err(error) = app.emit(SYNC_PROGRESS_EVENT, &progress) {
+                    eprintln!("[uniseq-debug] sync_progress waiting_emit_error={error}");
+                }
+                thread::sleep(Duration::from_millis(500));
+            }
+            Err(std::sync::TryLockError::Poisoned(error)) => {
+                return Err(ErrorDto::sync(format!("sync lock poisoned: {error}")));
+            }
+        }
+    };
+    eprintln!("[uniseq-debug] sync_now acquired_lock");
     let result = sync::sync_once_with_progress(&workspace_root, &provider, |progress| {
-        let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
+        eprintln!(
+            "[uniseq-debug] sync_progress emit operation={:?} phase={:?} current={} total={} path={:?} detail={:?}",
+            progress.operation,
+            progress.phase,
+            progress.current,
+            progress.total,
+            progress.path,
+            progress.detail
+        );
+        if let Err(error) = app.emit(SYNC_PROGRESS_EVENT, &progress) {
+            eprintln!("[uniseq-debug] sync_progress emit_error={error}");
+        }
     });
     let summary = match result {
         Err(ref e) if e.auth_expired => {
@@ -1623,7 +1674,18 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
             let new_provider = sync_provider_for_config(&workspace_root, &config)?;
             let refreshed =
                 sync::sync_once_with_progress(&workspace_root, &new_provider, |progress| {
-                    let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
+                    eprintln!(
+                        "[uniseq-debug] sync_progress emit_after_refresh operation={:?} phase={:?} current={} total={} path={:?} detail={:?}",
+                        progress.operation,
+                        progress.phase,
+                        progress.current,
+                        progress.total,
+                        progress.path,
+                        progress.detail
+                    );
+                    if let Err(error) = app.emit(SYNC_PROGRESS_EVENT, &progress) {
+                        eprintln!("[uniseq-debug] sync_progress emit_after_refresh_error={error}");
+                    }
                 });
             match refreshed {
                 Err(error) if error.remote_missing => {
@@ -1654,6 +1716,14 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
         other => other.map_err(ErrorDto::from)?,
     };
     drop(_sync_guard);
+    eprintln!(
+        "[uniseq-debug] sync_now complete pushed={} pulled={} deleted_local={} deleted_remote={} conflicts={}",
+        summary.pushed,
+        summary.pulled,
+        summary.deleted_local,
+        summary.deleted_remote,
+        summary.conflicts.len()
+    );
     let _ = app.emit("sync-status", &summary.status);
     if summary.pulled > 0 || summary.deleted_local > 0 {
         state.controller.lock().unwrap().reopen_workspace()?;

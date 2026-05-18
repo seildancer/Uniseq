@@ -202,7 +202,9 @@ pub enum SyncProgressOperation {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SyncProgressPhase {
+    Waiting,
     Listing,
+    ScanningLocal,
     Comparing,
     Pulling,
     Pushing,
@@ -985,7 +987,23 @@ where
         .into_iter()
         .map(|file| (file.path.clone(), file))
         .collect::<BTreeMap<_, _>>();
-    let mut local_files = scan_local_files(root)?;
+    let mut local_files = scan_local_files_with_progress(root, |current, total, path| {
+        let detail = if total == 0 {
+            "No local files to scan".to_owned()
+        } else if current == 0 {
+            format!("Scanning {total} local files")
+        } else {
+            format!("Scanned {current} of {total} local files")
+        };
+        progress(SyncProgress {
+            operation: SyncProgressOperation::Sync,
+            phase: SyncProgressPhase::ScanningLocal,
+            current,
+            total,
+            path: path.map(str::to_owned),
+            detail: Some(detail),
+        });
+    })?;
     let mut all_paths = BTreeSet::new();
     all_paths.extend(local_files.keys().cloned());
     all_paths.extend(remote_by_path.keys().cloned());
@@ -1424,15 +1442,51 @@ struct LocalFileMeta {
 }
 
 fn scan_local_files(root: &Path) -> SyncResult<BTreeMap<String, LocalFileMeta>> {
+    scan_local_files_with_progress(root, |_, _, _| {})
+}
+
+fn scan_local_files_with_progress<F>(
+    root: &Path,
+    mut progress: F,
+) -> SyncResult<BTreeMap<String, LocalFileMeta>>
+where
+    F: FnMut(usize, usize, Option<&str>),
+{
+    let entries = collect_local_file_entries(root)?;
+    let total = entries.len();
     let mut files = BTreeMap::new();
-    scan_local_files_inner(root, root, &mut files)?;
+    progress(0, total, None);
+    for (index, entry) in entries.iter().enumerate() {
+        let content = fs::read(&entry.local_path)?;
+        files.insert(
+            entry.remote_path.clone(),
+            LocalFileMeta {
+                hash: hash_bytes(&content),
+                size: content.len() as u64,
+            },
+        );
+        progress(index + 1, total, Some(entry.remote_path.as_str()));
+    }
     Ok(files)
 }
 
-fn scan_local_files_inner(
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalFileEntry {
+    local_path: PathBuf,
+    remote_path: String,
+}
+
+fn collect_local_file_entries(root: &Path) -> SyncResult<Vec<LocalFileEntry>> {
+    let mut entries = Vec::new();
+    collect_local_file_entries_inner(root, root, &mut entries)?;
+    entries.sort_by(|left, right| left.remote_path.cmp(&right.remote_path));
+    Ok(entries)
+}
+
+fn collect_local_file_entries_inner(
     root: &Path,
     current: &Path,
-    files: &mut BTreeMap<String, LocalFileMeta>,
+    entries: &mut Vec<LocalFileEntry>,
 ) -> SyncResult<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
@@ -1445,21 +1499,17 @@ fn scan_local_files_inner(
         }
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            scan_local_files_inner(root, &path, files)?;
+            collect_local_file_entries_inner(root, &path, entries)?;
             continue;
         }
         if !file_type.is_file() {
             continue;
         }
         let remote_path = remote_path_from_relative(relative)?;
-        let content = fs::read(&path)?;
-        files.insert(
+        entries.push(LocalFileEntry {
+            local_path: path,
             remote_path,
-            LocalFileMeta {
-                hash: hash_bytes(&content),
-                size: content.len() as u64,
-            },
-        );
+        });
     }
     Ok(())
 }
@@ -1813,6 +1863,27 @@ mod tests {
         assert!(!files.contains_key("uniseq/sync-auth.json"));
         assert!(!files.contains_key("uniseq/sync-state.json"));
         assert!(!files.contains_key(".uniseq-page-transaction/manifest.json"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn local_scan_reports_progress_while_hashing_files() {
+        let root = test_root("uniseq-sync-progress");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("pages")).unwrap();
+        fs::write(root.join("pages").join("A.md"), "a").unwrap();
+        fs::write(root.join("pages").join("B.md"), "b").unwrap();
+
+        let mut ticks = Vec::new();
+        let files = scan_local_files_with_progress(&root, |current, total, path| {
+            ticks.push((current, total, path.map(str::to_owned)));
+        })
+        .unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(ticks.first(), Some(&(0, 2, None)));
+        assert_eq!(ticks.last(), Some(&(2, 2, Some("pages/B.md".to_owned()))));
 
         let _ = fs::remove_dir_all(root);
     }

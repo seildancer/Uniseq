@@ -20,6 +20,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMobileKeyboard } from "./hooks/useMobileKeyboard.js";
 import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
+import { coerceSyncProgress } from "./utils/syncProgress.js";
 
 const INITIAL_CREATE_STATE = {
   parentPath: "",
@@ -1197,7 +1198,14 @@ export default function App() {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     if (!syncRootUrl) return;
     setBusyAction("open-remote");
-    setSyncProgress(null);
+    setSyncProgress({
+      operation: "initial_pull",
+      phase: "listing",
+      current: 0,
+      total: 0,
+      path: null,
+      detail: "Preparing remote workspace",
+    });
     setActionError(null);
 
     try {
@@ -1598,10 +1606,15 @@ export default function App() {
       setActionError({ code: "invalid_workspace_name", message: "Current workspace name is unavailable." });
       return;
     }
+    console.info("[uniseq-debug] handleConfigureSync start", {
+      syncRootUrl,
+      currentWorkspaceName,
+    });
     setBusyAction("configure-sync");
     setActionError(null);
     try {
       const remoteWorkspace = await ensureRemoteWorkspace(currentWorkspaceName);
+      console.info("[uniseq-debug] handleConfigureSync remote workspace ready", remoteWorkspace);
       const status = await invoke("configure_workspace_sync", {
         provider: remoteState.provider,
         syncRootUrl,
@@ -1612,23 +1625,41 @@ export default function App() {
         refreshToken: remoteState.refreshToken || null,
         supabasePublishableKey: remoteState.provider === "uniseq" ? SUPABASE_PUBLISHABLE_KEY : null,
       });
+      console.info("[uniseq-debug] handleConfigureSync configured", status);
       setSyncStatus(status);
       closeModal();
-      await handleSyncNow();
+      const summary = await handleSyncNow();
+      console.info("[uniseq-debug] handleConfigureSync sync summary", summary);
+      if (summary?.status) {
+        const loopStatus = await invoke("set_workspace_sync_enabled", { enabled: true });
+        console.info("[uniseq-debug] handleConfigureSync background loop started", loopStatus);
+        setSyncStatus(loopStatus);
+      }
     } catch (error) {
+      console.error("[uniseq-debug] handleConfigureSync failed", error);
       setActionError(normalizeError(error));
     } finally {
+      console.info("[uniseq-debug] handleConfigureSync done");
       setBusyAction("");
     }
   }
 
   async function handleSyncNow() {
+    console.info("[uniseq-debug] handleSyncNow start");
     setBusyAction("sync");
-    setSyncProgress(null);
+    setSyncProgress({
+      operation: "sync",
+      phase: "listing",
+      current: 0,
+      total: 0,
+      path: null,
+      detail: "Preparing workspace sync",
+    });
     setActionError(null);
     try {
       setSyncStatus((current) => current ? { ...current, kind: "syncing" } : current);
       const summary = await invoke("sync_now");
+      console.info("[uniseq-debug] handleSyncNow completed invoke", summary);
       setSyncStatus(summary.status);
       if (summary.pulled > 0 || summary.deleted_local > 0) {
         await loadWorkspaceLists().catch(() => { });
@@ -1640,10 +1671,14 @@ export default function App() {
       if (summary.conflicts?.length > 0) {
         openSyncConflictsModal();
       }
+      return summary;
     } catch (error) {
+      console.error("[uniseq-debug] handleSyncNow failed", error);
       setActionError(normalizeError(error));
       await loadSyncStatus().catch(() => { });
+      return null;
     } finally {
+      console.info("[uniseq-debug] handleSyncNow cleanup");
       setSyncProgress(null);
       setBusyAction("");
     }
@@ -2108,19 +2143,28 @@ export default function App() {
     }
 
     const progress = syncProgress?.operation === activeOperation ? syncProgress : null;
+    console.info("[uniseq-debug] renderSyncProgressOverlay", {
+      busyAction,
+      activeOperation,
+      syncProgress,
+      progress,
+    });
     const total = Number(progress?.total ?? 0);
     const current = Math.min(Number(progress?.current ?? 0), total || Number(progress?.current ?? 0));
     const determinate = total > 0;
     const percent = determinate
       ? Math.max(current > 0 ? 4 : 0, Math.round((current / total) * 100))
       : null;
+    const fallbackDetail = activeOperation === "initial_pull"
+      ? "Preparing remote workspace"
+      : "Preparing workspace sync";
 
     return (
       <div className="progress-overlay" role="status" aria-live="polite" aria-busy="true">
         <div className="progress-card">
           <div className="progress-card-copy">
             <strong>{SYNC_PROGRESS_OPERATION_LABELS[activeOperation]}</strong>
-            <span>{progress?.detail ?? "Working..."}</span>
+            <span>{progress?.detail ?? fallbackDetail}</span>
           </div>
           <div className={`progress-bar${determinate ? "" : " progress-bar--indeterminate"}`} aria-hidden="true">
             <div className="progress-bar-fill" style={determinate ? { width: `${percent}%` } : undefined} />
@@ -2929,7 +2973,13 @@ export default function App() {
   useEffect(() => {
     let unlisten;
     listen("sync-progress", (event) => {
-      const progress = event.payload;
+      console.info("[uniseq-debug] sync-progress raw", event.payload);
+      const progress = coerceSyncProgress(event.payload);
+      if (!progress) {
+        console.warn("[uniseq-debug] sync-progress ignored", event.payload);
+        return;
+      }
+      console.info("[uniseq-debug] sync-progress coerced", progress);
       setSyncProgress(progress);
       if (shouldLogSyncProgress(progress)) {
         console.info("[uniseq] sync progress", progress);
