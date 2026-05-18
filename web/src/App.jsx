@@ -279,6 +279,13 @@ function syncRootFromRemoteState(remoteState) {
   return remoteState.syncRootUrl.trim();
 }
 
+function uniseqAccountFromSyncRootUrl(syncRootUrl) {
+  const prefix = `${UNISEQ_SYNC_ROOT_PREFIX}/`;
+  return typeof syncRootUrl === "string" && syncRootUrl.startsWith(prefix)
+    ? syncRootUrl.slice(prefix.length)
+    : "";
+}
+
 function selectedRemoteWorkspace(remoteState) {
   return remoteState.workspaces.find((workspace) => workspace.id === remoteState.selectedWorkspaceId) ?? null;
 }
@@ -318,6 +325,13 @@ function syncStatusLabel(status) {
 
 function syncProviderLabel(provider) {
   return provider === "uniseq" ? "Uniseq Sync" : "Custom URL";
+}
+
+function formatUnixTimestamp(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) {
+    return "Never";
+  }
+  return new Date(unixSeconds * 1000).toLocaleString();
 }
 
 function remoteProviderStatePatch(provider) {
@@ -555,6 +569,15 @@ function WindowForwardIcon() {
   return (
     <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
       <path d="M4.25 2.5 8 6l-3.75 3.5" />
+    </svg>
+  );
+}
+
+function WindowRefreshIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
+      <path d="M9.1 4.2A4 4 0 1 0 10 7" />
+      <path d="M9 2.6v2.3h-2.3" />
     </svg>
   );
 }
@@ -873,9 +896,43 @@ export default function App() {
   function renderWindowControls() {
     const canNavigateBack = selectionHistoryState.index > 0;
     const canNavigateForward = selectionHistoryState.index < selectionHistoryState.entries.length - 1;
+    const hasSyncConflicts = syncConflicts.length > 0;
+    const isSyncConfigured = Boolean(syncStatus?.sync_root_url);
+    const isSyncing = busyAction === "sync" || syncStatus?.kind === "syncing";
+
+    function handleSyncControlClick() {
+      if (!isSyncConfigured || !syncStatus?.enabled) {
+        openSyncSetupModal();
+        return;
+      }
+      void handleSyncNow();
+    }
 
     return (
       <div className="window-controls" data-no-window-drag="true">
+        {workspace ? (
+          isSyncing ? (
+            <span className="window-sync-status">Syncing...</span>
+          ) : hasSyncConflicts ? (
+            <button
+              className="window-control-button window-control-button--sync-conflict"
+              type="button"
+              onClick={openSyncConflictsModal}
+            >
+              {syncConflicts.length === 1 ? "Conflict" : `${syncConflicts.length} conflicts`}
+            </button>
+          ) : (
+            <button
+              className="window-control-button"
+              type="button"
+              aria-label={isSyncConfigured && syncStatus?.enabled ? "Sync now" : "Configure sync"}
+              title={isSyncConfigured && syncStatus?.enabled ? "Sync now" : "Configure sync"}
+              onClick={handleSyncControlClick}
+            >
+              <WindowRefreshIcon />
+            </button>
+          )
+        ) : null}
         <button
           className="window-control-button"
           type="button"
@@ -1471,6 +1528,47 @@ export default function App() {
     setSyncConflictDetail(null);
   }
 
+  function openSyncSetupModal() {
+    setSyncConflictDetail(null);
+    setRemoteState((current) => {
+      const nextProvider = syncStatus?.provider ?? current.provider;
+      const nextSyncRootUrl = syncStatus?.sync_root_url ?? current.syncRootUrl;
+      return {
+        ...current,
+        provider: nextProvider,
+        uniseqAccount: nextProvider === "uniseq"
+          ? uniseqAccountFromSyncRootUrl(nextSyncRootUrl) || current.uniseqAccount
+          : current.uniseqAccount,
+        syncRootUrl: nextProvider === "custom" ? nextSyncRootUrl : current.syncRootUrl,
+        workspaces: syncStatus?.remote_workspace_id
+          ? [{
+            id: syncStatus.remote_workspace_id,
+            name: syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id,
+          }]
+          : current.workspaces,
+        selectedWorkspaceId: syncStatus?.remote_workspace_id ?? current.selectedWorkspaceId,
+        loadedRootUrl: syncStatus?.sync_root_url ?? current.loadedRootUrl,
+        authDiscovery: syncStatus?.auth
+          ? { version: 1, auth: { type: syncStatus.auth.kind } }
+          : current.authDiscovery,
+        authLoadedRootUrl: syncStatus?.sync_root_url ?? current.authLoadedRootUrl,
+      };
+    });
+    setMenuOpen(false);
+    setModal({ type: "sync-setup" });
+  }
+
+  function openSyncConflictsModal() {
+    setMenuOpen(false);
+    setSyncConflictDetail(null);
+    setModal({ type: "sync-conflicts" });
+  }
+
+  function openInfoModal() {
+    setMenuOpen(false);
+    setModal({ type: "info" });
+  }
+
   async function handleConfigureSync(event) {
     event.preventDefault();
     const syncRootUrl = syncRootFromRemoteState(remoteState);
@@ -1519,7 +1617,7 @@ export default function App() {
         }
       }
       if (summary.conflicts?.length > 0) {
-        setModal({ type: "sync" });
+        openSyncConflictsModal();
       }
     } catch (error) {
       setActionError(normalizeError(error));
@@ -2862,7 +2960,7 @@ export default function App() {
   const remoteWorkspace = selectedRemoteWorkspace(remoteState);
   const remoteWorkspaceName = remoteWorkspace?.name ?? remoteState.newWorkspaceName.trim();
   const remoteWorkspaceId = remoteWorkspace?.id ?? "";
-  const canUseRemoteWorkspace = modal?.type === "sync"
+  const canUseRemoteWorkspace = modal?.type === "sync-setup"
     ? Boolean(currentWorkspaceName)
     : remoteState.selectedWorkspaceId === "__new__"
       ? Boolean(remoteState.newWorkspaceName.trim())
@@ -2956,16 +3054,6 @@ export default function App() {
                   className="topbar-menu-item"
                   type="button"
                   onClick={() => {
-                    void loadWorkspaceLists();
-                    setMenuOpen(false);
-                  }}
-                >
-                  Refresh
-                </button>
-                <button
-                  className="topbar-menu-item"
-                  type="button"
-                  onClick={() => {
                     setDarkMode((d) => !d);
                     setMenuOpen(false);
                   }}
@@ -2975,46 +3063,10 @@ export default function App() {
                 <button
                   className="topbar-menu-item"
                   type="button"
-                  onClick={() => {
-                    setRemoteState((current) => ({
-                      ...current,
-                      provider: syncStatus?.provider ?? current.provider,
-                      syncRootUrl: syncStatus?.sync_root_url ?? current.syncRootUrl,
-                      workspaces: syncStatus?.remote_workspace_id
-                        ? [{
-                          id: syncStatus.remote_workspace_id,
-                          name: syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id,
-                        }]
-                        : current.workspaces,
-                      selectedWorkspaceId: syncStatus?.remote_workspace_id ?? current.selectedWorkspaceId,
-                      loadedRootUrl: syncStatus?.sync_root_url ?? current.loadedRootUrl,
-                      authDiscovery: syncStatus?.auth
-                        ? { version: 1, auth: { type: syncStatus.auth.kind } }
-                        : current.authDiscovery,
-                      authLoadedRootUrl: syncStatus?.sync_root_url ?? current.authLoadedRootUrl,
-                    }));
-                    setModal({ type: "sync" });
-                    setMenuOpen(false);
-                  }}
+                  onClick={openInfoModal}
                 >
-                  {syncStatus?.sync_root_url ? "Sync" : "Setup remote"}
+                  Info
                 </button>
-                <div className="topbar-menu-divider"></div>
-                <div className="topbar-menu-info">
-                  <div className="topbar-menu-path">{workspace.root_path}</div>
-                  <div className="topbar-menu-info-row">
-                    <span>Pages</span>
-                    <span>{pages.length}</span>
-                  </div>
-                  <div className="topbar-menu-info-row">
-                    <span>Watcher</span>
-                    <span>{workspace.watcher_status.mode ?? "starting"}</span>
-                  </div>
-                  <div className="topbar-menu-info-row">
-                    <span>Sync</span>
-                    <span>{syncStatusLabel(syncStatus)}</span>
-                  </div>
-                </div>
                 <div className="topbar-menu-divider"></div>
                 <button
                   className="topbar-menu-item topbar-menu-item--danger"
@@ -3325,7 +3377,7 @@ export default function App() {
           {modal && (
             <div className="modal-overlay" onClick={closeModal}>
               <div
-                className={`modal${modal.type === "search" ? " modal--search" : ""}${modal.type === "sync" ? " modal--sync" : ""}`}
+                className={`modal${modal.type === "search" ? " modal--search" : ""}${modal.type === "sync-setup" || modal.type === "sync-conflicts" ? " modal--sync" : ""}`}
                 onClick={(e) => e.stopPropagation()}
               >
                 {modal.type === "rename" && (
@@ -3534,136 +3586,139 @@ export default function App() {
                   </>
                 )}
 
-                {modal.type === "sync" && (
+                {modal.type === "sync-conflicts" && (
                   <>
-                    <h3>{syncStatus?.sync_root_url ? "Sync" : "Setup remote"}</h3>
-                    {syncStatus?.sync_root_url ? (
-                      <div className="sync-panel">
-                        <div className="sync-summary">
-                          <div>
-                            <span>Status</span>
-                            <strong>{syncStatusLabel(syncStatus)}</strong>
-                          </div>
-                          <div>
-                            <span>Provider</span>
-                            <strong>{syncProviderLabel(syncStatus.provider)}</strong>
-                          </div>
-                          <div>
-                            <span>Auth</span>
-                            <strong>
-                              {syncStatus.auth?.kind === "bearer"
-                                ? syncStatus.auth.has_bearer_token ? "Bearer token" : "Bearer token missing"
-                                : "None"}
-                            </strong>
-                          </div>
-                          <div>
-                            <span>Workspace</span>
-                            <strong title={syncStatus.remote_workspace_url ?? ""}>
-                              {syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id}
-                            </strong>
-                          </div>
-                        </div>
-                        {syncStatus.last_error ? (
-                          <p className="modal-hint sync-error">{syncStatus.last_error}</p>
-                        ) : null}
-                        {syncConflicts.length > 0 ? (
-                          <div className="sync-conflicts">
-                            <div className="sync-conflict-toolbar">
-                              <span>{syncConflicts.length} conflict{syncConflicts.length === 1 ? "" : "s"}</span>
-                              <div>
-                                <button
-                                  className="secondary-button"
-                                  type="button"
-                                  disabled={busyAction === "resolve-sync"}
-                                  onClick={() => void resolveAllSyncConflicts("use_local")}
-                                >
-                                  Use local for all
-                                </button>
-                                <button
-                                  className="secondary-button"
-                                  type="button"
-                                  disabled={busyAction === "resolve-sync"}
-                                  onClick={() => void resolveAllSyncConflicts("use_remote")}
-                                >
-                                  Use remote for all
-                                </button>
-                              </div>
+                    <h3>Sync conflicts</h3>
+                    <div className="sync-panel">
+                      {syncStatus?.last_error ? (
+                        <p className="modal-hint sync-error">{syncStatus.last_error}</p>
+                      ) : null}
+                      {syncConflicts.length > 0 ? (
+                        <div className="sync-conflicts">
+                          <div className="sync-conflict-toolbar">
+                            <span>{syncConflicts.length} conflict{syncConflicts.length === 1 ? "" : "s"}</span>
+                            <div>
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                disabled={busyAction === "resolve-sync"}
+                                onClick={() => void resolveAllSyncConflicts("use_local")}
+                              >
+                                Use local for all
+                              </button>
+                              <button
+                                className="secondary-button"
+                                type="button"
+                                disabled={busyAction === "resolve-sync"}
+                                onClick={() => void resolveAllSyncConflicts("use_remote")}
+                              >
+                                Use remote for all
+                              </button>
                             </div>
-                            <div className="modal-list sync-conflict-list">
-                              {syncConflicts.map((conflict) => (
-                                <button
-                                  key={conflict.path}
-                                  className="sync-conflict-row"
-                                  type="button"
-                                  onClick={() => void loadSyncConflictDetail(conflict.path)}
-                                >
-                                  <span>{conflict.path}</span>
-                                  <small>{conflict.message}</small>
-                                </button>
-                              ))}
-                            </div>
-                            {syncConflictDetail ? (
-                              <div className="sync-diff">
-                                <div className="sync-diff-head">
-                                  <strong>{syncConflictDetail.path}</strong>
-                                  <div>
-                                    <button
-                                      className="secondary-button"
-                                      type="button"
-                                      disabled={busyAction === "resolve-sync"}
-                                      onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_local")}
-                                    >
-                                      Use local
-                                    </button>
-                                    <button
-                                      className="primary-button"
-                                      type="button"
-                                      disabled={busyAction === "resolve-sync"}
-                                      onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_remote")}
-                                    >
-                                      Use remote
-                                    </button>
-                                  </div>
-                                </div>
-                                <div className="sync-diff-grid">
-                                  <div>
-                                    <span>Local</span>
-                                    <pre>{syncConflictDetail.local_content}</pre>
-                                  </div>
-                                  <div>
-                                    <span>Remote</span>
-                                    <pre>{syncConflictDetail.remote_content}</pre>
-                                  </div>
+                          </div>
+                          <div className="modal-list sync-conflict-list">
+                            {syncConflicts.map((conflict) => (
+                              <button
+                                key={conflict.path}
+                                className="sync-conflict-row"
+                                type="button"
+                                onClick={() => void loadSyncConflictDetail(conflict.path)}
+                              >
+                                <span>{conflict.path}</span>
+                                <small>{conflict.message}</small>
+                              </button>
+                            ))}
+                          </div>
+                          {syncConflictDetail ? (
+                            <div className="sync-diff">
+                              <div className="sync-diff-head">
+                                <strong>{syncConflictDetail.path}</strong>
+                                <div>
+                                  <button
+                                    className="secondary-button"
+                                    type="button"
+                                    disabled={busyAction === "resolve-sync"}
+                                    onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_local")}
+                                  >
+                                    Use local
+                                  </button>
+                                  <button
+                                    className="primary-button"
+                                    type="button"
+                                    disabled={busyAction === "resolve-sync"}
+                                    onClick={() => void resolveSyncConflict(syncConflictDetail.path, "use_remote")}
+                                  >
+                                    Use remote
+                                  </button>
                                 </div>
                               </div>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <p className="modal-hint">No conflicts.</p>
-                        )}
-                        <div className="modal-actions">
-                          <button
-                            className="secondary-button"
-                            type="button"
-                            disabled={busyAction === "sync-toggle"}
-                            onClick={() => void setWorkspaceSyncEnabled(!syncStatus.enabled)}
-                          >
-                            {syncStatus.enabled ? "Disable sync" : "Enable sync"}
-                          </button>
-                          <button className="secondary-button" type="button" onClick={closeModal}>
-                            Close
-                          </button>
-                          <button
-                            className="primary-button"
-                            type="button"
-                            disabled={busyAction === "sync" || !syncStatus.enabled}
-                            onClick={() => void handleSyncNow()}
-                          >
-                            {busyAction === "sync" ? "Syncing..." : "Sync now"}
-                          </button>
+                              <div className="sync-diff-grid">
+                                <div>
+                                  <span>Local</span>
+                                  <pre>{syncConflictDetail.local_content}</pre>
+                                </div>
+                                <div>
+                                  <span>Remote</span>
+                                  <pre>{syncConflictDetail.remote_content}</pre>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
+                      ) : (
+                        <p className="modal-hint">No conflicts.</p>
+                      )}
+                      <div className="modal-actions">
+                        <button className="secondary-button" type="button" onClick={closeModal}>
+                          Close
+                        </button>
                       </div>
-                    ) : (
+                    </div>
+                  </>
+                )}
+
+                {modal.type === "sync-setup" && (
+                  <>
+                    <h3>{syncStatus?.sync_root_url ? "Sync provider" : "Setup remote"}</h3>
+                    <div className="sync-panel">
+                      {syncStatus?.sync_root_url ? (
+                        <>
+                          <div className="sync-summary">
+                            <div>
+                              <span>Status</span>
+                              <strong>{syncStatusLabel(syncStatus)}</strong>
+                            </div>
+                            <div>
+                              <span>Provider</span>
+                              <strong>{syncProviderLabel(syncStatus.provider)}</strong>
+                            </div>
+                            <div>
+                              <span>Auth</span>
+                              <strong>
+                                {syncStatus.auth?.kind === "bearer"
+                                  ? syncStatus.auth.has_bearer_token ? "Bearer token" : "Bearer token missing"
+                                  : "None"}
+                              </strong>
+                            </div>
+                            <div>
+                              <span>Workspace</span>
+                              <strong title={syncStatus.remote_workspace_url ?? ""}>
+                                {syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id}
+                              </strong>
+                            </div>
+                          </div>
+                          <div className="modal-actions modal-actions--inline-start">
+                            <button
+                              className="secondary-button"
+                              type="button"
+                              disabled={busyAction === "sync-toggle"}
+                              onClick={() => void setWorkspaceSyncEnabled(!syncStatus.enabled)}
+                            >
+                              {syncStatus.enabled ? "Disable sync" : "Enable sync"}
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
                       <form className="sync-setup-form" onSubmit={handleConfigureSync}>
                         {renderRemoteSetupFields("sync-setup")}
                         <div className="modal-actions">
@@ -3671,11 +3726,109 @@ export default function App() {
                             Cancel
                           </button>
                           <button className="primary-button" type="submit" disabled={remoteDisabled}>
-                            {busyAction === "configure-sync" ? "Connecting..." : "Connect"}
+                            {busyAction === "configure-sync" ? "Connecting..." : syncStatus?.sync_root_url ? "Reconnect" : "Connect"}
                           </button>
                         </div>
                       </form>
-                    )}
+                    </div>
+                  </>
+                )}
+
+                {modal.type === "info" && (
+                  <>
+                    <h3>Info</h3>
+                    <div className="topbar-menu-info">
+                      <div className="topbar-menu-section-label">Workspace</div>
+                      <div className="topbar-menu-info-row">
+                        <span>Workspace</span>
+                        <span>{currentWorkspaceName || "Unknown"}</span>
+                      </div>
+                      <div className="topbar-menu-path">{workspace.root_path}</div>
+                      <div className="topbar-menu-info-row">
+                        <span>Pages</span>
+                        <span>{pages.length}</span>
+                      </div>
+                      <div className="topbar-menu-info-row">
+                        <span>Streams</span>
+                        <span>{streamNames.length}</span>
+                      </div>
+                      <div className="topbar-menu-divider"></div>
+                      <div className="topbar-menu-section-label">Runtime</div>
+                      <div className="topbar-menu-info-row">
+                        <span>Watcher</span>
+                        <span>{workspace.watcher_status.mode ?? "starting"}</span>
+                      </div>
+                      <div className="topbar-menu-divider"></div>
+                      <div className="topbar-menu-section-label">Sync</div>
+                      <div className="topbar-menu-info-row">
+                        <span>Sync</span>
+                        <span>{syncStatusLabel(syncStatus)}</span>
+                      </div>
+                      <div className="topbar-menu-info-row">
+                        <span>Sync enabled</span>
+                        <span>{syncStatus?.enabled ? "Yes" : "No"}</span>
+                      </div>
+                      <button
+                        className="topbar-menu-info-row topbar-menu-info-row--button"
+                        type="button"
+                        onClick={openSyncSetupModal}
+                      >
+                        <span>Provider</span>
+                        <span>{syncStatus?.sync_root_url ? syncProviderLabel(syncStatus.provider) : "Setup remote"}</span>
+                      </button>
+                      {remoteState.loggedInEmail ? (
+                        <div className="topbar-menu-info-row">
+                          <span>Login email</span>
+                          <span>{remoteState.loggedInEmail}</span>
+                        </div>
+                      ) : null}
+                      {syncStatus?.remote_workspace_name ? (
+                        <div className="topbar-menu-info-row">
+                          <span>Remote workspace</span>
+                          <span title={syncStatus.remote_workspace_url ?? ""}>{syncStatus.remote_workspace_name}</span>
+                        </div>
+                      ) : null}
+                      {syncStatus?.auth ? (
+                        <div className="topbar-menu-info-row">
+                          <span>Auth</span>
+                          <span>
+                            {syncStatus.auth.kind === "bearer"
+                              ? syncStatus.auth.has_bearer_token ? "Bearer token" : "Bearer missing"
+                              : "None"}
+                          </span>
+                        </div>
+                      ) : null}
+                      {syncStatus?.sync_root_url ? (
+                        <div className="topbar-menu-path">{syncStatus.sync_root_url}</div>
+                      ) : null}
+                      {syncStatus?.last_synced_at ? (
+                        <div className="topbar-menu-info-row">
+                          <span>Last synced</span>
+                          <span>{formatUnixTimestamp(syncStatus.last_synced_at)}</span>
+                        </div>
+                      ) : null}
+                      {syncConflicts.length > 0 ? (
+                        <button
+                          className="topbar-menu-info-row topbar-menu-info-row--button"
+                          type="button"
+                          onClick={openSyncConflictsModal}
+                        >
+                          <span>Conflicts</span>
+                          <span>{syncConflicts.length}</span>
+                        </button>
+                      ) : null}
+                      {syncStatus?.last_error ? (
+                        <div className="topbar-menu-info-row">
+                          <span>Error</span>
+                          <span title={syncStatus.last_error}>{syncStatus.last_error}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="modal-actions">
+                      <button className="secondary-button" type="button" onClick={closeModal}>
+                        Close
+                      </button>
+                    </div>
                   </>
                 )}
 
