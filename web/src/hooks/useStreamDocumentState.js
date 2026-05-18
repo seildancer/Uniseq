@@ -9,30 +9,50 @@ export function useStreamDocumentState({
   onError,
   onRefresh,
 }) {
+  const fallbackPageId = `stream:${streamName}/${dateName}`;
   const loadSeqRef = useRef(0);
   const loadedPageIdRef = useRef(null);
-  const [backedPageId, setBackedPageId] = useState(existingPageId);
+  const skipNextExistingPageHydrationRef = useRef(false);
+  const [backedPageId, setBackedPageId] = useState(existingPageId ?? fallbackPageId);
   const [backedText, setBackedText] = useState("");
   const [backedRevision, setBackedRevision] = useState(null);
   const [loading, setLoading] = useState(Boolean(existingPageId));
 
   useEffect(() => {
-    setBackedPageId(existingPageId ?? null);
-    if (!existingPageId || existingPageId !== loadedPageIdRef.current) {
-      setBackedText("");
-      setBackedRevision(null);
-    }
-    if (existingPageId && existingPageId !== loadedPageIdRef.current) {
-      setLoading(true);
-    }
+    setBackedPageId(existingPageId ?? fallbackPageId);
     if (!existingPageId) {
       loadedPageIdRef.current = null;
+      setBackedText("");
+      setBackedRevision(null);
       setLoading(false);
+      return;
     }
-  }, [existingPageId]);
+    if (
+      skipNextExistingPageHydrationRef.current
+      && existingPageId === fallbackPageId
+      && loadedPageIdRef.current === existingPageId
+    ) {
+      setLoading(false);
+      return;
+    }
+    if (existingPageId !== loadedPageIdRef.current) {
+      setBackedText("");
+      setBackedRevision(null);
+      setLoading(true);
+    }
+  }, [existingPageId, fallbackPageId]);
 
   useEffect(() => {
-    if (!backedPageId) {
+    if (!existingPageId) {
+      setLoading(false);
+      return;
+    }
+    if (
+      skipNextExistingPageHydrationRef.current
+      && existingPageId === fallbackPageId
+      && loadedPageIdRef.current === existingPageId
+    ) {
+      skipNextExistingPageHydrationRef.current = false;
       setLoading(false);
       return;
     }
@@ -59,21 +79,14 @@ export function useStreamDocumentState({
         setLoading(false);
         if (error?.code === "missing_page") {
           loadedPageIdRef.current = null;
-          setBackedPageId(null);
+          setBackedPageId(fallbackPageId);
+          setBackedText("");
+          setBackedRevision(null);
           return;
         }
         onError?.(error);
       });
-  }, [backedPageId, reloadToken, onError]);
-
-  function handleFirstWrite({ pageId, text, revision }) {
-    loadedPageIdRef.current = pageId;
-    setBackedPageId(pageId);
-    setBackedText(text);
-    setBackedRevision(revision);
-    setLoading(false);
-    void onRefresh?.();
-  }
+  }, [backedPageId, existingPageId, fallbackPageId, reloadToken, onError]);
 
   async function handleConflictReload() {
     if (!backedPageId) {
@@ -95,7 +108,12 @@ export function useStreamDocumentState({
     backedText,
     loading,
     handleConflictReload,
-    handleFirstWrite,
-    virtualDocumentKey: `virtual:${streamName}/${dateName}`,
+    handlePersisted: () => {
+      if (!existingPageId && backedPageId === fallbackPageId) {
+        loadedPageIdRef.current = fallbackPageId;
+        skipNextExistingPageHydrationRef.current = true;
+      }
+      void onRefresh?.();
+    },
   };
 }

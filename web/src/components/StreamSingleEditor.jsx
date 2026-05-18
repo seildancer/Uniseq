@@ -3,7 +3,6 @@ import MilkdownMarkdownEditor from "./MilkdownMarkdownEditor";
 import { useMarkdownEditorBridge } from "../hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "../hooks/useEditorPersistence";
 import { useStreamDocumentState } from "../hooks/useStreamDocumentState";
-import { useVirtualStreamPersistence } from "../hooks/useVirtualStreamPersistence";
 
 function BackedStreamEditor({
   pageId,
@@ -12,6 +11,7 @@ function BackedStreamEditor({
   pages,
   onNavigate,
   onConflict,
+  onPersisted,
   focusEditorRef,
   onFocusChange,
 }) {
@@ -25,48 +25,13 @@ function BackedStreamEditor({
     flushRef,
     onMarkdownUpdatedRef,
     onConflict,
+    onPersisted,
   });
 
   return (
     <MilkdownMarkdownEditor
       documentKey={pageId}
       text={text}
-      pages={pages}
-      onNavigate={onNavigate}
-      flushRef={flushRef}
-      onMarkdownUpdatedRef={onMarkdownUpdatedRef}
-      editorGetRef={editorGetRef}
-      focusEditorRef={focusEditorRef}
-      onFocusChange={onFocusChange}
-    />
-  );
-}
-
-function VirtualStreamEditor({
-  streamName,
-  dateName,
-  pages,
-  onNavigate,
-  onError,
-  onFirstWrite,
-  focusEditorRef,
-  onFocusChange,
-}) {
-  const { flushRef, onMarkdownUpdatedRef, editorGetRef } = useMarkdownEditorBridge();
-
-  useVirtualStreamPersistence({
-    streamName,
-    dateName,
-    flushRef,
-    onMarkdownUpdatedRef,
-    onError,
-    onFirstWrite,
-  });
-
-  return (
-    <MilkdownMarkdownEditor
-      documentKey={`virtual:${streamName}/${dateName}`}
-      text=""
       pages={pages}
       onNavigate={onNavigate}
       flushRef={flushRef}
@@ -97,8 +62,7 @@ export default function StreamSingleEditor({
     backedText,
     loading,
     handleConflictReload,
-    handleFirstWrite,
-    virtualDocumentKey,
+    handlePersisted,
   } = useStreamDocumentState({
     streamName,
     dateName,
@@ -117,38 +81,35 @@ export default function StreamSingleEditor({
     onReadyChangeRef.current?.(!loading);
   }, [loading]);
 
+  const createdRefreshSentRef = useRef(Boolean(existingPageId));
+  useEffect(() => {
+    createdRefreshSentRef.current = Boolean(existingPageId);
+  }, [existingPageId, streamName, dateName]);
+
   if (loading) {
     return null;
   }
 
-  if (backedPageId) {
-    const editorKey = backedRevision
-      ? `${backedPageId}:${backedRevision.len_bytes}:${backedRevision.content_hash}`
-      : backedPageId;
-    return (
-      <BackedStreamEditor
-        key={editorKey}
-        pageId={backedPageId}
-        text={backedText}
-        revision={backedRevision}
-        pages={pages}
-        onNavigate={onNavigate}
-        onConflict={handleConflictReload}
-        focusEditorRef={focusEditorRef}
-        onFocusChange={onFocusChange}
-      />
-    );
-  }
+  const editorKey = backedRevision
+    ? `${backedPageId}:${backedRevision.len_bytes}:${backedRevision.content_hash}`
+    : backedPageId;
 
   return (
-    <VirtualStreamEditor
-      key={virtualDocumentKey}
-      streamName={streamName}
-      dateName={dateName}
+    <BackedStreamEditor
+      key={editorKey}
+      pageId={backedPageId}
+      text={backedText}
+      revision={backedRevision}
       pages={pages}
       onNavigate={onNavigate}
-      onError={onError}
-      onFirstWrite={handleFirstWrite}
+      onConflict={handleConflictReload}
+      onPersisted={() => {
+        if (createdRefreshSentRef.current) {
+          return;
+        }
+        createdRefreshSentRef.current = true;
+        handlePersisted();
+      }}
       focusEditorRef={focusEditorRef}
       onFocusChange={onFocusChange}
     />

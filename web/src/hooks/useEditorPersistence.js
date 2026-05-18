@@ -15,6 +15,7 @@ export function useEditorPersistence({
   flushRef,
   onMarkdownUpdatedRef,
   onConflict,
+  onPersisted,
 }) {
   const workspaceRoot = useContext(WorkspaceContext);
   const workspaceRootRef = useRef(workspaceRoot);
@@ -47,6 +48,7 @@ export function useEditorPersistence({
       latestTextRef.current = updated.text;
       persistedTextRef.current = updated.text;
       revisionRef.current = updated.revision;
+      onPersisted?.(updated);
     } catch (error) {
       if (error?.code === "structural_conflict") {
         onConflict?.(error);

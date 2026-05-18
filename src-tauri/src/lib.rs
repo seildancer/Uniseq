@@ -380,11 +380,29 @@ impl WorkspaceController {
     ) -> CommandResult<PageContentDto> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
-        let result = self
-            .session()?
-            .write_and_reparse(&page_id, text, expected_revision.map(FileFingerprint::from))
-            .map(PageContentDto::from)
-            .map_err(ErrorDto::from);
+        let expected_revision = expected_revision.map(FileFingerprint::from);
+        let session = self.session()?;
+        let result = match session.write_and_reparse(&page_id, text.clone(), expected_revision) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(CoreError::MissingPage)
+                if expected_revision.is_none()
+                    && matches!(page_id.location(), PageLocation::Stream { .. }) =>
+            {
+                let PageLocation::Stream { stream_name } = page_id.location().clone() else {
+                    unreachable!("stream-backed page ids must expose stream locations");
+                };
+                session
+                    .apply_stream_page_create(StreamPageCreate {
+                        stream_name,
+                        date_name: page_id.leaf_name().clone(),
+                    })
+                    .map_err(ErrorDto::from)?;
+                session.write_and_reparse(&page_id, text, None)
+            }
+            Err(error) => Err(error),
+        }
+        .map(PageContentDto::from)
+        .map_err(ErrorDto::from);
         if result.is_ok() {
             self.notify_local_write();
         }
@@ -1499,6 +1517,7 @@ fn clear_last_workspace_path(app: AppHandle) -> CommandResult<bool> {
 
 #[tauri::command]
 fn configure_workspace_sync(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider: SyncProviderKindDto,
     sync_root_url: String,
@@ -1515,7 +1534,7 @@ fn configure_workspace_sync(
     );
     let mut controller = state.controller.lock().unwrap();
     controller.stop_sync_loop();
-    controller.configure_sync(
+    let status = controller.configure_sync(
         provider,
         sync_root_url,
         remote_workspace_id,
@@ -1524,7 +1543,9 @@ fn configure_workspace_sync(
         auth_token,
         refresh_token,
         supabase_publishable_key,
-    )
+    )?;
+    controller.start_sync_loop(app, Arc::clone(&state.sync_lock));
+    Ok(status)
 }
 
 #[tauri::command]
@@ -2848,6 +2869,34 @@ mod tests {
                 "- first line\n".to_owned(),
             )
             .unwrap();
+        assert_eq!(written.text, "- first line\n");
+        assert_eq!(
+            fs::read_to_string(root.join("diary").join("2026_05_14.md")).unwrap(),
+            "- first line\n"
+        );
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_page_content_creates_missing_stream_page_on_demand() {
+        let root = unique_temp_dir("uniseq-desktop-stream-write-on-demand");
+        fs::create_dir_all(root.join("pages")).unwrap();
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let written = controller
+            .write_page_content(
+                "stream:diary/2026_05_14".to_owned(),
+                "- first line\n".to_owned(),
+                None,
+            )
+            .unwrap();
+
         assert_eq!(written.text, "- first line\n");
         assert_eq!(
             fs::read_to_string(root.join("diary").join("2026_05_14.md")).unwrap(),
