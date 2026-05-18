@@ -49,6 +49,11 @@ const INITIAL_REMOTE_STATE = {
   loggedInEmail: "",
 };
 
+const SYNC_PROGRESS_OPERATION_LABELS = {
+  initial_pull: "Opening remote workspace",
+  sync: "Syncing workspace",
+};
+
 const ROOT_PARENT_KEY = "__root__";
 const DRAG_LONG_PRESS_MS = 260;
 const DRAG_MOVE_SLOP_PX = 8;
@@ -67,6 +72,19 @@ const appWindow = getCurrentWindow();
 
 function defaultStreamSelection() {
   return { kind: "stream_dual", dateName: todayDateName() };
+}
+
+function shouldLogSyncProgress(progress) {
+  if (!progress) return false;
+  const total = Number(progress.total ?? 0);
+  const current = Number(progress.current ?? 0);
+  return (
+    progress.phase === "listing" ||
+    progress.phase === "finalizing" ||
+    current === 0 ||
+    current === total ||
+    current % 25 === 0
+  );
 }
 
 function shouldShowDesktopWindowControls() {
@@ -651,6 +669,7 @@ export default function App() {
   const [remoteState, setRemoteState] = useState(INITIAL_REMOTE_STATE);
   const [onboardingTab, setOnboardingTab] = useState("create");
   const [syncStatus, setSyncStatus] = useState(null);
+  const [syncProgress, setSyncProgress] = useState(null);
   const [syncConflictDetail, setSyncConflictDetail] = useState(null);
   const [expandedPageIds, setExpandedPageIds] = useState({});
   const [menuOpen, setMenuOpen] = useState(false);
@@ -1178,10 +1197,16 @@ export default function App() {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     if (!syncRootUrl) return;
     setBusyAction("open-remote");
+    setSyncProgress(null);
     setActionError(null);
 
     try {
       const workspace = workspaceOverride ?? await ensureRemoteWorkspace();
+      console.info("[uniseq] opening remote workspace", {
+        syncRootUrl,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+      });
       const localRootPath = showDesktopWindowControls && remoteLocalState.parentPath && remoteLocalState.folderName.trim()
         ? `${remoteLocalState.parentPath}/${remoteLocalState.folderName.trim()}`
         : null;
@@ -1209,8 +1234,10 @@ export default function App() {
       setStartupError(null);
       setMode("workspace");
     } catch (error) {
+      console.error("[uniseq] remote workspace open failed", error);
       setActionError(normalizeError(error));
     } finally {
+      setSyncProgress(null);
       setBusyAction("");
     }
   }
@@ -1597,6 +1624,7 @@ export default function App() {
 
   async function handleSyncNow() {
     setBusyAction("sync");
+    setSyncProgress(null);
     setActionError(null);
     try {
       setSyncStatus((current) => current ? { ...current, kind: "syncing" } : current);
@@ -1616,6 +1644,7 @@ export default function App() {
       setActionError(normalizeError(error));
       await loadSyncStatus().catch(() => { });
     } finally {
+      setSyncProgress(null);
       setBusyAction("");
     }
   }
@@ -2065,6 +2094,48 @@ export default function App() {
           </>
         )}
       </form>
+    );
+  }
+
+  function renderSyncProgressOverlay() {
+    const activeOperation = busyAction === "open-remote"
+      ? "initial_pull"
+      : busyAction === "sync"
+        ? "sync"
+        : "";
+    if (!activeOperation) {
+      return null;
+    }
+
+    const progress = syncProgress?.operation === activeOperation ? syncProgress : null;
+    const total = Number(progress?.total ?? 0);
+    const current = Math.min(Number(progress?.current ?? 0), total || Number(progress?.current ?? 0));
+    const determinate = total > 0;
+    const percent = determinate
+      ? Math.max(current > 0 ? 4 : 0, Math.round((current / total) * 100))
+      : null;
+
+    return (
+      <div className="progress-overlay" role="status" aria-live="polite" aria-busy="true">
+        <div className="progress-card">
+          <div className="progress-card-copy">
+            <strong>{SYNC_PROGRESS_OPERATION_LABELS[activeOperation]}</strong>
+            <span>{progress?.detail ?? "Working..."}</span>
+          </div>
+          <div className={`progress-bar${determinate ? "" : " progress-bar--indeterminate"}`} aria-hidden="true">
+            <div className="progress-bar-fill" style={determinate ? { width: `${percent}%` } : undefined} />
+          </div>
+          <div className="progress-meta">
+            <span>{determinate ? `${current} / ${total}` : "Preparing..."}</span>
+            {progress?.phase ? <span>{String(progress.phase).replaceAll("_", " ")}</span> : null}
+          </div>
+          {progress?.path ? (
+            <div className="progress-path" title={progress.path}>
+              {progress.path}
+            </div>
+          ) : null}
+        </div>
+      </div>
     );
   }
 
@@ -2855,6 +2926,24 @@ export default function App() {
     return () => { unlisten?.(); };
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    let unlisten;
+    listen("sync-progress", (event) => {
+      const progress = event.payload;
+      setSyncProgress(progress);
+      if (shouldLogSyncProgress(progress)) {
+        console.info("[uniseq] sync progress", progress);
+      }
+    }).then((fn) => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (busyAction !== "open-remote" && busyAction !== "sync") {
+      setSyncProgress(null);
+    }
+  }, [busyAction]);
+
   // Notify the Rust sync loop of user activity so it can trigger a pull sooner.
   useEffect(() => {
     if (mode !== "workspace") return undefined;
@@ -2981,6 +3070,7 @@ export default function App() {
           <h1>Uniseq</h1>
           <p className="status-copy">Opening last workspace...</p>
         </section>
+        {renderSyncProgressOverlay()}
       </main>
     );
   }
@@ -3935,6 +4025,7 @@ export default function App() {
           {isKeyboardVisible && (
             <MobileKeyboardBar keyboardHeight={keyboardHeight} />
           )}
+          {renderSyncProgressOverlay()}
         </main>
       </WorkspaceContext.Provider>
     );
@@ -4088,6 +4179,7 @@ export default function App() {
           </>
         )}
       </section>
+      {renderSyncProgressOverlay()}
     </main>
   );
 }

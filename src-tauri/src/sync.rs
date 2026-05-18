@@ -193,6 +193,35 @@ pub struct SyncRunSummary {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncProgressOperation {
+    InitialPull,
+    Sync,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncProgressPhase {
+    Listing,
+    Comparing,
+    Pulling,
+    Pushing,
+    DeletingLocal,
+    DeletingRemote,
+    Finalizing,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SyncProgress {
+    pub operation: SyncProgressOperation,
+    pub phase: SyncProgressPhase,
+    pub current: usize,
+    pub total: usize,
+    pub path: Option<String>,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SyncConflictDetail {
     pub path: String,
     pub local_content: String,
@@ -454,7 +483,10 @@ impl HttpSyncProvider {
             return Err(SyncError::new("remote workspace is required"));
         }
         let response = self
-            .with_auth(self.client.delete(Self::workspace_url_for(&self.sync_root_url, trimmed)))
+            .with_auth(
+                self.client
+                    .delete(Self::workspace_url_for(&self.sync_root_url, trimmed)),
+            )
             .send()?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SyncError::new_auth_expired("sync token expired"));
@@ -657,7 +689,10 @@ pub fn refresh_supabase_auth(
         .timeout(std::time::Duration::from_secs(15))
         .build()?;
     let response = client
-        .post(format!("{}/auth/v1/token?grant_type=refresh_token", supabase_url))
+        .post(format!(
+            "{}/auth/v1/token?grant_type=refresh_token",
+            supabase_url
+        ))
         .header("apikey", publishable_key)
         .header("Content-Type", "application/json")
         .json(&RefreshBody { refresh_token })
@@ -742,12 +777,53 @@ pub fn sync_status(root: &Path) -> SyncResult<SyncStatus> {
     ))
 }
 
-pub fn initial_pull(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRunSummary> {
+pub fn initial_pull_with_progress<F>(
+    root: &Path,
+    provider: &dyn SyncProvider,
+    mut progress: F,
+) -> SyncResult<SyncRunSummary>
+where
+    F: FnMut(SyncProgress),
+{
     fs::create_dir_all(root)?;
+    progress(SyncProgress {
+        operation: SyncProgressOperation::InitialPull,
+        phase: SyncProgressPhase::Listing,
+        current: 0,
+        total: 0,
+        path: None,
+        detail: Some("Listing remote files".to_owned()),
+    });
     let remote_files = provider.list()?;
-    for meta in &remote_files {
+    let total = remote_files.len();
+    progress(SyncProgress {
+        operation: SyncProgressOperation::InitialPull,
+        phase: SyncProgressPhase::Pulling,
+        current: 0,
+        total,
+        path: None,
+        detail: Some(format!("Downloading {total} remote files")),
+    });
+    for (index, meta) in remote_files.iter().enumerate() {
         let blob = provider.pull(&meta.path)?;
         write_workspace_file(root, &meta.path, &blob.content)?;
+        progress(SyncProgress {
+            operation: SyncProgressOperation::InitialPull,
+            phase: SyncProgressPhase::Pulling,
+            current: index + 1,
+            total,
+            path: Some(meta.path.clone()),
+            detail: Some(format!("Downloaded {} of {total} files", index + 1)),
+        });
+    }
+    let remote_paths = remote_files
+        .iter()
+        .map(|meta| meta.path.clone())
+        .collect::<BTreeSet<_>>();
+    for local_path in scan_local_files(root)?.into_keys() {
+        if !remote_paths.contains(&local_path) {
+            remove_workspace_file(root, &local_path)?;
+        }
     }
     let local_files = scan_local_files(root)?;
     let now = now_unix_secs();
@@ -766,6 +842,14 @@ pub fn initial_pull(root: &Path, provider: &dyn SyncProvider) -> SyncResult<Sync
         }
     }
     state.last_synced_at = Some(now);
+    progress(SyncProgress {
+        operation: SyncProgressOperation::InitialPull,
+        phase: SyncProgressPhase::Finalizing,
+        current: total,
+        total,
+        path: None,
+        detail: Some("Finalizing remote workspace".to_owned()),
+    });
     write_sync_state(root, &state)?;
     Ok(SyncRunSummary {
         pushed: 0,
@@ -783,6 +867,17 @@ pub fn initial_pull(root: &Path, provider: &dyn SyncProvider) -> SyncResult<Sync
 }
 
 pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRunSummary> {
+    sync_once_with_progress(root, provider, |_| {})
+}
+
+pub fn sync_once_with_progress<F>(
+    root: &Path,
+    provider: &dyn SyncProvider,
+    mut progress: F,
+) -> SyncResult<SyncRunSummary>
+where
+    F: FnMut(SyncProgress),
+{
     let config = read_sync_config(root)?;
     if !config.as_ref().is_some_and(|config| config.enabled) {
         let state = read_sync_state(root)?;
@@ -802,6 +897,14 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
     }
 
     let mut state = read_sync_state(root)?;
+    progress(SyncProgress {
+        operation: SyncProgressOperation::Sync,
+        phase: SyncProgressPhase::Listing,
+        current: 0,
+        total: 0,
+        path: None,
+        detail: Some("Listing remote files".to_owned()),
+    });
     let remote_files = match provider.list() {
         Ok(files) => files,
         Err(error) => {
@@ -819,6 +922,16 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
     all_paths.extend(local_files.keys().cloned());
     all_paths.extend(remote_by_path.keys().cloned());
     all_paths.extend(state.files.keys().cloned());
+    let all_paths = all_paths.into_iter().collect::<Vec<_>>();
+    let total = all_paths.len();
+    progress(SyncProgress {
+        operation: SyncProgressOperation::Sync,
+        phase: SyncProgressPhase::Comparing,
+        current: 0,
+        total,
+        path: None,
+        detail: Some(format!("Checking {total} workspace files")),
+    });
 
     let now = now_unix_secs();
     let mut pushed = 0;
@@ -826,7 +939,7 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
     let mut deleted_local = 0;
     let mut deleted_remote = 0;
 
-    for path in all_paths {
+    for (index, path) in all_paths.into_iter().enumerate() {
         let local = local_files.remove(&path);
         let remote = remote_by_path.get(&path);
         let previous = state.files.get(&path).cloned();
@@ -845,6 +958,32 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
             (None, None) => false,
         };
 
+        let operation = match (&local, remote, &previous, local_changed, remote_changed) {
+            (Some(_), None, _, true, false) | (Some(_), Some(_), _, true, false) => {
+                Some((SyncProgressPhase::Pushing, "Uploading"))
+            }
+            (Some(_), Some(_), _, false, true) | (None, Some(_), _, false, true) => {
+                Some((SyncProgressPhase::Pulling, "Downloading"))
+            }
+            (None, Some(_), Some(_), true, false) => {
+                Some((SyncProgressPhase::DeletingRemote, "Removing remote"))
+            }
+            (Some(_), None, Some(_), false, true) => {
+                Some((SyncProgressPhase::DeletingLocal, "Removing local"))
+            }
+            _ => None,
+        };
+        if let Some((phase, verb)) = operation {
+            progress(SyncProgress {
+                operation: SyncProgressOperation::Sync,
+                phase,
+                current: index,
+                total,
+                path: Some(path.clone()),
+                detail: Some(format!("{verb} {}", path)),
+            });
+        }
+
         match (local, remote, previous, local_changed, remote_changed) {
             (Some(local), None, previous, true, false) => {
                 let result = provider.push(PushFileRequest {
@@ -856,9 +995,10 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
                     PushResult::Accepted { remote_version, .. } => {
                         pushed += 1;
                         state.conflicts.remove(&path);
-                        state
-                            .files
-                            .insert(path, synced_state(Some(remote_version), &local, now));
+                        state.files.insert(
+                            path.clone(),
+                            synced_state(Some(remote_version), &local, now),
+                        );
                     }
                     PushResult::Conflict { current } => {
                         insert_conflict(
@@ -880,9 +1020,10 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
                     PushResult::Accepted { remote_version, .. } => {
                         pushed += 1;
                         state.conflicts.remove(&path);
-                        state
-                            .files
-                            .insert(path, synced_state(Some(remote_version), &local, now));
+                        state.files.insert(
+                            path.clone(),
+                            synced_state(Some(remote_version), &local, now),
+                        );
                     }
                     PushResult::Conflict { current } => {
                         insert_conflict(
@@ -901,7 +1042,7 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
                 pulled += 1;
                 state.conflicts.remove(&path);
                 state.files.insert(
-                    path,
+                    path.clone(),
                     synced_state(Some(remote.remote_version.clone()), &updated, now),
                 );
             }
@@ -912,7 +1053,7 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
                 pulled += 1;
                 state.conflicts.remove(&path);
                 state.files.insert(
-                    path,
+                    path.clone(),
                     synced_state(Some(remote.remote_version.clone()), &updated, now),
                 );
             }
@@ -948,7 +1089,7 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
             }
             (Some(local), Some(remote), _previous, false, false) => {
                 state.files.insert(
-                    path,
+                    path.clone(),
                     synced_state(Some(remote.remote_version.clone()), &local, now),
                 );
             }
@@ -959,11 +1100,28 @@ pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRun
             }
             _ => {}
         }
+
+        progress(SyncProgress {
+            operation: SyncProgressOperation::Sync,
+            phase: SyncProgressPhase::Comparing,
+            current: index + 1,
+            total,
+            path: Some(path.clone()),
+            detail: Some(format!("Processed {} of {total} files", index + 1)),
+        });
     }
 
     state.last_synced_at = Some(now);
     state.last_error = None;
     let conflicts = state.conflicts.values().cloned().collect::<Vec<_>>();
+    progress(SyncProgress {
+        operation: SyncProgressOperation::Sync,
+        phase: SyncProgressPhase::Finalizing,
+        current: total,
+        total,
+        path: None,
+        detail: Some("Finalizing sync".to_owned()),
+    });
     write_sync_state(root, &state)?;
     Ok(SyncRunSummary {
         pushed,

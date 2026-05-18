@@ -109,6 +109,88 @@ button:disabled {
   padding: 24px;
 }
 
+.progress-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.progress-card {
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.progress-card-copy {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.progress-card-copy strong {
+  font-size: 16px;
+}
+
+.progress-card-copy span,
+.progress-meta,
+.progress-path {
+  color: var(--muted);
+}
+
+.progress-bar {
+  position: relative;
+  overflow: hidden;
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #c87834 0%, #e6a15c 100%);
+  transition: width 180ms ease;
+}
+
+.progress-bar--indeterminate .progress-bar-fill {
+  width: 36%;
+  animation: progress-indeterminate 1.1s ease-in-out infinite;
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.progress-path {
+  margin-top: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes progress-indeterminate {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(320%);
+  }
+}
+
 .hero-copy {
   max-width: 760px;
 }
