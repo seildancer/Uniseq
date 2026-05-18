@@ -1551,7 +1551,7 @@ h2 {
   font-size: 0.9rem;
   text-align: left;
   cursor: grab;
-  touch-action: none;
+  touch-action: manipulation;
 }
 
 .stream-list-btn--with-toggle {
@@ -2220,7 +2220,7 @@ h2 {
   border-radius: 8px;
   text-align: left;
   cursor: grab;
-  touch-action: none;
+  touch-action: manipulation;
 }
 
 .page-tree-item:active {
