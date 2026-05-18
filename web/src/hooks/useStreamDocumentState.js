@@ -17,6 +17,11 @@ export function useStreamDocumentState({
   const [backedText, setBackedText] = useState("");
   const [backedRevision, setBackedRevision] = useState(null);
   const [loading, setLoading] = useState(Boolean(existingPageId));
+  const shouldSkipFirstExistingPageHydration = (
+    skipNextExistingPageHydrationRef.current
+    && existingPageId === fallbackPageId
+    && loadedPageIdRef.current === existingPageId
+  );
 
   useEffect(() => {
     setBackedPageId(existingPageId ?? fallbackPageId);
@@ -27,11 +32,7 @@ export function useStreamDocumentState({
       setLoading(false);
       return;
     }
-    if (
-      skipNextExistingPageHydrationRef.current
-      && existingPageId === fallbackPageId
-      && loadedPageIdRef.current === existingPageId
-    ) {
+    if (shouldSkipFirstExistingPageHydration) {
       setLoading(false);
       return;
     }
@@ -40,18 +41,14 @@ export function useStreamDocumentState({
       setBackedRevision(null);
       setLoading(true);
     }
-  }, [existingPageId, fallbackPageId]);
+  }, [existingPageId, fallbackPageId, shouldSkipFirstExistingPageHydration]);
 
   useEffect(() => {
     if (!existingPageId) {
       setLoading(false);
       return;
     }
-    if (
-      skipNextExistingPageHydrationRef.current
-      && existingPageId === fallbackPageId
-      && loadedPageIdRef.current === existingPageId
-    ) {
+    if (shouldSkipFirstExistingPageHydration) {
       skipNextExistingPageHydrationRef.current = false;
       setLoading(false);
       return;
@@ -86,7 +83,14 @@ export function useStreamDocumentState({
         }
         onError?.(error);
       });
-  }, [backedPageId, existingPageId, fallbackPageId, reloadToken, onError]);
+  }, [
+    backedPageId,
+    existingPageId,
+    fallbackPageId,
+    reloadToken,
+    onError,
+    shouldSkipFirstExistingPageHydration,
+  ]);
 
   async function handleConflictReload() {
     if (!backedPageId) {

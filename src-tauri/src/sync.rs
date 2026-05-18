@@ -165,6 +165,7 @@ pub enum SyncStatusKind {
 pub struct SyncStatus {
     pub kind: SyncStatusKind,
     pub enabled: bool,
+    pub background_loop_running: bool,
     pub provider: Option<SyncProviderKind>,
     pub sync_root_url: Option<String>,
     pub remote_workspace_id: Option<String>,
@@ -1408,6 +1409,7 @@ fn status_from_config_and_state(
         return SyncStatus {
             kind: SyncStatusKind::Off,
             enabled: false,
+            background_loop_running: false,
             provider: None,
             sync_root_url: None,
             remote_workspace_id: None,
@@ -1438,6 +1440,7 @@ fn status_from_config_and_state(
     SyncStatus {
         kind,
         enabled: config.enabled,
+        background_loop_running: false,
         provider: Some(config.provider.clone()),
         sync_root_url: Some(config.sync_root_url.clone()),
         remote_workspace_id: Some(config.remote_workspace_id.clone()),
@@ -1748,7 +1751,10 @@ pub fn run_sync_loop(
                 activity_pending = true;
                 if last_sync_at.elapsed() >= min_interval {
                     if let Ok(guard) = sync_lock.try_lock() {
-                        let status = do_background_sync(&root);
+                        let status = do_background_sync(&root).map(|mut status| {
+                            status.background_loop_running = true;
+                            status
+                        });
                         drop(guard);
                         if let Some(status) = status {
                             let _ = app.emit("sync-status", &status);
@@ -1762,7 +1768,10 @@ pub fn run_sync_loop(
             Ok(SyncLoopMessage::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Ok(guard) = sync_lock.try_lock() {
-                    let status = do_background_sync(&root);
+                    let status = do_background_sync(&root).map(|mut status| {
+                        status.background_loop_running = true;
+                        status
+                    });
                     drop(guard);
                     if let Some(status) = status {
                         let _ = app.emit("sync-status", &status);

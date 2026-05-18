@@ -1647,11 +1647,6 @@ export default function App() {
       closeModal();
       const summary = await handleSyncNow();
       console.info("[uniseq-debug] handleConfigureSync sync summary", summary);
-      if (summary?.status) {
-        const loopStatus = await invoke("set_workspace_sync_enabled", { enabled: true });
-        console.info("[uniseq-debug] handleConfigureSync background loop started", loopStatus);
-        setSyncStatus(loopStatus);
-      }
     } catch (error) {
       console.error("[uniseq-debug] handleConfigureSync failed", error);
       setActionError(normalizeError(error));
@@ -3885,6 +3880,10 @@ export default function App() {
                                 {syncStatus.remote_workspace_name ?? syncStatus.remote_workspace_id}
                               </strong>
                             </div>
+                            <div>
+                              <span>Background loop</span>
+                              <strong>{syncStatus.background_loop_running ? "Running" : "Stopped"}</strong>
+                            </div>
                           </div>
                           <div className="modal-actions modal-actions--inline-start">
                             <button
@@ -3946,6 +3945,10 @@ export default function App() {
                       <div className="topbar-menu-info-row">
                         <span>Sync enabled</span>
                         <span>{syncStatus?.enabled ? "Yes" : "No"}</span>
+                      </div>
+                      <div className="topbar-menu-info-row">
+                        <span>Background loop</span>
+                        <span>{syncStatus?.background_loop_running ? "Running" : "Stopped"}</span>
                       </div>
                       <button
                         className="topbar-menu-info-row topbar-menu-info-row--button"

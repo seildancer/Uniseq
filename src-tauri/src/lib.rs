@@ -36,6 +36,16 @@ struct AppState {
 
 struct SyncLoop {
     sender: mpsc::Sender<sync::SyncLoopMessage>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl SyncLoop {
+    fn stop(mut self) {
+        let _ = self.sender.send(sync::SyncLoopMessage::Stop);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Drop for SyncLoop {
@@ -293,7 +303,7 @@ impl WorkspaceController {
     }
 
     fn close_workspace(&mut self) -> bool {
-        self.sync_loop = None;
+        self.stop_sync_loop();
         self.session.take().is_some()
     }
 
@@ -403,10 +413,7 @@ impl WorkspaceController {
         }
         .map(PageContentDto::from)
         .map_err(ErrorDto::from);
-        if result.is_ok() {
-            self.notify_local_write();
-        }
-        result
+        self.finish_local_mutation(result)
     }
 
     fn create_stream_page(
@@ -429,10 +436,12 @@ impl WorkspaceController {
                 date_name,
             })
             .map_err(ErrorDto::from)?;
-        self.session()?
+        let result = self
+            .session()?
             .page_summary(&page_id)
             .map(PageSummaryDto::from)
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        self.finish_local_mutation(result)
     }
 
     fn delete_stream_page(&self, stream_name: String, date_name: String) -> CommandResult<()> {
@@ -442,12 +451,14 @@ impl WorkspaceController {
         let date_name = PageName::new(&date_name)
             .map_err(CoreError::from)
             .map_err(ErrorDto::from)?;
-        self.session()?
+        let result = self
+            .session()?
             .apply_stream_page_delete(StreamPageDelete {
                 stream_name,
                 date_name,
             })
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        self.finish_local_mutation(result)
     }
 
     fn delete_stream(&self, stream_name: String) -> CommandResult<DeleteStreamResultDto> {
@@ -485,9 +496,10 @@ impl WorkspaceController {
         let stream_dir = workspace_root.join(stream_name_parsed.as_str());
         let _ = fs::remove_dir(&stream_dir);
 
-        Ok(DeleteStreamResultDto {
+        let result = Ok(DeleteStreamResultDto {
             deleted_page_count: deleted_count,
-        })
+        });
+        self.finish_local_mutation(result)
     }
 
     fn rename_stream(&mut self, stream_name: String, new_stream_name: String) -> CommandResult<()> {
@@ -512,7 +524,8 @@ impl WorkspaceController {
 
         fs::rename(&source_dir, &target_dir)
             .map_err(|error| ErrorDto::from(CoreError::io(&source_dir, &error)))?;
-        self.reopen_workspace()
+        let result = self.reopen_workspace();
+        self.finish_local_mutation(result)
     }
 
     fn cleanup_empty_stream_pages(&self, older_than_days: u64) -> CommandResult<CleanupResultDto> {
@@ -558,58 +571,22 @@ impl WorkspaceController {
             }
         }
 
-        Ok(CleanupResultDto { removed_page_ids })
+        let result = Ok(CleanupResultDto { removed_page_ids });
+        self.finish_local_mutation(result)
     }
 
     fn refresh_stream_workspace(&self, older_than_days: u64) -> CommandResult<CleanupResultDto> {
         self.cleanup_empty_stream_pages(older_than_days)
     }
 
-    fn write_virtual_stream_page(
-        &self,
-        stream_name: String,
-        date_name: String,
-        text: String,
-    ) -> CommandResult<PageContentDto> {
-        if text.trim().is_empty() {
-            return Err(ErrorDto {
-                code: "empty_stream_write",
-                message: "stream page was not created because the write is empty".to_owned(),
-                path: None,
-            });
-        }
-        let stream_name = PageName::new(&stream_name)
-            .map_err(CoreError::from)
-            .map_err(ErrorDto::from)?;
-        let date_name = PageName::new(&date_name)
-            .map_err(CoreError::from)
-            .map_err(ErrorDto::from)?;
-        let page_id = PageId::stream(stream_name.clone(), date_name.clone())
-            .map_err(CoreError::from)
-            .map_err(ErrorDto::from)?;
-        self.session()?
-            .apply_stream_page_create(StreamPageCreate {
-                stream_name,
-                date_name,
-            })
-            .map_err(ErrorDto::from)?;
-        let result = self
-            .session()?
-            .write_and_reparse(&page_id, text, None)
-            .map(PageContentDto::from)
-            .map_err(ErrorDto::from);
-        if result.is_ok() {
-            self.notify_local_write();
-        }
-        result
-    }
-
     fn create_page(&self, page_id: String) -> CommandResult<()> {
         let page_id =
             parse_page_id_input(&page_id).map_err(|_| ErrorDto::invalid_page_id(&page_id))?;
-        self.session()?
+        let result = self
+            .session()?
             .apply_page_create(PageCreate { page_id })
-            .map_err(ErrorDto::from)
+            .map_err(ErrorDto::from);
+        self.finish_local_mutation(result)
     }
 
     fn rename_page(
@@ -628,7 +605,9 @@ impl WorkspaceController {
                 new_leaf_name,
             })
             .map_err(ErrorDto::from)?;
-        self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id)
+        self.finish_local_mutation(
+            self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id),
+        )
     }
 
     fn move_page(
@@ -650,7 +629,9 @@ impl WorkspaceController {
                 destination_parent_page_id,
             })
             .map_err(ErrorDto::from)?;
-        self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id)
+        self.finish_local_mutation(
+            self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id),
+        )
     }
 
     fn delete_page(&self, app: &AppHandle, page_id: String) -> CommandResult<()> {
@@ -661,7 +642,7 @@ impl WorkspaceController {
                 page_id: page_id.clone(),
             })
             .map_err(ErrorDto::from)?;
-        self.remove_page_order_subtree(app, &page_id_to_string(&page_id))
+        self.finish_local_mutation(self.remove_page_order_subtree(app, &page_id_to_string(&page_id)))
     }
 
     fn merge_page(
@@ -680,7 +661,9 @@ impl WorkspaceController {
                 target_page_id,
             })
             .map_err(ErrorDto::from)?;
-        self.remove_page_order_subtree(app, &page_id_to_string(&source_page_id))
+        self.finish_local_mutation(
+            self.remove_page_order_subtree(app, &page_id_to_string(&source_page_id)),
+        )
     }
 
     fn set_page_sibling_order(
@@ -718,7 +701,8 @@ impl WorkspaceController {
             ordered_child_page_ids,
         );
         workspace_order = normalize_workspace_page_order(&workspace_order, &pages);
-        write_workspace_page_order(&workspace_root, &workspace_order)
+        let result = write_workspace_page_order(&workspace_root, &workspace_order);
+        self.finish_local_mutation(result)
     }
 
     fn page_incoming_refs(&self, page_id: String) -> CommandResult<Vec<IncomingPageRefDto>> {
@@ -766,10 +750,7 @@ impl WorkspaceController {
             .session()?
             .write_block_markdown(&handle, replacement_markdown)
             .map_err(ErrorDto::from);
-        if result.is_ok() {
-            self.notify_local_write();
-        }
-        result
+        self.finish_local_mutation(result)
     }
 
     fn drain_workspace_events(&self) -> CommandResult<Vec<WorkspaceEventDto>> {
@@ -828,7 +809,7 @@ impl WorkspaceController {
             },
         )
         .map_err(ErrorDto::from)?;
-        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+        self.sync_status_for_workspace(&workspace_root)
     }
 
     fn set_sync_enabled(&self, enabled: bool) -> CommandResult<sync::SyncStatus> {
@@ -838,12 +819,12 @@ impl WorkspaceController {
             .ok_or_else(|| ErrorDto::sync("sync is not configured"))?;
         config.enabled = enabled;
         sync::write_sync_config(&workspace_root, &config).map_err(ErrorDto::from)?;
-        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+        self.sync_status_for_workspace(&workspace_root)
     }
 
     fn sync_status(&self) -> CommandResult<sync::SyncStatus> {
         let workspace_root = self.session()?.workspace_root();
-        sync::sync_status(&workspace_root).map_err(ErrorDto::from)
+        self.sync_status_for_workspace(&workspace_root)
     }
 
     fn sync_conflict_detail(&self, path: String) -> CommandResult<sync::SyncConflictDetail> {
@@ -870,11 +851,11 @@ impl WorkspaceController {
         if summary.pulled > 0 {
             self.reopen_workspace()?;
         }
-        Ok(summary)
+        Ok(self.decorate_sync_summary(summary))
     }
 
     fn start_sync_loop(&mut self, app: AppHandle, sync_lock: Arc<Mutex<()>>) {
-        self.sync_loop = None; // stop existing loop first
+        self.stop_sync_loop();
         let Some(root) = self.session.as_ref().map(|s| s.workspace_root()) else {
             return;
         };
@@ -886,12 +867,17 @@ impl WorkspaceController {
             return;
         }
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || sync::run_sync_loop(root, app, sync_lock, rx));
-        self.sync_loop = Some(SyncLoop { sender: tx });
+        let handle = std::thread::spawn(move || sync::run_sync_loop(root, app, sync_lock, rx));
+        self.sync_loop = Some(SyncLoop {
+            sender: tx,
+            handle: Some(handle),
+        });
     }
 
     fn stop_sync_loop(&mut self) {
-        self.sync_loop = None;
+        if let Some(loop_) = self.sync_loop.take() {
+            loop_.stop();
+        }
     }
 
     fn notify_local_write(&self) {
@@ -904,6 +890,33 @@ impl WorkspaceController {
         if let Some(loop_) = &self.sync_loop {
             let _ = loop_.sender.send(sync::SyncLoopMessage::UserActivity);
         }
+    }
+
+    fn finish_local_mutation<T>(&self, result: CommandResult<T>) -> CommandResult<T> {
+        if result.is_ok() {
+            self.notify_local_write();
+        }
+        result
+    }
+
+    fn sync_loop_running(&self) -> bool {
+        self.sync_loop.is_some()
+    }
+
+    fn decorate_sync_status(&self, mut status: sync::SyncStatus) -> sync::SyncStatus {
+        status.background_loop_running = self.sync_loop_running();
+        status
+    }
+
+    fn decorate_sync_summary(&self, mut summary: sync::SyncRunSummary) -> sync::SyncRunSummary {
+        summary.status = self.decorate_sync_status(summary.status);
+        summary
+    }
+
+    fn sync_status_for_workspace(&self, workspace_root: &Path) -> CommandResult<sync::SyncStatus> {
+        sync::sync_status(workspace_root)
+            .map(|status| self.decorate_sync_status(status))
+            .map_err(ErrorDto::from)
     }
 
     fn session(&self) -> CommandResult<&WorkspaceSession> {
@@ -1545,7 +1558,7 @@ fn configure_workspace_sync(
         supabase_publishable_key,
     )?;
     controller.start_sync_loop(app, Arc::clone(&state.sync_lock));
-    Ok(status)
+    Ok(controller.decorate_sync_status(status))
 }
 
 #[tauri::command]
@@ -1649,7 +1662,7 @@ fn set_workspace_sync_enabled(
     } else {
         controller.stop_sync_loop();
     }
-    Ok(status)
+    Ok(controller.decorate_sync_status(status))
 }
 
 #[tauri::command]
@@ -1767,6 +1780,11 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
         }
         other => other.map_err(ErrorDto::from)?,
     };
+    let summary = state
+        .controller
+        .lock()
+        .unwrap()
+        .decorate_sync_summary(summary);
     drop(_sync_guard);
     eprintln!(
         "[uniseq-debug] sync_now complete pushed={} pulled={} deleted_local={} deleted_remote={} conflicts={}",
@@ -1935,20 +1953,6 @@ fn refresh_stream_workspace(
         .lock()
         .unwrap()
         .refresh_stream_workspace(older_than_days)
-}
-
-#[tauri::command]
-fn write_virtual_stream_page(
-    state: State<'_, AppState>,
-    stream_name: String,
-    date_name: String,
-    text: String,
-) -> CommandResult<PageContentDto> {
-    state
-        .controller
-        .lock()
-        .unwrap()
-        .write_virtual_stream_page(stream_name, date_name, text)
 }
 
 #[tauri::command]
@@ -2214,8 +2218,7 @@ pub fn run() {
             delete_stream_page,
             rename_stream,
             cleanup_empty_stream_pages,
-            refresh_stream_workspace,
-            write_virtual_stream_page
+            refresh_stream_workspace
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
@@ -2823,57 +2826,6 @@ mod tests {
         assert!(root.join("uniseq").is_dir());
         assert!(root.join("journals").is_dir());
         assert!(root.join("diary").is_dir());
-
-        controller.close_workspace();
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn virtual_stream_write_rejects_empty_content_without_creating_a_file() {
-        let root = unique_temp_dir("uniseq-desktop-virtual-stream-empty");
-        fs::create_dir_all(root.join("pages")).unwrap();
-
-        let mut controller = WorkspaceController::default();
-        controller
-            .open_workspace(root.to_string_lossy().to_string())
-            .unwrap();
-
-        let error = controller
-            .write_virtual_stream_page(
-                "diary".to_owned(),
-                "2026_05_14".to_owned(),
-                " \n\t".to_owned(),
-            )
-            .unwrap_err();
-        assert_eq!(error.code, "empty_stream_write");
-        assert!(!root.join("diary").join("2026_05_14.md").exists());
-
-        controller.close_workspace();
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn virtual_stream_write_creates_and_persists_stream_content() {
-        let root = unique_temp_dir("uniseq-desktop-virtual-stream-write");
-        fs::create_dir_all(root.join("pages")).unwrap();
-
-        let mut controller = WorkspaceController::default();
-        controller
-            .open_workspace(root.to_string_lossy().to_string())
-            .unwrap();
-
-        let written = controller
-            .write_virtual_stream_page(
-                "diary".to_owned(),
-                "2026_05_14".to_owned(),
-                "- first line\n".to_owned(),
-            )
-            .unwrap();
-        assert_eq!(written.text, "- first line\n");
-        assert_eq!(
-            fs::read_to_string(root.join("diary").join("2026_05_14.md")).unwrap(),
-            "- first line\n"
-        );
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
