@@ -3806,24 +3806,42 @@ export default function App() {
         ) : null}
 
         {isMobile ? (
-          <div className="onboard-panel">
-            <button
-              className="primary-button"
-              type="button"
-              onClick={handleOpenDefaultWorkspace}
-              disabled={busyAction === "open"}
-            >
-              {busyAction === "open" ? "Opening..." : "Open My Notes"}
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              onClick={() => setOnboardingTab("remote")}
-            >
-              Open from remote
-            </button>
-            {onboardingTab === "remote" ? renderOpenRemoteForm() : null}
-          </div>
+          <>
+            <div className="onboard-tabs" role="tablist">
+              <button
+                className={`onboard-tab${onboardingTab !== "remote" ? " onboard-tab--active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={onboardingTab !== "remote"}
+                onClick={() => setOnboardingTab("create")}
+              >
+                Start Locally
+              </button>
+              <button
+                className={`onboard-tab${onboardingTab === "remote" ? " onboard-tab--active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={onboardingTab === "remote"}
+                onClick={() => setOnboardingTab("remote")}
+              >
+                Connect Remote
+              </button>
+            </div>
+            <div className="onboard-panel">
+              {onboardingTab === "remote" ? (
+                renderOpenRemoteForm()
+              ) : (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleOpenDefaultWorkspace}
+                  disabled={busyAction === "open"}
+                >
+                  {busyAction === "open" ? "Opening..." : "Open Workspace"}
+                </button>
+              )}
+            </div>
+          </>
         ) : (
           <>
             <div className="onboard-tabs" role="tablist">
