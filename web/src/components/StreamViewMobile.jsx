@@ -259,7 +259,7 @@ export default function StreamViewMobile({
       return;
     }
     scrollDateIntoView(selectedDate, "auto");
-  }, [selectedDate, scrollContainerRef]);
+  }, [selectedDate, scrollContainerRef, focusedEditor]);
 
   useEffect(() => {
     return () => {
