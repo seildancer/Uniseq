@@ -1580,6 +1580,37 @@ fn delete_remote_workspace(
 }
 
 #[tauri::command]
+fn delete_remote_account(
+    state: State<'_, AppState>,
+    provider: SyncProviderKindDto,
+    sync_root_url: String,
+    auth_token: Option<String>,
+) -> CommandResult<bool> {
+    let _provider_kind = provider;
+    let sync_root_url = sync_root_url.trim().trim_end_matches('/').to_owned();
+    let provider = sync::HttpSyncProvider::new_account_with_auth(
+        sync_root_url.clone(),
+        auth_token,
+    )
+    .map_err(ErrorDto::from)?;
+    provider.delete_account().map_err(ErrorDto::from)?;
+
+    let mut controller = state.controller.lock().unwrap();
+    controller.stop_sync_loop();
+    if let Some(session) = controller.session.as_ref() {
+        let workspace_root = session.workspace_root();
+        if sync::read_sync_config(&workspace_root)
+            .map_err(ErrorDto::from)?
+            .as_ref()
+            .is_some_and(|config| config.sync_root_url == sync_root_url)
+        {
+            sync::clear_sync_metadata(&workspace_root).map_err(ErrorDto::from)?;
+        }
+    }
+    Ok(true)
+}
+
+#[tauri::command]
 fn sync_status(state: State<'_, AppState>) -> CommandResult<sync::SyncStatus> {
     state.controller.lock().unwrap().sync_status()
 }
@@ -2125,6 +2156,7 @@ pub fn run() {
             list_remote_workspaces,
             create_remote_workspace,
             delete_remote_workspace,
+            delete_remote_account,
             sync_status,
             set_workspace_sync_enabled,
             sync_now,

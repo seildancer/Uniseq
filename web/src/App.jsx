@@ -372,6 +372,23 @@ function remoteProviderStatePatch(provider) {
   };
 }
 
+function clearRemoteLoginState(current) {
+  return {
+    ...current,
+    loggedInEmail: "",
+    uniseqAccount: "",
+    authToken: "",
+    refreshToken: "",
+    authDiscovery: null,
+    authLoadedRootUrl: "",
+    workspaces: [],
+    selectedWorkspaceId: "",
+    newWorkspaceName: "",
+    loadedRootUrl: "",
+    loginPassword: "",
+  };
+}
+
 function describeSearchMatch(matchedField) {
   switch (matchedField) {
     case "title":
@@ -1794,20 +1811,38 @@ export default function App() {
   }
 
   function handleUniseqSignOut() {
-    setRemoteState((current) => ({
-      ...current,
-      loggedInEmail: "",
-      uniseqAccount: "",
-      authToken: "",
-      refreshToken: "",
-      authDiscovery: null,
-      authLoadedRootUrl: "",
-      workspaces: [],
-      selectedWorkspaceId: "",
-      newWorkspaceName: "",
-      loadedRootUrl: "",
-      loginPassword: "",
-    }));
+    setRemoteState((current) => clearRemoteLoginState(current));
+  }
+
+  async function handleDeleteRemoteAccount() {
+    const syncRootUrl = syncRootFromRemoteState(remoteState);
+    if (remoteState.provider !== "uniseq" || !remoteState.loggedInEmail || !syncRootUrl) {
+      return;
+    }
+    if (!window.confirm(`Delete account "${remoteState.loggedInEmail}"? This permanently deletes everything from the cloud in this account, including all remote workspaces and files. Your local workspace stays on this device and will become unsynced.`)) {
+      return;
+    }
+    setBusyAction("delete-remote-account");
+    setActionError(null);
+    try {
+      await invoke("delete_remote_account", {
+        provider: "uniseq",
+        syncRootUrl,
+        authToken: remoteState.authToken,
+      });
+      setRemoteState((current) => clearRemoteLoginState(current));
+      setModal(null);
+      setNotice({ kind: "success", message: "Account deleted. Cloud data was removed; local workspace remains and is now unsynced." });
+      if (workspace?.root_path) {
+        await loadSyncStatus().catch(() => { });
+      } else {
+        setSyncStatus(null);
+      }
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function renderRemoteSetupFields(mode = "open") {
@@ -3969,10 +4004,23 @@ export default function App() {
                       ) : null}
                     </div>
                     <div className="modal-actions">
+                      {remoteState.provider === "uniseq" && remoteState.loggedInEmail ? (
+                        <button
+                          className="secondary-button secondary-button--danger"
+                          type="button"
+                          disabled={busyAction === "delete-remote-account"}
+                          onClick={() => void handleDeleteRemoteAccount()}
+                        >
+                          {busyAction === "delete-remote-account" ? "Deleting..." : "Delete account"}
+                        </button>
+                      ) : null}
                       <button className="secondary-button" type="button" onClick={closeModal}>
                         Close
                       </button>
                     </div>
+                    {remoteState.provider === "uniseq" && remoteState.loggedInEmail ? (
+                      <p className="modal-hint">Deletes cloud data only. Local workspace stays unsynced.</p>
+                    ) : null}
                   </>
                 )}
 

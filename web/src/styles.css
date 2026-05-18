@@ -335,6 +335,15 @@ h2 {
   color: var(--ink);
 }
 
+.secondary-button--danger {
+  border-color: rgba(192, 57, 43, 0.24);
+  color: #b9382a;
+}
+
+.secondary-button--danger:hover {
+  background: rgba(192, 57, 43, 0.08);
+}
+
 .ghost-button {
   background: transparent;
   border-color: var(--line);

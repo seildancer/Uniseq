@@ -546,6 +546,23 @@ impl HttpSyncProvider {
         Ok(())
     }
 
+    pub fn delete_account(&self) -> SyncResult<()> {
+        let response = self.with_auth(self.client.delete(self.account_url())).send()?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(SyncError::new_auth_expired("sync token expired"));
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(SyncError::new("remote account not found"));
+        }
+        if !response.status().is_success() {
+            return Err(SyncError::new(format!(
+                "remote account delete failed with status {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+
     pub fn workspace_url_for(sync_root_url: &str, remote_workspace_id: &str) -> String {
         format!(
             "{}/workspaces/{}",
@@ -556,6 +573,10 @@ impl HttpSyncProvider {
 
     fn workspaces_url(&self) -> String {
         format!("{}/workspaces", self.sync_root_url)
+    }
+
+    fn account_url(&self) -> String {
+        self.sync_root_url.clone()
     }
 
     fn discovery_url(&self) -> String {
