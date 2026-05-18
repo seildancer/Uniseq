@@ -897,16 +897,7 @@ export default function App() {
     const canNavigateBack = selectionHistoryState.index > 0;
     const canNavigateForward = selectionHistoryState.index < selectionHistoryState.entries.length - 1;
     const hasSyncConflicts = syncConflicts.length > 0;
-    const isSyncConfigured = Boolean(syncStatus?.sync_root_url);
     const isSyncing = busyAction === "sync" || syncStatus?.kind === "syncing";
-
-    function handleSyncControlClick() {
-      if (!isSyncConfigured || !syncStatus?.enabled) {
-        openSyncSetupModal();
-        return;
-      }
-      void handleSyncNow();
-    }
 
     return (
       <div className="window-controls" data-no-window-drag="true">
@@ -921,17 +912,7 @@ export default function App() {
             >
               {syncConflicts.length === 1 ? "Conflict" : `${syncConflicts.length} conflicts`}
             </button>
-          ) : (
-            <button
-              className="window-control-button"
-              type="button"
-              aria-label={isSyncConfigured && syncStatus?.enabled ? "Sync now" : "Configure sync"}
-              title={isSyncConfigured && syncStatus?.enabled ? "Sync now" : "Configure sync"}
-              onClick={handleSyncControlClick}
-            >
-              <WindowRefreshIcon />
-            </button>
-          )
+          ) : null
         ) : null}
         <button
           className="window-control-button"
@@ -953,17 +934,29 @@ export default function App() {
         >
           <WindowForwardIcon />
         </button>
-        <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
-          <WindowMinimizeIcon />
-        </button>
-        <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
-          {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
-        </button>
-        <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
-          <WindowCloseIcon />
-        </button>
+        {showDesktopWindowControls ? (
+          <>
+            <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
+              <WindowMinimizeIcon />
+            </button>
+            <button className="window-control-button" type="button" aria-label={windowIsMaximized ? "Restore window" : "Maximize window"} onClick={handleToggleMaximizeWindow}>
+              {windowIsMaximized ? <WindowRestoreIcon /> : <WindowMaximizeIcon />}
+            </button>
+            <button className="window-control-button window-control-button--close" type="button" aria-label="Close window" onClick={handleCloseWindow}>
+              <WindowCloseIcon />
+            </button>
+          </>
+        ) : null}
       </div>
     );
+  }
+
+  function handleSyncControlClick() {
+    if (!syncStatus?.sync_root_url || !syncStatus?.enabled) {
+      openSyncSetupModal();
+      return;
+    }
+    void handleSyncNow();
   }
 
   async function loadWorkspaceLists() {
@@ -2982,7 +2975,7 @@ export default function App() {
     return (
       <main className="app-shell">
         <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
-          {showDesktopWindowControls ? renderWindowControls() : null}
+          {renderWindowControls()}
         </div>
         <section className="boot-panel minimal-panel">
           <h1>Uniseq</h1>
@@ -3063,6 +3056,17 @@ export default function App() {
                 <button
                   className="topbar-menu-item"
                   type="button"
+                  disabled={busyAction === "sync"}
+                  onClick={() => {
+                    handleSyncControlClick();
+                    setMenuOpen(false);
+                  }}
+                >
+                  Sync
+                </button>
+                <button
+                  className="topbar-menu-item"
+                  type="button"
                   onClick={openInfoModal}
                 >
                   Info
@@ -3118,7 +3122,7 @@ export default function App() {
             <EditorBreadcrumb items={breadcrumbItems} />
             <div className="editor-panel-drag-region" />
           </div>
-          {showDesktopWindowControls ? renderWindowControls() : null}
+          {renderWindowControls()}
         </div>
       );
     }
@@ -3939,7 +3943,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
-        {showDesktopWindowControls ? renderWindowControls() : null}
+        {renderWindowControls()}
       </div>
       <section className="hero-panel minimal-panel">
         <img src="/uniseq.svg" alt="Uniseq" className="onboard-logo" />
