@@ -17,7 +17,7 @@ use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
     page_and_fingerprint_from_text, page_from_markdown_in_location,
 };
-use crate::core::storage::{all_stream_names, is_supported_workspace_markdown_path};
+use crate::core::storage::{all_stream_names, is_reserved_root_name, is_supported_workspace_markdown_path};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMerge, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
@@ -28,7 +28,9 @@ use crate::core::structure::{
 };
 
 const DEFAULT_WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const NATIVE_EVENT_DEBOUNCE: Duration = Duration::from_millis(40);
+// Give Windows/editor save bursts enough time to coalesce before we decide
+// whether the native watcher can reconcile them incrementally.
+const NATIVE_EVENT_DEBOUNCE: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceEvent {
@@ -702,6 +704,10 @@ impl WorkspaceSessionState {
                 println!(
                     "[uniseq-backend] native watcher fallback: ambiguous event burst, switching to polling snapshot reconciliation"
                 );
+                println!(
+                    "[uniseq-backend] native watcher burst detail: {}",
+                    format_native_event_burst(&self.root, events)
+                );
                 self.poll_once()
             }
         }
@@ -1127,6 +1133,7 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
 
     let mut markdown_paths = BTreeSet::new();
     let mut saw_non_markdown_noise = false;
+    let mut saw_non_reserved_root_noise = false;
 
     for event in events {
         if event.paths.is_empty() {
@@ -1145,6 +1152,9 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
             if !is_markdown {
+                if !is_runtime_metadata_path(&relative_path) {
+                    saw_non_reserved_root_noise = true;
+                }
                 continue;
             }
 
@@ -1164,10 +1174,47 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
     }
 
     match markdown_paths.len() {
-        0 if saw_non_markdown_noise => NativeEventAction::FallbackToSnapshot,
+        0 if saw_non_markdown_noise && saw_non_reserved_root_noise => {
+            NativeEventAction::FallbackToSnapshot
+        }
         0 => NativeEventAction::Noop,
         _ => NativeEventAction::IncrementalPaths(markdown_paths),
     }
+}
+
+fn is_runtime_metadata_path(relative_path: &Path) -> bool {
+    relative_path
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .is_some_and(is_reserved_root_name)
+}
+
+fn format_native_event_burst(root: &Path, events: &[Event]) -> String {
+    events
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let paths = if event.paths.is_empty() {
+                "<none>".to_string()
+            } else {
+                event.paths
+                    .iter()
+                    .map(|path| {
+                        path.strip_prefix(root)
+                            .map(|relative_path| relative_path.display().to_string())
+                            .unwrap_or_else(|_| path.display().to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            format!("#{} {:?} [{}]", index + 1, event.kind, paths)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn collect_native_event_burst(
@@ -1799,6 +1846,30 @@ mod tests {
                 "A.md"
             )]))
         );
+    }
+
+    #[test]
+    fn classify_native_event_burst_ignores_uniseq_runtime_state_writes() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_raw_file("uniseq/sync-state.json", "{}");
+
+        let action = classify_native_event_burst(
+            &workspace.root,
+            &[
+                Event {
+                    kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                    paths: vec![workspace.root.join("uniseq").join("sync-state.json")],
+                    attrs: Default::default(),
+                },
+                Event {
+                    kind: EventKind::Modify(notify::event::ModifyKind::Any),
+                    paths: vec![workspace.root.join("uniseq").join("sync-state.json")],
+                    attrs: Default::default(),
+                },
+            ],
+        );
+
+        assert_eq!(action, NativeEventAction::Noop);
     }
 
     #[test]
