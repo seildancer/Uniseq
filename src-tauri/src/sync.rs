@@ -236,10 +236,11 @@ pub enum SyncConflictResolution {
     UseRemote,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SyncError {
     message: String,
     pub auth_expired: bool,
+    pub remote_missing: bool,
 }
 
 type SyncResult<T> = Result<T, SyncError>;
@@ -341,6 +342,7 @@ impl SyncError {
         Self {
             message: message.into(),
             auth_expired: false,
+            remote_missing: false,
         }
     }
 
@@ -348,6 +350,15 @@ impl SyncError {
         Self {
             message: message.into(),
             auth_expired: true,
+            remote_missing: false,
+        }
+    }
+
+    pub fn new_remote_missing(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            auth_expired: false,
+            remote_missing: true,
         }
     }
 
@@ -376,14 +387,24 @@ impl From<reqwest::Error> for SyncError {
 
 impl HttpSyncProvider {
     pub fn new_account(sync_root_url: impl Into<String>) -> SyncResult<Self> {
-        Self::new(sync_root_url, None, None)
+        Self::new(
+            sync_root_url,
+            None,
+            None,
+            std::time::Duration::from_secs(30),
+        )
     }
 
     pub fn new_account_with_auth(
         sync_root_url: impl Into<String>,
         bearer_token: Option<String>,
     ) -> SyncResult<Self> {
-        Self::new(sync_root_url, None, bearer_token)
+        Self::new(
+            sync_root_url,
+            None,
+            bearer_token,
+            std::time::Duration::from_secs(30),
+        )
     }
 
     pub fn new_workspace_with_auth(
@@ -391,24 +412,44 @@ impl HttpSyncProvider {
         remote_workspace_id: impl Into<String>,
         bearer_token: Option<String>,
     ) -> SyncResult<Self> {
+        Self::new_workspace_with_auth_timeout(
+            sync_root_url,
+            remote_workspace_id,
+            bearer_token,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn new_workspace_with_auth_timeout(
+        sync_root_url: impl Into<String>,
+        remote_workspace_id: impl Into<String>,
+        bearer_token: Option<String>,
+        timeout: Duration,
+    ) -> SyncResult<Self> {
         let remote_workspace_id = remote_workspace_id.into();
         if remote_workspace_id.trim().is_empty() {
             return Err(SyncError::new("remote workspace is required"));
         }
-        Self::new(sync_root_url, Some(remote_workspace_id), bearer_token)
+        Self::new(
+            sync_root_url,
+            Some(remote_workspace_id),
+            bearer_token,
+            timeout,
+        )
     }
 
     fn new(
         sync_root_url: impl Into<String>,
         remote_workspace_id: Option<String>,
         bearer_token: Option<String>,
+        timeout: Duration,
     ) -> SyncResult<Self> {
         let sync_root_url = sync_root_url.into().trim().trim_end_matches('/').to_owned();
         if sync_root_url.is_empty() {
             return Err(SyncError::new("sync root URL cannot be empty"));
         }
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(timeout)
             .build()?;
         Ok(Self {
             sync_root_url,
@@ -555,6 +596,9 @@ impl SyncProvider for HttpSyncProvider {
         let response = self.with_auth(self.client.get(self.files_url()?)).send()?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SyncError::new_auth_expired("sync token expired"));
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(SyncError::new_remote_missing("remote workspace not found"));
         }
         if !response.status().is_success() {
             return Err(SyncError::new(format!(
@@ -775,6 +819,30 @@ pub fn sync_status(root: &Path) -> SyncResult<SyncStatus> {
         &secrets,
         false,
     ))
+}
+
+pub fn clear_sync_metadata(root: &Path) -> SyncResult<()> {
+    remove_sync_file_if_exists(&sync_config_path(root))?;
+    remove_sync_file_if_exists(&sync_auth_path(root))?;
+    remove_sync_file_if_exists(&sync_state_path(root))?;
+    Ok(())
+}
+
+pub fn disconnect_deleted_remote(root: &Path) -> SyncResult<bool> {
+    let Some(config) = read_sync_config(root)? else {
+        return Ok(false);
+    };
+    let secrets = read_sync_auth_secrets(root)?;
+    let provider = match HttpSyncProvider::new_workspace_with_auth_timeout(
+        &config.sync_root_url,
+        &config.remote_workspace_id,
+        secrets.bearer_token,
+        Duration::from_secs(3),
+    ) {
+        Ok(provider) => provider,
+        Err(_) => return Ok(false),
+    };
+    disconnect_deleted_remote_with_provider(root, &provider)
 }
 
 pub fn initial_pull_with_progress<F>(
@@ -1269,6 +1337,28 @@ fn push_response_from_response(response: reqwest::blocking::Response) -> SyncRes
     })
 }
 
+fn remove_sync_file_if_exists(path: &Path) -> SyncResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn disconnect_deleted_remote_with_provider(
+    root: &Path,
+    provider: &dyn SyncProvider,
+) -> SyncResult<bool> {
+    match provider.list() {
+        Ok(_) => Ok(false),
+        Err(error) if error.remote_missing => {
+            clear_sync_metadata(root)?;
+            Ok(true)
+        }
+        Err(_) => Ok(false),
+    }
+}
+
 fn status_from_config_and_state(
     config: Option<&SyncConfig>,
     state: &SyncState,
@@ -1620,6 +1710,20 @@ pub fn run_sync_loop(
 }
 
 fn do_background_sync(root: &Path) -> Option<SyncStatus> {
+    fn finalize_background_sync(
+        root: &Path,
+        result: SyncResult<SyncRunSummary>,
+    ) -> Option<SyncStatus> {
+        match result {
+            Ok(summary) => Some(summary.status),
+            Err(error) if error.remote_missing => {
+                clear_sync_metadata(root).ok()?;
+                sync_status(root).ok()
+            }
+            Err(_) => sync_status(root).ok(),
+        }
+    }
+
     let config = match read_sync_config(root) {
         Ok(Some(c)) if c.enabled => c,
         _ => return None,
@@ -1632,7 +1736,6 @@ fn do_background_sync(root: &Path) -> Option<SyncStatus> {
     )
     .ok()?;
     match sync_once(root, &provider) {
-        Ok(summary) => Some(summary.status),
         Err(e) if e.auth_expired => {
             let new_secrets = refresh_supabase_auth(&config.sync_root_url, &secrets).ok()?;
             write_sync_auth_secrets(root, &new_secrets).ok()?;
@@ -1642,15 +1745,41 @@ fn do_background_sync(root: &Path) -> Option<SyncStatus> {
                 new_secrets.bearer_token,
             )
             .ok()?;
-            sync_once(root, &new_provider).ok().map(|s| s.status)
+            finalize_background_sync(root, sync_once(root, &new_provider))
         }
-        Err(_) => None,
+        other => finalize_background_sync(root, other),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct MockProvider {
+        list_result: SyncResult<Vec<RemoteFileMeta>>,
+    }
+
+    impl SyncProvider for MockProvider {
+        fn list(&self) -> SyncResult<Vec<RemoteFileMeta>> {
+            self.list_result.clone()
+        }
+
+        fn pull(&self, _path: &str) -> SyncResult<RemoteFileBlob> {
+            unreachable!("pull should not be called in these tests");
+        }
+
+        fn push(&self, _request: PushFileRequest) -> SyncResult<PushResult> {
+            unreachable!("push should not be called in these tests");
+        }
+
+        fn delete(&self, _request: DeleteFileRequest) -> SyncResult<PushResult> {
+            unreachable!("delete should not be called in these tests");
+        }
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("{name}-{}", now_unix_secs()))
+    }
 
     #[test]
     fn remote_paths_reject_parent_segments() {
@@ -1662,7 +1791,7 @@ mod tests {
 
     #[test]
     fn local_scan_skips_sync_state_and_transaction_files() {
-        let root = std::env::temp_dir().join(format!("uniseq-sync-test-{}", now_unix_secs()));
+        let root = test_root("uniseq-sync-test");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("pages")).unwrap();
         fs::create_dir_all(root.join("uniseq")).unwrap();
@@ -1684,6 +1813,92 @@ mod tests {
         assert!(!files.contains_key("uniseq/sync-auth.json"));
         assert!(!files.contains_key("uniseq/sync-state.json"));
         assert!(!files.contains_key(".uniseq-page-transaction/manifest.json"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disconnect_deleted_remote_clears_stale_sync_metadata() {
+        let root = test_root("uniseq-sync-disconnect-missing");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("pages")).unwrap();
+        write_sync_config(
+            &root,
+            &SyncConfig::new_with_auth(
+                SyncProviderKind::Uniseq,
+                "https://sync.example.com/demo".to_owned(),
+                "workspace-1".to_owned(),
+                "Workspace 1".to_owned(),
+                SyncAuthConfig {
+                    kind: SyncAuthKind::Bearer,
+                },
+            ),
+        )
+        .unwrap();
+        write_sync_auth_secrets(
+            &root,
+            &SyncAuthSecrets {
+                bearer_token: Some("token".to_owned()),
+                refresh_token: Some("refresh".to_owned()),
+                supabase_publishable_key: Some("key".to_owned()),
+            },
+        )
+        .unwrap();
+        write_sync_state(
+            &root,
+            &SyncState {
+                files: BTreeMap::new(),
+                conflicts: BTreeMap::new(),
+                last_synced_at: Some(42),
+                last_error: None,
+            },
+        )
+        .unwrap();
+
+        let disconnected = disconnect_deleted_remote_with_provider(
+            &root,
+            &MockProvider {
+                list_result: Err(SyncError::new_remote_missing("remote workspace not found")),
+            },
+        )
+        .unwrap();
+
+        assert!(disconnected);
+        assert!(read_sync_config(&root).unwrap().is_none());
+        assert_eq!(
+            read_sync_auth_secrets(&root).unwrap(),
+            SyncAuthSecrets::default()
+        );
+        assert_eq!(read_sync_state(&root).unwrap(), SyncState::default());
+        assert_eq!(sync_status(&root).unwrap().kind, SyncStatusKind::Off);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disconnect_deleted_remote_ignores_transient_sync_errors() {
+        let root = test_root("uniseq-sync-disconnect-network");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("pages")).unwrap();
+        let config = SyncConfig::new_with_auth(
+            SyncProviderKind::Uniseq,
+            "https://sync.example.com/demo".to_owned(),
+            "workspace-1".to_owned(),
+            "Workspace 1".to_owned(),
+            SyncAuthConfig::default(),
+        );
+        write_sync_config(&root, &config).unwrap();
+
+        let disconnected = disconnect_deleted_remote_with_provider(
+            &root,
+            &MockProvider {
+                list_result: Err(SyncError::new("network timeout")),
+            },
+        )
+        .unwrap();
+
+        assert!(!disconnected);
+        assert_eq!(read_sync_config(&root).unwrap(), Some(config));
 
         let _ = fs::remove_dir_all(root);
     }

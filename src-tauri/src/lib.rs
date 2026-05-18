@@ -1369,6 +1369,13 @@ fn open_workspace(
     {
         let mut controller = state.controller.lock().unwrap();
         let opened = controller.open_workspace(root_path)?;
+        if let Err(error) = sync::disconnect_deleted_remote(Path::new(&opened.root_path)) {
+            eprintln!(
+                "[uniseq] failed to validate remote sync metadata for '{}': {}",
+                opened.root_path,
+                error.message()
+            );
+        }
         controller.start_sync_loop(app.clone(), Arc::clone(&state.sync_lock));
         write_last_workspace_path(&app, &opened.root_path)?;
         Ok(opened)
@@ -1614,10 +1621,35 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
                 .map_err(ErrorDto::from)?;
             sync::write_sync_auth_secrets(&workspace_root, &new_secrets).map_err(ErrorDto::from)?;
             let new_provider = sync_provider_for_config(&workspace_root, &config)?;
-            sync::sync_once_with_progress(&workspace_root, &new_provider, |progress| {
-                let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
-            })
-            .map_err(ErrorDto::from)?
+            let refreshed =
+                sync::sync_once_with_progress(&workspace_root, &new_provider, |progress| {
+                    let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
+                });
+            match refreshed {
+                Err(error) if error.remote_missing => {
+                    sync::clear_sync_metadata(&workspace_root).map_err(ErrorDto::from)?;
+                    sync::SyncRunSummary {
+                        pushed: 0,
+                        pulled: 0,
+                        deleted_local: 0,
+                        deleted_remote: 0,
+                        conflicts: Vec::new(),
+                        status: sync::sync_status(&workspace_root).map_err(ErrorDto::from)?,
+                    }
+                }
+                other => other.map_err(ErrorDto::from)?,
+            }
+        }
+        Err(error) if error.remote_missing => {
+            sync::clear_sync_metadata(&workspace_root).map_err(ErrorDto::from)?;
+            sync::SyncRunSummary {
+                pushed: 0,
+                pulled: 0,
+                deleted_local: 0,
+                deleted_remote: 0,
+                conflicts: Vec::new(),
+                status: sync::sync_status(&workspace_root).map_err(ErrorDto::from)?,
+            }
         }
         other => other.map_err(ErrorDto::from)?,
     };
