@@ -30,6 +30,7 @@ export default function StreamWorkspace({
   onSidebarWidthChange,
   sidebarCollapsed,
   sidebarChrome,
+  sidebarCollapsedToggle,
   pageSidebarContent,
   fallbackEditor,
   onSelectStreamDual,
@@ -406,32 +407,34 @@ export default function StreamWorkspace({
 
   return (
     <>
+      {!isMobile && sidebarCollapsed ? <div className="workspace-sidebar-toggle">{sidebarCollapsedToggle}</div> : null}
       <aside
         ref={sidebarRef}
         className={`workspace-sidebar${sidebarCollapsed ? " workspace-sidebar--collapsed" : ""}`}
       >
-        {sidebarChrome}
-        <div className="sidebar-content">
-          <div className="sidebar-section sidebar-section--streams">
-            <div className="section-heading">
-              <button
-                type="button"
-                className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
-                onClick={() => onSelectStreamDual(selectedStreamDate)}
-              >
-                Streams
-              </button>
-              <button
-                type="button"
-                className="stream-add-btn"
-                title="New stream"
-                onClick={startCreating}
-              >
-                <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-                  <path d="M5 1v8M1 5h8" />
-                </svg>
-              </button>
-            </div>
+        <div className="workspace-sidebar-surface">
+          {sidebarChrome}
+          <div className="sidebar-content">
+            <div className="sidebar-section sidebar-section--streams">
+              <div className="section-heading">
+                <button
+                  type="button"
+                  className={`stream-section-title${streamSelection?.kind === "stream_dual" ? " stream-section-title--active" : ""}`}
+                  onClick={() => onSelectStreamDual(selectedStreamDate)}
+                >
+                  Streams
+                </button>
+                <button
+                  type="button"
+                  className="stream-add-btn"
+                  title="New stream"
+                  onClick={startCreating}
+                >
+                  <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                    <path d="M5 1v8M1 5h8" />
+                  </svg>
+                </button>
+              </div>
 
             <div className="sidebar-section-scroll">
               {orderedStreamNames.length > 0 ? (
@@ -602,6 +605,7 @@ export default function StreamWorkspace({
             </div>
           </div>
           {pageSidebarContent}
+        </div>
         </div>
       </aside>
 

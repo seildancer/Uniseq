@@ -19,7 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useMobileKeyboard } from "./hooks/useMobileKeyboard.js";
+import { useMobileKeyboard, useMobileKeyboardForced } from "./hooks/useMobileKeyboard.js";
 import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
 import { coerceSyncProgress } from "./utils/syncProgress.js";
 import { attachTouchDragListeners, startLongPressTouchDrag } from "./utils/touchDrag.js";
@@ -665,7 +665,7 @@ export default function App() {
     isKeyboardVisible,
     keyboardHeight,
     visibleViewportHeight,
-  } = useMobileKeyboard();
+  } = useMobileKeyboardForced();//useMobileKeyboard();
 
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);
@@ -754,7 +754,7 @@ export default function App() {
   const isIos = useMemo(() =>
     /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent)),
-  []);
+    []);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
@@ -3270,34 +3270,41 @@ export default function App() {
   }
 
   if (mode === "workspace" && workspace) {
+    function renderSidebarToggleControl({ className = "", disabled = false } = {}) {
+      return (
+        <button
+          className={`window-control-button workspace-sidebar-control-button workspace-sidebar-toggle-button${className ? ` ${className}` : ""}`}
+          type="button"
+          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          disabled={disabled}
+          onClick={() => {
+            setSidebarCollapsed((collapsed) => {
+              const nextCollapsed = !collapsed;
+              if (nextCollapsed) {
+                setMenuOpen(false);
+              }
+              return nextCollapsed;
+            });
+          }}
+        >
+          <svg className="workspace-sidebar-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <path d="M6 3.5v9" stroke="currentColor" strokeWidth="1.2" />
+            {sidebarCollapsed ? (
+              <path d="M9.5 8h2.5M11 6.5 12.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            ) : (
+              <path d="M12.5 8H10M11 6.5 9.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            )}
+          </svg>
+        </button>
+      );
+    }
+
     const sidebarChrome = (
       <div className="workspace-sidebar-chrome" onMouseDown={handleWindowDragMouseDown}>
         <div className="workspace-sidebar-controls" data-no-window-drag="true">
-          <button
-            className="window-control-button workspace-sidebar-control-button"
-            type="button"
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            onClick={() => {
-              setSidebarCollapsed((collapsed) => {
-                const nextCollapsed = !collapsed;
-                if (nextCollapsed) {
-                  setMenuOpen(false);
-                }
-                return nextCollapsed;
-              });
-            }}
-          >
-            <svg className="workspace-sidebar-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
-              <path d="M6 3.5v9" stroke="currentColor" strokeWidth="1.2" />
-              {sidebarCollapsed ? (
-                <path d="M9.5 8h2.5M11 6.5 12.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              ) : (
-                <path d="M12.5 8H10M11 6.5 9.5 8 11 9.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-              )}
-            </svg>
-          </button>
+          {renderSidebarToggleControl()}
           <div className="topbar-menu" ref={menuRef} data-no-window-drag="true">
             <button
               className="window-control-button workspace-sidebar-control-button"
@@ -3403,6 +3410,12 @@ export default function App() {
       return (
         <div className="editor-panel-chrome" onMouseDown={handleWindowDragMouseDown}>
           <div className="editor-panel-chrome-main">
+            {isMobile ? (
+              renderSidebarToggleControl({
+                className: "editor-panel-sidebar-toggle",
+                disabled: !sidebarCollapsed,
+              })
+            ) : null}
             <EditorBreadcrumb items={breadcrumbItems} />
             <div className="editor-panel-drag-region" />
           </div>
@@ -3451,12 +3464,15 @@ export default function App() {
                     : undefined,
               }}
             >
-              {!sidebarCollapsed && (
-                <div
-                  className="sidebar-mobile-backdrop"
-                  onClick={() => setSidebarCollapsed(true)}
-                />
-              )}
+              <div
+                className={`sidebar-mobile-backdrop${sidebarCollapsed ? "" : " sidebar-mobile-backdrop--visible"}`}
+                aria-hidden={sidebarCollapsed}
+                onClick={() => {
+                  if (!sidebarCollapsed) {
+                    setSidebarCollapsed(true);
+                  }
+                }}
+              />
               <StreamWorkspace
                 streamSelection={streamSelection}
                 selectedStreamDate={selectedStreamDate}
@@ -3475,6 +3491,7 @@ export default function App() {
                 }}
                 sidebarCollapsed={sidebarCollapsed}
                 sidebarChrome={sidebarChrome}
+                sidebarCollapsedToggle={renderSidebarToggleControl()}
                 panelChrome={renderPanelChrome}
                 pageSidebarContent={
                   <div className="sidebar-section sidebar-section--pages">

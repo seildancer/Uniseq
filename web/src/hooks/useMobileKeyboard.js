@@ -78,3 +78,8 @@ export function useMobileKeyboard() {
     visibleViewportHeight,
   };
 }
+
+export function useMobileKeyboardForced() {
+  const real = useMobileKeyboard();
+  return { ...real, isMobile: true };
+}
