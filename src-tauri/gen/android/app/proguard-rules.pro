@@ -1,3 +1,11 @@
+# Keep Tauri/wry runtime classes
+-keep class app.tauri.** { *; }
+-keep interface app.tauri.** { *; }
+-keepclassmembers class app.tauri.** { *; }
+
+# Keep all app classes — tao calls methods via JNI reflection not listed in auto-generated rules
+-keep class com.seildancer.uniseq.** { *; }
+
 # Add project specific ProGuard rules here.
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.

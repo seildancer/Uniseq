@@ -1,4 +1,4 @@
-package com.uniseq.app
+package com.seildancer.uniseq
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

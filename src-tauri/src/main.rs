@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    uniseq_desktop_lib::run()
+    uniseq_app_lib::run()
 }
