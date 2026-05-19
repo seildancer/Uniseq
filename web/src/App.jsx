@@ -665,7 +665,7 @@ export default function App() {
     isKeyboardVisible,
     keyboardHeight,
     visibleViewportHeight,
-  } = useMobileKeyboardForced();//useMobileKeyboard();
+  } = useMobileKeyboard(); //useMobileKeyboardForced();
 
   const didAttemptBootRef = useRef(false);
   const isBootEffectMountedRef = useRef(false);

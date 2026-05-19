@@ -1087,6 +1087,11 @@ h2 {
   display: none;
 }
 
+.workspace-body--sidebar-collapsed .editor-panel-chrome {
+  padding-left: 48px;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
 @media (max-width: 720px) {
   .workspace-body--sidebar-collapsed .editor-panel-chrome {
     padding-left: var(--mobile-toolbar-side-padding);
