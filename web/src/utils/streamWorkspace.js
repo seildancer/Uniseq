@@ -1,3 +1,5 @@
+import pageLeafName from "./pageLeafName.js";
+
 export const DIARY_STREAM = "diary";
 export const JOURNALS_STREAM = "journals";
 export const PRIMARY_STREAM_LEFT = JOURNALS_STREAM;
@@ -40,6 +42,34 @@ export function selectionForCalendarDate(selection, dateName) {
   }
 
   return { kind: "stream_dual", dateName };
+}
+
+export function selectionForPageId(pageId, location = null) {
+  if (typeof pageId !== "string" || pageId.length === 0) {
+    return null;
+  }
+
+  const streamName = readStreamName(location);
+  if (streamName) {
+    const dateName = pageLeafName(pageId);
+    return dateName
+      ? { kind: "stream_single", streamName, dateName }
+      : { kind: "page", pageId };
+  }
+
+  if (pageId.startsWith("stream:")) {
+    const normalizedPageId = pageId.slice("stream:".length);
+    const separatorIndex = normalizedPageId.indexOf("/");
+    if (separatorIndex > 0 && separatorIndex < normalizedPageId.length - 1) {
+      return {
+        kind: "stream_single",
+        streamName: normalizedPageId.slice(0, separatorIndex),
+        dateName: normalizedPageId.slice(separatorIndex + 1),
+      };
+    }
+  }
+
+  return { kind: "page", pageId };
 }
 
 export function shouldBumpStreamReloadToken(event, hasActiveStreamSelection) {

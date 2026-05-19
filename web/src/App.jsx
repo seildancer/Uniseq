@@ -12,6 +12,7 @@ import {
   readStreamName,
   readDualStreamNames,
   readSelectedStreamDate,
+  selectionForPageId,
   shouldBumpStreamReloadToken,
 } from "./utils/streamWorkspace.js";
 import { invoke } from "@tauri-apps/api/core";
@@ -1024,11 +1025,11 @@ export default function App() {
   }
 
   function openSearchResult(result) {
-    const streamName = readStreamName(result.location);
-    if (streamName) {
-      handleSelectStreamSingle(streamName, pageLeafName(result.page_id));
-    } else {
-      handleSelectPage(result.page_id);
+    const nextSelection = selectionForPageId(result.page_id, result.location);
+    if (nextSelection?.kind === "stream_single") {
+      handleSelectStreamSingle(nextSelection.streamName, nextSelection.dateName);
+    } else if (nextSelection?.kind === "page") {
+      handleSelectPage(nextSelection.pageId);
     }
     closeModal();
   }
@@ -1586,6 +1587,17 @@ export default function App() {
     setActionError(null);
     void refreshStreamWorkspace();
     if (isMobile) setSidebarCollapsed(true);
+  }
+
+  function handleNavigateToPageId(pageId) {
+    const nextSelection = selectionForPageId(pageId, pagesById.get(pageId)?.location ?? null);
+    if (nextSelection?.kind === "stream_single") {
+      handleSelectStreamSingle(nextSelection.streamName, nextSelection.dateName);
+      return;
+    }
+    if (nextSelection?.kind === "page") {
+      handleSelectPage(nextSelection.pageId);
+    }
   }
 
   function handleTogglePageTree(pageId) {
@@ -3598,7 +3610,7 @@ export default function App() {
                             revision={selectedPageRevision}
                             key={loadedPageId}
                             pages={regularPages}
-                            onNavigate={handleSelectPage}
+                            onNavigate={handleNavigateToPageId}
                             onConflict={() => void handleEditorConflict()}
                             onPersisted={handlePagePersisted}
                           />
@@ -3607,12 +3619,7 @@ export default function App() {
                               entries={linkedRefs}
                               pages={pages}
                               diaryBlurEnabled={diaryBlurEnabled}
-                              onNavigate={(sourcePageId) => {
-                                const sourcePage = pagesById.get(sourcePageId);
-                                if (sourcePage && readStreamName(sourcePage.location) === null) {
-                                  handleSelectPage(sourcePageId);
-                                }
-                              }}
+                              onNavigate={handleNavigateToPageId}
                               onReload={() => loadPageLinkedRefs(loadedPageId)}
                               onNotice={(message) => showNotice(message, "linked_refs_reload")}
                             />
@@ -3628,7 +3635,7 @@ export default function App() {
                 onDeleteStream={handleDeleteStream}
                 onRenameStream={openRenameStreamModal}
                 onReorderStreams={handleReorderStreams}
-                onNavigatePage={handleSelectPage}
+                onNavigatePage={handleNavigateToPageId}
                 onError={(error) => setActionError(normalizeError(error))}
                 onRefresh={() => void refreshStreamWorkspace(true)}
               />
