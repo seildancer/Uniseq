@@ -290,13 +290,53 @@ export default function StreamView({
               </div>
 
               <div className="stream-day-entry-body">
-                <div
-                  className={`stream-dual-pane${isDual ? " stream-dual-pane--dual" : ""}${focusedStreamIndex === 1 ? " stream-dual-pane--focus-right" : ""}`}
-                >
-                  {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
+                {isDual ? (
+                  <div
+                    className={`stream-dual-pane stream-dual-pane--dual${focusedStreamIndex === 1 ? " stream-dual-pane--focus-right" : ""}`}
+                  >
+                    {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
+                      <div
+                        key={editorKey}
+                        className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
+                        onPointerDown={(event) => focusPaneEditor(event, editorKey)}
+                      >
+                        <p className="stream-panel-label">{streamName}</p>
+                        <div className={`stream-editor-pane${shouldBlur ? " stream-editor-pane--privacy-blurred" : ""}`}>
+                          <StreamSingleEditor
+                            key={editorKey}
+                            streamName={streamName}
+                            dateName={dateName}
+                            existingPageId={existingPageId}
+                            pages={pages}
+                            reloadToken={reloadToken}
+                            onNavigate={onNavigate}
+                            onError={onError}
+                            onRefresh={onRefresh}
+                            focusEditorRef={focusEditorRef}
+                            onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
+                            onFocusChange={(focused) => {
+                              if (focused) {
+                                enterFocusMode(dateName, streamName);
+                                setMobileTab(streamName);
+                                return;
+                              }
+                              setFocusedEditor((current) => {
+                                if (current?.dateName === dateName && current?.streamName === streamName) {
+                                  return null;
+                                }
+                                return current;
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
                     <div
                       key={editorKey}
-                      className={`stream-dual-panel${focusedStreamName === streamName ? " stream-dual-panel--focused" : ""}${focusedStreamName && focusedStreamName !== streamName ? " stream-dual-panel--compressed" : ""}`}
+                      className="stream-single-pane"
                       onPointerDown={(event) => focusPaneEditor(event, editorKey)}
                     >
                       <p className="stream-panel-label">{streamName}</p>
@@ -329,8 +369,8 @@ export default function StreamView({
                         />
                       </div>
                     </div>
-                  ))}
-                </div>
+                  ))
+                )}
               </div>
             </section>
           );
