@@ -2411,7 +2411,8 @@ h2 {
 
 .editor-breadcrumb {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow: hidden;
   gap: 6px;
   margin: 0 0 14px;
   color: var(--muted);
@@ -2424,6 +2425,18 @@ h2 {
   align-items: center;
   gap: 6px;
   min-width: 0;
+  flex-shrink: 0;
+}
+
+.editor-breadcrumb-item:last-child {
+  flex-shrink: 1;
+  overflow: hidden;
+}
+
+.editor-breadcrumb-item:last-child > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .editor-breadcrumb-separator {
