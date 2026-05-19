@@ -47,6 +47,7 @@ export default function StreamWorkspace({
   const resizeStateRef = useRef(null);
   const createInputRef = useRef(null);
   const dragLongPressTimerRef = useRef(null);
+  const dragPointerTargetRef = useRef(null);
   const suppressStreamClickRef = useRef(false);
   const [isCreating, setIsCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -64,6 +65,7 @@ export default function StreamWorkspace({
       if (dragLongPressTimerRef.current) {
         clearTimeout(dragLongPressTimerRef.current);
       }
+      releaseStreamDragPointerCapture();
     };
   }, []);
 
@@ -206,6 +208,22 @@ export default function StreamWorkspace({
     }
   }
 
+  function releaseStreamDragPointerCapture(pointerId) {
+    const target = dragPointerTargetRef.current;
+    if (!target || pointerId == null || typeof target.hasPointerCapture !== "function") {
+      dragPointerTargetRef.current = null;
+      return;
+    }
+    try {
+      if (target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Ignore stale pointer capture release attempts.
+    }
+    dragPointerTargetRef.current = null;
+  }
+
   function handleSelectStream(streamName) {
     if (suppressStreamClickRef.current) {
       suppressStreamClickRef.current = false;
@@ -216,6 +234,20 @@ export default function StreamWorkspace({
 
   function handleStreamDragPointerDown(event, streamName) {
     clearPendingStreamDragState();
+
+    if (event.pointerType !== "mouse") {
+      dragPointerTargetRef.current = event.currentTarget;
+      if (typeof event.currentTarget?.setPointerCapture === "function") {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          dragPointerTargetRef.current = null;
+        }
+      }
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+    }
 
     const nextDragState = {
       streamName,
@@ -330,10 +362,15 @@ export default function StreamWorkspace({
             } : current);
           } else {
             clearPendingStreamDragState();
+            releaseStreamDragPointerCapture(streamDragState.pointerId);
             setStreamDragState(null);
           }
         }
         return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
       }
 
       const hover = computeStreamHover(event.clientX, event.clientY, streamDragState.streamName);
@@ -350,6 +387,7 @@ export default function StreamWorkspace({
         return;
       }
       clearPendingStreamDragState();
+      releaseStreamDragPointerCapture(streamDragState.pointerId);
       const currentDragState = streamDragState;
       setStreamDragState(null);
       if (currentDragState.active) {

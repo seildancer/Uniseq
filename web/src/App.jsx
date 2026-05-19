@@ -682,6 +682,7 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [createState, setCreateState] = useState(INITIAL_CREATE_STATE);
+  const [icloudFolderName, setIcloudFolderName] = useState("");
   const [remoteLocalState, setRemoteLocalState] = useState(INITIAL_REMOTE_LOCAL_STATE);
   const [remoteOpenStep, setRemoteOpenStep] = useState("remote");
   const [remoteState, setRemoteState] = useState(INITIAL_REMOTE_STATE);
@@ -717,6 +718,7 @@ export default function App() {
   );
   const dragLongPressTimerRef = useRef(null);
   const dragHoverExpandTimerRef = useRef(null);
+  const dragPointerTargetRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
 
@@ -728,6 +730,11 @@ export default function App() {
       }
       : undefined
   ), [isMobile, keyboardHeight, visibleViewportHeight]);
+
+  const isIos = useMemo(() =>
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.userAgent)),
+  []);
 
   const regularPages = pages.filter((page) => readStreamName(page.location) === null);
   const pageTree = buildPageTree(regularPages, pageOrderByParent);
@@ -1102,6 +1109,33 @@ export default function App() {
       const defaultPath = await invoke("get_default_workspace_path");
       await openWorkspaceRoot(defaultPath);
       setStartupError(null);
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleOpenIcloudWorkspace(event) {
+    event.preventDefault();
+    const name = icloudFolderName.trim();
+    if (!name) return;
+    setBusyAction("open-icloud");
+    setActionError(null);
+    try {
+      const openedWorkspace = await invoke("open_icloud_workspace", { folderName: name });
+      setWorkspace(openedWorkspace);
+      resetSelectionHistory(defaultStreamSelection());
+      setLastStreamDate(todayDateName());
+      setStreamReloadToken(0);
+      setSelectedPageText("");
+      setSelectedPageRevision(null);
+      setLinkedRefs([]);
+      setLoadedPageId(null);
+      await loadWorkspaceLists();
+      await loadSyncStatus().catch(() => setSyncStatus(null));
+      setStartupError(null);
+      setMode("workspace");
     } catch (error) {
       setActionError(normalizeError(error));
     } finally {
@@ -2409,6 +2443,26 @@ export default function App() {
     }
   }
 
+  function releaseDragPointerCapture(pointerId) {
+    const target = dragPointerTargetRef.current;
+    if (!target || pointerId == null || typeof target.hasPointerCapture !== "function") {
+      dragPointerTargetRef.current = null;
+      return;
+    }
+    try {
+      if (target.hasPointerCapture(pointerId)) {
+        target.releasePointerCapture(pointerId);
+      }
+    } catch {
+      // Ignore stale pointer capture release attempts.
+    }
+    dragPointerTargetRef.current = null;
+  }
+
+  useEffect(() => () => {
+    releaseDragPointerCapture();
+  }, []);
+
   function computeDragHover(clientX, clientY, sourcePageId) {
     const row = document.elementFromPoint(clientX, clientY)?.closest?.("[data-page-row='true']");
     if (!row) {
@@ -2513,6 +2567,20 @@ export default function App() {
     }
 
     clearPendingDragState();
+
+    if (event.pointerType !== "mouse") {
+      dragPointerTargetRef.current = event.currentTarget;
+      if (typeof event.currentTarget?.setPointerCapture === "function") {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          dragPointerTargetRef.current = null;
+        }
+      }
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+    }
 
     const nextDragState = {
       sourcePageId,
@@ -2670,10 +2738,15 @@ export default function App() {
             } : current);
           } else {
             clearPendingDragState();
+            releaseDragPointerCapture(dragState.pointerId);
             setDragState(null);
           }
         }
         return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
       }
 
       const hover = computeDragHover(event.clientX, event.clientY, dragState.sourcePageId);
@@ -2710,6 +2783,7 @@ export default function App() {
         return;
       }
       clearPendingDragState();
+      releaseDragPointerCapture(dragState.pointerId);
       const currentDragState = dragState;
       setDragState(null);
       if (currentDragState.active) {
@@ -4180,14 +4254,36 @@ export default function App() {
               {onboardingTab === "remote" ? (
                 renderOpenRemoteForm()
               ) : (
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={handleOpenDefaultWorkspace}
-                  disabled={busyAction === "open"}
-                >
-                  {busyAction === "open" ? "Opening..." : "Open Workspace"}
-                </button>
+                <>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={handleOpenDefaultWorkspace}
+                    disabled={busyAction === "open"}
+                  >
+                    {busyAction === "open" ? "Opening..." : "Open Workspace"}
+                  </button>
+                  {isIos && (
+                    <form className="create-form" onSubmit={handleOpenIcloudWorkspace}>
+                      <div className="field">
+                        <span>Workspace name</span>
+                        <input
+                          type="text"
+                          value={icloudFolderName}
+                          onChange={(e) => setIcloudFolderName(e.target.value)}
+                          placeholder="My Notes"
+                        />
+                      </div>
+                      <button
+                        className="primary-button"
+                        type="submit"
+                        disabled={!icloudFolderName.trim() || busyAction === "open-icloud"}
+                      >
+                        {busyAction === "open-icloud" ? "Opening..." : "Open iCloud Workspace"}
+                      </button>
+                    </form>
+                  )}
+                </>
               )}
             </div>
           </>
