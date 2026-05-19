@@ -9,6 +9,7 @@ import {
   PRIMARY_STREAM_NAMES,
   selectionForCalendarDate,
 } from "../utils/streamWorkspace.js";
+import { attachTouchDragListeners, startLongPressTouchDrag } from "../utils/touchDrag.js";
 
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const STREAM_DRAG_LONG_PRESS_MS = 260;
@@ -47,7 +48,6 @@ export default function StreamWorkspace({
   const resizeStateRef = useRef(null);
   const createInputRef = useRef(null);
   const dragLongPressTimerRef = useRef(null);
-  const dragPointerTargetRef = useRef(null);
   const suppressStreamClickRef = useRef(false);
   const [isCreating, setIsCreating] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -65,7 +65,6 @@ export default function StreamWorkspace({
       if (dragLongPressTimerRef.current) {
         clearTimeout(dragLongPressTimerRef.current);
       }
-      releaseStreamDragPointerCapture();
     };
   }, []);
 
@@ -208,22 +207,6 @@ export default function StreamWorkspace({
     }
   }
 
-  function releaseStreamDragPointerCapture(pointerId) {
-    const target = dragPointerTargetRef.current;
-    if (!target || pointerId == null || typeof target.hasPointerCapture !== "function") {
-      dragPointerTargetRef.current = null;
-      return;
-    }
-    try {
-      if (target.hasPointerCapture(pointerId)) {
-        target.releasePointerCapture(pointerId);
-      }
-    } catch {
-      // Ignore stale pointer capture release attempts.
-    }
-    dragPointerTargetRef.current = null;
-  }
-
   function handleSelectStream(streamName) {
     if (suppressStreamClickRef.current) {
       suppressStreamClickRef.current = false;
@@ -233,26 +216,16 @@ export default function StreamWorkspace({
   }
 
   function handleStreamDragPointerDown(event, streamName) {
-    clearPendingStreamDragState();
-
     if (event.pointerType !== "mouse") {
-      dragPointerTargetRef.current = event.currentTarget;
-      if (typeof event.currentTarget?.setPointerCapture === "function") {
-        try {
-          event.currentTarget.setPointerCapture(event.pointerId);
-        } catch {
-          dragPointerTargetRef.current = null;
-        }
-      }
-      if (event.cancelable) {
-        event.preventDefault();
-      }
+      return;
     }
+
+    clearPendingStreamDragState();
 
     const nextDragState = {
       streamName,
       pointerId: event.pointerId,
-      pointerType: event.pointerType,
+      pointerType: "mouse",
       startX: event.clientX,
       startY: event.clientY,
       clientX: event.clientX,
@@ -261,23 +234,36 @@ export default function StreamWorkspace({
       active: false,
     };
 
-    if (event.pointerType !== "mouse") {
-      dragLongPressTimerRef.current = window.setTimeout(() => {
-        setStreamDragState((current) => {
-          if (
-            current &&
-            current.pointerId === nextDragState.pointerId &&
-            current.streamName === nextDragState.streamName
-          ) {
-            return { ...current, active: true };
-          }
-          return current;
-        });
-        dragLongPressTimerRef.current = null;
-      }, STREAM_DRAG_LONG_PRESS_MS);
+    setStreamDragState(nextDragState);
+  }
+
+  function handleStreamDragTouchStart(event, streamName) {
+    if (event.touches.length !== 1) {
+      return;
     }
 
-    setStreamDragState(nextDragState);
+    clearPendingStreamDragState();
+    dragLongPressTimerRef.current = startLongPressTouchDrag({
+      event,
+      longPressMs: STREAM_DRAG_LONG_PRESS_MS,
+      setDragState: setStreamDragState,
+      buildDragState: (touch) => ({
+        streamName,
+        pointerId: touch.identifier,
+        pointerType: "touch",
+        startX: touch.clientX,
+        startY: touch.clientY,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        hover: null,
+        active: false,
+      }),
+      matchesDragState: (current, nextDragState) => (
+        current
+        && current.pointerId === nextDragState.pointerId
+        && current.streamName === nextDragState.streamName
+      ),
+    });
   }
 
   function computeStreamHover(clientX, clientY, sourceStreamName) {
@@ -341,6 +327,30 @@ export default function StreamWorkspace({
       return undefined;
     }
 
+    const updateStreamHover = (clientX, clientY) => {
+      const hover = computeStreamHover(clientX, clientY, streamDragState.streamName);
+      setStreamDragState((current) => current ? {
+        ...current,
+        hover,
+        clientX,
+        clientY,
+      } : current);
+    };
+
+    if (streamDragState.pointerType === "touch") {
+      return attachTouchDragListeners({
+        dragState: streamDragState,
+        setDragState: setStreamDragState,
+        clearPendingDragState: clearPendingStreamDragState,
+        moveSlopPx: STREAM_DRAG_MOVE_SLOP_PX,
+        updateHover: updateStreamHover,
+        onDrop: async (currentDragState) => {
+          suppressStreamClickRef.current = true;
+          await performStreamDrop(currentDragState);
+        },
+      });
+    }
+
     const handlePointerMove = (event) => {
       if (event.pointerId !== streamDragState.pointerId) {
         return;
@@ -352,19 +362,13 @@ export default function StreamWorkspace({
           event.clientY - streamDragState.startY,
         );
         if (distance > STREAM_DRAG_MOVE_SLOP_PX) {
-          if (streamDragState.pointerType === "mouse") {
-            suppressStreamClickRef.current = true;
-            setStreamDragState((current) => current ? {
-              ...current,
-              active: true,
-              clientX: event.clientX,
-              clientY: event.clientY,
-            } : current);
-          } else {
-            clearPendingStreamDragState();
-            releaseStreamDragPointerCapture(streamDragState.pointerId);
-            setStreamDragState(null);
-          }
+          suppressStreamClickRef.current = true;
+          setStreamDragState((current) => current ? {
+            ...current,
+            active: true,
+            clientX: event.clientX,
+            clientY: event.clientY,
+          } : current);
         }
         return;
       }
@@ -373,13 +377,7 @@ export default function StreamWorkspace({
         event.preventDefault();
       }
 
-      const hover = computeStreamHover(event.clientX, event.clientY, streamDragState.streamName);
-      setStreamDragState((current) => current ? {
-        ...current,
-        hover,
-        clientX: event.clientX,
-        clientY: event.clientY,
-      } : current);
+      updateStreamHover(event.clientX, event.clientY);
     };
 
     const finishDrag = async (event) => {
@@ -387,7 +385,6 @@ export default function StreamWorkspace({
         return;
       }
       clearPendingStreamDragState();
-      releaseStreamDragPointerCapture(streamDragState.pointerId);
       const currentDragState = streamDragState;
       setStreamDragState(null);
       if (currentDragState.active) {
@@ -462,6 +459,7 @@ export default function StreamWorkspace({
                               : ""
                               }${isDiary ? " stream-list-btn--with-toggle" : ""}`}
                             onPointerDown={(event) => handleStreamDragPointerDown(event, streamName)}
+                            onTouchStart={(event) => handleStreamDragTouchStart(event, streamName)}
                             onClick={() => handleSelectStream(streamName)}
                           >
                             {streamName}

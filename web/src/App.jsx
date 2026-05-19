@@ -22,6 +22,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMobileKeyboard } from "./hooks/useMobileKeyboard.js";
 import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
 import { coerceSyncProgress } from "./utils/syncProgress.js";
+import { attachTouchDragListeners, startLongPressTouchDrag } from "./utils/touchDrag.js";
 
 const INITIAL_CREATE_STATE = {
   parentPath: "",
@@ -428,6 +429,7 @@ function PageTree({
   disabledIds = new Set(),
   dragState = null,
   onDragItemPointerDown,
+  onDragItemTouchStart,
 }) {
   return (
     <ul className={depth === 0 ? "page-tree" : "page-tree page-tree--nested"}>
@@ -494,6 +496,11 @@ function PageTree({
                 onPointerDown={(event) => {
                   if (!pickerMode && !isDisabled) {
                     onDragItemPointerDown?.(event, page.page_id, pageLabel(page));
+                  }
+                }}
+                onTouchStart={(event) => {
+                  if (!pickerMode && !isDisabled) {
+                    onDragItemTouchStart?.(event, page.page_id, pageLabel(page));
                   }
                 }}
                 onClick={() => {
@@ -583,6 +590,7 @@ function PageTree({
                 disabledIds={disabledIds}
                 dragState={dragState}
                 onDragItemPointerDown={onDragItemPointerDown}
+                onDragItemTouchStart={onDragItemTouchStart}
               />
             ) : null}
           </li>
@@ -725,7 +733,6 @@ export default function App() {
   );
   const dragLongPressTimerRef = useRef(null);
   const dragHoverExpandTimerRef = useRef(null);
-  const dragPointerTargetRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
   const selectedPageTextRef = useRef(selectedPageText);
@@ -2479,26 +2486,6 @@ export default function App() {
     }
   }
 
-  function releaseDragPointerCapture(pointerId) {
-    const target = dragPointerTargetRef.current;
-    if (!target || pointerId == null || typeof target.hasPointerCapture !== "function") {
-      dragPointerTargetRef.current = null;
-      return;
-    }
-    try {
-      if (target.hasPointerCapture(pointerId)) {
-        target.releasePointerCapture(pointerId);
-      }
-    } catch {
-      // Ignore stale pointer capture release attempts.
-    }
-    dragPointerTargetRef.current = null;
-  }
-
-  useEffect(() => () => {
-    releaseDragPointerCapture();
-  }, []);
-
   function computeDragHover(clientX, clientY, sourcePageId) {
     const row = document.elementFromPoint(clientX, clientY)?.closest?.("[data-page-row='true']");
     if (!row) {
@@ -2602,27 +2589,17 @@ export default function App() {
       return;
     }
 
-    clearPendingDragState();
-
     if (event.pointerType !== "mouse") {
-      dragPointerTargetRef.current = event.currentTarget;
-      if (typeof event.currentTarget?.setPointerCapture === "function") {
-        try {
-          event.currentTarget.setPointerCapture(event.pointerId);
-        } catch {
-          dragPointerTargetRef.current = null;
-        }
-      }
-      if (event.cancelable) {
-        event.preventDefault();
-      }
+      return;
     }
+
+    clearPendingDragState();
 
     const nextDragState = {
       sourcePageId,
       sourceLabel,
       pointerId: event.pointerId,
-      pointerType: event.pointerType,
+      pointerType: "mouse",
       startX: event.clientX,
       startY: event.clientY,
       clientX: event.clientX,
@@ -2631,23 +2608,39 @@ export default function App() {
       active: false,
     };
 
-    if (event.pointerType !== "mouse") {
-      dragLongPressTimerRef.current = window.setTimeout(() => {
-        setDragState((current) => {
-          if (
-            current &&
-            current.pointerId === nextDragState.pointerId &&
-            current.sourcePageId === nextDragState.sourcePageId
-          ) {
-            return { ...current, active: true };
-          }
-          return current;
-        });
-        dragLongPressTimerRef.current = null;
-      }, DRAG_LONG_PRESS_MS);
+    setDragState(nextDragState);
+  }
+
+  function handleDragItemTouchStart(event, sourcePageId, sourceLabel) {
+    if (busyAction || modal || event.touches.length !== 1) {
+      return;
     }
 
-    setDragState(nextDragState);
+    clearPendingDragState();
+    // Touch stays on its native scroll path until long-press promotion flips it
+    // into an active drag; pointer capture was the wrong primitive for this case.
+    dragLongPressTimerRef.current = startLongPressTouchDrag({
+      event,
+      longPressMs: DRAG_LONG_PRESS_MS,
+      setDragState,
+      buildDragState: (touch) => ({
+        sourcePageId,
+        sourceLabel,
+        pointerId: touch.identifier,
+        pointerType: "touch",
+        startX: touch.clientX,
+        startY: touch.clientY,
+        clientX: touch.clientX,
+        clientY: touch.clientY,
+        hover: null,
+        active: false,
+      }),
+      matchesDragState: (current, nextDragState) => (
+        current
+        && current.pointerId === nextDragState.pointerId
+        && current.sourcePageId === nextDragState.sourcePageId
+      ),
+    });
   }
 
   async function handleMinimizeWindow() {
@@ -2756,41 +2749,13 @@ export default function App() {
       return undefined;
     }
 
-    const handlePointerMove = (event) => {
-      if (event.pointerId !== dragState.pointerId) {
-        return;
-      }
-
-      if (!dragState.active) {
-        const distance = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
-        if (distance > DRAG_MOVE_SLOP_PX) {
-          if (dragState.pointerType === "mouse") {
-            suppressPageClickRef.current = true;
-            setDragState((current) => current ? {
-              ...current,
-              active: true,
-              clientX: event.clientX,
-              clientY: event.clientY,
-            } : current);
-          } else {
-            clearPendingDragState();
-            releaseDragPointerCapture(dragState.pointerId);
-            setDragState(null);
-          }
-        }
-        return;
-      }
-
-      if (event.cancelable) {
-        event.preventDefault();
-      }
-
-      const hover = computeDragHover(event.clientX, event.clientY, dragState.sourcePageId);
+    const updateDragHover = (clientX, clientY) => {
+      const hover = computeDragHover(clientX, clientY, dragState.sourcePageId);
       setDragState((current) => (current ? {
         ...current,
         hover,
-        clientX: event.clientX,
-        clientY: event.clientY,
+        clientX,
+        clientY,
       } : current));
 
       if (
@@ -2814,12 +2779,51 @@ export default function App() {
       }
     };
 
+    if (dragState.pointerType === "touch") {
+      return attachTouchDragListeners({
+        dragState,
+        setDragState,
+        clearPendingDragState,
+        moveSlopPx: DRAG_MOVE_SLOP_PX,
+        updateHover: updateDragHover,
+        onDrop: async (currentDragState) => {
+          suppressPageClickRef.current = true;
+          await performTreeDrop(currentDragState);
+        },
+      });
+    }
+
+    const handlePointerMove = (event) => {
+      if (event.pointerId !== dragState.pointerId) {
+        return;
+      }
+
+      if (!dragState.active) {
+        const distance = Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY);
+        if (distance > DRAG_MOVE_SLOP_PX) {
+          suppressPageClickRef.current = true;
+          setDragState((current) => current ? {
+            ...current,
+            active: true,
+            clientX: event.clientX,
+            clientY: event.clientY,
+          } : current);
+        }
+        return;
+      }
+
+      if (event.cancelable) {
+        event.preventDefault();
+      }
+
+      updateDragHover(event.clientX, event.clientY);
+    };
+
     const finishDrag = async (event) => {
       if (event.pointerId !== dragState.pointerId) {
         return;
       }
       clearPendingDragState();
-      releaseDragPointerCapture(dragState.pointerId);
       const currentDragState = dragState;
       setDragState(null);
       if (currentDragState.active) {
@@ -3512,6 +3516,7 @@ export default function App() {
                           }}
                           dragState={dragState?.active ? dragState : null}
                           onDragItemPointerDown={handleDragItemPointerDown}
+                          onDragItemTouchStart={handleDragItemTouchStart}
                         />
                       )}
                     </div>
