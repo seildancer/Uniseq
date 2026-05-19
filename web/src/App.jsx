@@ -19,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { platform } from "@tauri-apps/plugin-os";
 import { useMobileKeyboard, useMobileKeyboardForced } from "./hooks/useMobileKeyboard.js";
 import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
 import { coerceSyncProgress } from "./utils/syncProgress.js";
@@ -65,7 +66,6 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
-const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
 const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
 const UNISEQ_SYNC_ROOT_PREFIX = import.meta.env.VITE_SYNC_ROOT_PREFIX ?? "https://sync.example.com";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? "";
@@ -88,14 +88,6 @@ function shouldLogSyncProgress(progress) {
     current === total ||
     current % 25 === 0
   );
-}
-
-function shouldShowDesktopWindowControls() {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return true;
-  }
-
-  return !window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches;
 }
 
 function pageLabel(page) {
@@ -718,9 +710,14 @@ export default function App() {
   const [moveTarget, setMoveTarget] = useState("");
   const [dragState, setDragState] = useState(null);
   const [windowIsMaximized, setWindowIsMaximized] = useState(false);
-  const [showDesktopWindowControls, setShowDesktopWindowControls] = useState(
-    () => shouldShowDesktopWindowControls(),
-  );
+  const [showDesktopWindowControls] = useState(() => {
+    try {
+      const p = platform();
+      return p !== "android" && p !== "ios";
+    } catch {
+      return true;
+    }
+  });
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
     if (!Number.isFinite(stored)) {
@@ -2656,22 +2653,6 @@ export default function App() {
     await appWindow.close();
   }
 
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-      return undefined;
-    }
-
-    const mediaQuery = window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY);
-    const handleChange = (event) => {
-      setShowDesktopWindowControls(!event.matches);
-    };
-
-    setShowDesktopWindowControls(!mediaQuery.matches);
-    mediaQuery.addEventListener("change", handleChange);
-    return () => {
-      mediaQuery.removeEventListener("change", handleChange);
-    };
-  }, []);
 
   useEffect(() => {
     const unlistenPromise = listen("deep-link-url", async (event) => {
