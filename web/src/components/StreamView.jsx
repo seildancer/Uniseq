@@ -27,7 +27,6 @@ export default function StreamView({
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const editorFocusRefs = useRef(new Map());
-  const restoreDateAfterBlurRef = useRef(null);
   const latestDateName = useMemo(
     () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
     [selectedDate, streamPagesByDate],
@@ -174,27 +173,7 @@ export default function StreamView({
     }
   }, [focusedEditor, selectedDate, visibleDates, editorReadyByKey, streamNames, streamPagesByDate]);
 
-  useLayoutEffect(() => {
-    if (focusedEditor) {
-      return;
-    }
-    const dateName = restoreDateAfterBlurRef.current;
-    if (!dateName) {
-      return;
-    }
-    restoreDateAfterBlurRef.current = null;
-    dayRefs.current.get(dateName)?.scrollIntoView({
-      block: "start",
-      behavior: "auto",
-    });
-  }, [focusedEditor]);
-
   function enterFocusMode(dateName, streamName) {
-    restoreDateAfterBlurRef.current = dateName;
-    dayRefs.current.get(dateName)?.scrollIntoView({
-      block: "start",
-      behavior: "auto",
-    });
     setFocusedEditor({ dateName, streamName });
   }
 
@@ -264,6 +243,9 @@ export default function StreamView({
       <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
+          const focusedStreamIndex = focusedStreamName
+            ? streamNames.findIndex((streamName) => streamName === focusedStreamName)
+            : -1;
           const isSelected = selectedDate === dateName;
           const paneStates = streamNames.map((streamName) => {
             const editorKey = `${streamName}/${dateName}`;
@@ -308,7 +290,9 @@ export default function StreamView({
               </div>
 
               <div className="stream-day-entry-body">
-                <div className="stream-dual-pane">
+                <div
+                  className={`stream-dual-pane${isDual ? " stream-dual-pane--dual" : ""}${focusedStreamIndex === 1 ? " stream-dual-pane--focus-right" : ""}`}
+                >
                   {paneStates.map(({ streamName, editorKey, focusEditorRef, existingPageId, shouldBlur }) => (
                     <div
                       key={editorKey}
@@ -337,7 +321,6 @@ export default function StreamView({
                             }
                             setFocusedEditor((current) => {
                               if (current?.dateName === dateName && current?.streamName === streamName) {
-                                restoreDateAfterBlurRef.current = dateName;
                                 return null;
                               }
                               return current;

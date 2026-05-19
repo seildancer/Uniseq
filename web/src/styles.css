@@ -1719,14 +1719,8 @@ h2 {
 }
 
 .stream-day-entry--focused {
-  flex: 1;
-  min-height: 0;
   scroll-margin-top: 0;
   opacity: 1;
-}
-
-.stream-day-list--has-focus .stream-day-entry:not(.stream-day-entry--focused) {
-  display: none;
 }
 
 @keyframes stream-day-entry-fade-in {
@@ -1769,9 +1763,8 @@ h2 {
 
 .stream-day-entry--focused .stream-day-entry-body {
   display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: visible;
 }
 
 .stream-single-pane {
@@ -1803,12 +1796,6 @@ h2 {
   user-select: none;
 }
 
-.stream-day-entry--focused .stream-editor-pane,
-.stream-day-entry--focused .stream-single-pane {
-  flex: 1;
-  min-height: 0;
-}
-
 .stream-editor-pane .milkdown-editor {
   display: flex;
   flex-direction: column;
@@ -1827,15 +1814,6 @@ h2 {
 .stream-editor-pane .milkdown-editor .ProseMirror {
   flex: 1;
   min-height: 1.6em;
-}
-
-.stream-day-entry--focused .stream-editor-pane .milkdown-editor {
-  height: 100%;
-  overflow: visible;
-}
-
-.stream-day-entry--focused .stream-editor-pane .milkdown-editor .ProseMirror {
-  min-height: 100%;
 }
 
 .stream-day-entry--empty:not(.stream-day-entry--focused) .stream-editor-pane .milkdown-editor .ProseMirror {
@@ -1873,8 +1851,16 @@ h2 {
   align-items: stretch;
 }
 
+.stream-dual-pane--dual .stream-dual-panel:not(.stream-dual-panel--focused):not(.stream-dual-panel--compressed) {
+  flex: 0 0 50%;
+}
+
 .stream-day-entry--focused .stream-dual-pane {
-  flex: 1;
+  overflow: hidden;
+}
+
+.stream-day-entry--focused .stream-dual-pane--focus-right {
+  transform: translateX(-35%);
 }
 
 .stream-dual-panel {
@@ -1886,19 +1872,25 @@ h2 {
   min-width: 0;
   cursor: text;
   transition:
-    flex-grow 260ms ease,
-    opacity 220ms ease,
-    transform 220ms ease;
+    flex-basis 260ms ease,
+    opacity 220ms ease;
+}
+
+.stream-dual-pane {
+  transition: transform 260ms ease;
 }
 
 .stream-dual-panel--focused {
-  flex-grow: 9;
+  flex-basis: 85%;
+  flex-grow: 0;
+  flex-shrink: 0;
 }
 
 .stream-dual-panel--compressed {
-  flex-grow: 1;
+  flex-basis: 50%;
+  flex-grow: 0;
+  flex-shrink: 0;
   opacity: 0.38;
-  transform: scaleX(0.985);
 }
 
 .stream-dual-panel+.stream-dual-panel {
