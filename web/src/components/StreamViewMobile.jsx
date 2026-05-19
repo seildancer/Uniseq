@@ -32,8 +32,12 @@ function MobileFocusScreen({
     <section className="stream-mobile-focus-screen">
       <div className="stream-mobile-focus-header">
         <div className="stream-mobile-focus-heading">
-          <p className="stream-mobile-focus-label">{focusedEditor.streamName}</p>
-          <h2 className="stream-mobile-focus-title">{formatDateLabel(focusedEditor.dateName)}</h2>
+          <div className="stream-day-entry-header">
+            <h2 className="stream-day-entry-title">{formatDateLabel(focusedEditor.dateName)}</h2>
+          </div>
+          <div className="stream-mobile-focus-stream">
+            <p className="stream-panel-label">{focusedEditor.streamName}</p>
+          </div>
         </div>
         <button
           type="button"

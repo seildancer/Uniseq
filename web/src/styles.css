@@ -2018,7 +2018,7 @@ h2 {
   align-items: flex-start;
   gap: 12px;
   justify-content: space-between;
-  padding-bottom: 12px;
+  padding-bottom: 0;
 }
 
 .stream-mobile-focus-back {
@@ -2036,22 +2036,8 @@ h2 {
   min-width: 0;
 }
 
-.stream-mobile-focus-label {
-  margin: 0 0 4px;
-  color: var(--muted);
-  font-size: 0.76rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.stream-mobile-focus-title {
-  margin: 0;
-  color: var(--ink);
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.25;
+.stream-mobile-focus-stream {
+  padding-top: 16px;
 }
 
 .stream-mobile-focus-body {
