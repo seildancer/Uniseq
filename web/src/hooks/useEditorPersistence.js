@@ -1,9 +1,9 @@
 import { useContext, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { replaceAll } from "@milkdown/utils";
 import { cleanEditorMarkdownForPersistence } from "../utils/stripBreak";
-import { toEditorMarkdown, toStoredMarkdown } from "../utils/imageMarkdown";
+import { toStoredMarkdown } from "../utils/imageMarkdown";
 import { WorkspaceContext } from "../WorkspaceContext.js";
+import { applyExternalEditorText } from "./applyExternalEditorText";
 
 const WRITE_DEBOUNCE_MS = 300;
 
@@ -29,7 +29,6 @@ export function useEditorPersistence({
   const initializedRef = useRef(false);
 
   useEffect(() => {
-    latestTextRef.current = text;
     revisionRef.current = revision;
     persistedTextRef.current = text;
   }, [text, revision]);
@@ -68,16 +67,15 @@ export function useEditorPersistence({
 
   // Reload editor content when an external file change arrives on the same page.
   useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      return;
-    }
-    const editor = get();
-    if (!editor) return;
-    suppressWriteRef.current = true;
-    editor.action(replaceAll(toEditorMarkdown(text, workspaceRootRef.current)));
-    clearTimeout(debounceRef.current);
-    setTimeout(() => { suppressWriteRef.current = false; }, 0);
+    applyExternalEditorText({
+      initializedRef,
+      getEditor: get,
+      nextText: text,
+      latestTextRef,
+      suppressWriteRef,
+      workspaceRoot: workspaceRootRef.current,
+      clearPendingWrite: () => clearTimeout(debounceRef.current),
+    });
   }, [text, revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
   onMarkdownUpdatedRef.current = (markdown) => {

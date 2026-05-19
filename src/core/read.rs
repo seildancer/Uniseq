@@ -1,6 +1,6 @@
+use std::cmp::Reverse;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::cmp::Reverse;
 
 use super::{
     Block, BlockKind, CoreError, FileFingerprint, Page, PageId, PageLocation, SourceSpan,
@@ -377,7 +377,11 @@ fn search_result_for_page(page: &Page, normalized_query: &str) -> Option<RankedS
             title: page.title.clone(),
             location: page.location.clone(),
             matched_field: SearchMatchField::Content,
-            snippet: Some(build_search_snippet(&page.text, position, normalized_query.len())),
+            snippet: Some(build_search_snippet(
+                &page.text,
+                position,
+                normalized_query.len(),
+            )),
             score: Reverse(2),
             match_position: position,
         })
@@ -403,7 +407,10 @@ fn build_search_snippet(text: &str, match_start: usize, match_len: usize) -> Str
 
     let prefix = if start_byte > 0 { "..." } else { "" };
     let suffix = if end_byte < text.len() { "..." } else { "" };
-    format!("{prefix}{}{suffix}", text[start_byte..end_byte].replace(['\r', '\n'], " "))
+    format!(
+        "{prefix}{}{suffix}",
+        text[start_byte..end_byte].replace(['\r', '\n'], " ")
+    )
 }
 
 fn incoming_ref_snapshots(
@@ -775,7 +782,11 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].matched_field, SearchMatchField::Content);
         let snippet = results[0].snippet.as_ref().unwrap();
-        assert!(snippet.to_lowercase().contains("needle inside content body"));
+        assert!(
+            snippet
+                .to_lowercase()
+                .contains("needle inside content body")
+        );
         assert!(!snippet.contains('\n'));
     }
 

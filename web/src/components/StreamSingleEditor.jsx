@@ -90,13 +90,9 @@ export default function StreamSingleEditor({
     return null;
   }
 
-  const editorKey = backedRevision
-    ? `${backedPageId}:${backedRevision.len_bytes}:${backedRevision.content_hash}`
-    : backedPageId;
-
   return (
     <BackedStreamEditor
-      key={editorKey}
+      key={backedPageId}
       pageId={backedPageId}
       text={backedText}
       revision={backedRevision}

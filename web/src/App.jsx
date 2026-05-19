@@ -346,6 +346,12 @@ function syncProviderLabel(provider) {
   return provider === "uniseq" ? "Uniseq Sync" : "Custom URL";
 }
 
+function sameRevision(left, right) {
+  if (left === right) return true;
+  if (!left || !right) return left === right;
+  return left.len_bytes === right.len_bytes && left.content_hash === right.content_hash;
+}
+
 function formatUnixTimestamp(unixSeconds) {
   if (!Number.isFinite(unixSeconds)) {
     return "Never";
@@ -721,6 +727,12 @@ export default function App() {
   const dragPointerTargetRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
+  const selectedPageTextRef = useRef(selectedPageText);
+  selectedPageTextRef.current = selectedPageText;
+  const selectedPageRevisionRef = useRef(selectedPageRevision);
+  selectedPageRevisionRef.current = selectedPageRevision;
+  const loadedPageIdRef = useRef(loadedPageId);
+  loadedPageIdRef.current = loadedPageId;
 
   const mobileViewportStyle = useMemo(() => (
     isMobile
@@ -754,9 +766,6 @@ export default function App() {
   );
   const loadedPage = pages.find((page) => page.page_id === loadedPageId) ?? null;
   const loadedPageIsRegular = loadedPage ? readStreamName(loadedPage.location) === null : false;
-  const loadedPageEditorKey = loadedPageId && selectedPageRevision
-    ? `${loadedPageId}:${selectedPageRevision.len_bytes}:${selectedPageRevision.content_hash}`
-    : loadedPageId;
 
   const streamPagesByDate = useMemo(() => {
     const map = new Map();
@@ -1041,8 +1050,15 @@ export default function App() {
     const seq = ++loadPageContentSeqRef.current;
     const { text, revision } = await invoke("page_content", { pageId });
     if (seq === loadPageContentSeqRef.current) {
-      setSelectedPageText(text);
-      setSelectedPageRevision(revision);
+      const snapshotChanged = (
+        loadedPageIdRef.current !== pageId
+        || selectedPageTextRef.current !== text
+        || !sameRevision(selectedPageRevisionRef.current, revision)
+      );
+      if (snapshotChanged) {
+        setSelectedPageText(text);
+        setSelectedPageRevision(revision);
+      }
       setLoadedPageId(pageId);
     }
   }
@@ -1078,6 +1094,14 @@ export default function App() {
       code: "stale_page_reload",
       message: "Page changed while the editor was open. Reloaded the latest content.",
     });
+  }
+
+  function handlePagePersisted(updated) {
+    setSelectedPageText((current) => (current === updated.text ? current : updated.text));
+    setSelectedPageRevision((current) => (sameRevision(current, updated.revision) ? current : updated.revision));
+    if (loadedPageIdRef.current) {
+      void loadPageLinkedRefs(loadedPageIdRef.current).catch(() => { });
+    }
   }
 
   async function openWorkspaceRoot(rootPath) {
@@ -3572,10 +3596,11 @@ export default function App() {
                             pageId={loadedPageId}
                             text={selectedPageText}
                             revision={selectedPageRevision}
-                            key={loadedPageEditorKey}
+                            key={loadedPageId}
                             pages={regularPages}
                             onNavigate={handleSelectPage}
                             onConflict={() => void handleEditorConflict()}
+                            onPersisted={handlePagePersisted}
                           />
                           {loadedPageIsRegular ? (
                             <LinkedReferences

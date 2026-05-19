@@ -1,7 +1,8 @@
 import MilkdownMarkdownEditor from "./components/MilkdownMarkdownEditor";
 import { useMarkdownEditorBridge } from "./hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "./hooks/useEditorPersistence";
-function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, onConflict }) {
+
+function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, onConflict, onPersisted }) {
   const { onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
 
   useEditorPersistence({
@@ -12,6 +13,7 @@ function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, 
     flushRef,
     onMarkdownUpdatedRef,
     onConflict,
+    onPersisted,
   });
 
   return (
@@ -27,7 +29,7 @@ function PageEditorInner({ pageId, text, revision, pages, onNavigate, flushRef, 
   );
 }
 
-export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict }) {
+export default function MilkdownEditor({ pageId, text, revision, pages, onNavigate, onConflict, onPersisted }) {
   const { flushRef } = useMarkdownEditorBridge();
 
   return (
@@ -39,6 +41,7 @@ export default function MilkdownEditor({ pageId, text, revision, pages, onNaviga
       onNavigate={onNavigate}
       flushRef={flushRef}
       onConflict={onConflict}
+      onPersisted={onPersisted}
     />
   );
 }

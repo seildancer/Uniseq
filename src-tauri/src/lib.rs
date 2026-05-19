@@ -605,9 +605,11 @@ impl WorkspaceController {
                 new_leaf_name,
             })
             .map_err(ErrorDto::from)?;
-        self.finish_local_mutation(
-            self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id),
-        )
+        self.finish_local_mutation(self.remap_page_order_subtree(
+            app,
+            &page_id_to_string(&page_id),
+            &target_page_id,
+        ))
     }
 
     fn move_page(
@@ -629,9 +631,11 @@ impl WorkspaceController {
                 destination_parent_page_id,
             })
             .map_err(ErrorDto::from)?;
-        self.finish_local_mutation(
-            self.remap_page_order_subtree(app, &page_id_to_string(&page_id), &target_page_id),
-        )
+        self.finish_local_mutation(self.remap_page_order_subtree(
+            app,
+            &page_id_to_string(&page_id),
+            &target_page_id,
+        ))
     }
 
     fn delete_page(&self, app: &AppHandle, page_id: String) -> CommandResult<()> {
@@ -642,7 +646,9 @@ impl WorkspaceController {
                 page_id: page_id.clone(),
             })
             .map_err(ErrorDto::from)?;
-        self.finish_local_mutation(self.remove_page_order_subtree(app, &page_id_to_string(&page_id)))
+        self.finish_local_mutation(
+            self.remove_page_order_subtree(app, &page_id_to_string(&page_id)),
+        )
     }
 
     fn merge_page(
@@ -1622,11 +1628,8 @@ fn delete_remote_account(
 ) -> CommandResult<bool> {
     let _provider_kind = provider;
     let sync_root_url = sync_root_url.trim().trim_end_matches('/').to_owned();
-    let provider = sync::HttpSyncProvider::new_account_with_auth(
-        sync_root_url.clone(),
-        auth_token,
-    )
-    .map_err(ErrorDto::from)?;
+    let provider = sync::HttpSyncProvider::new_account_with_auth(sync_root_url.clone(), auth_token)
+        .map_err(ErrorDto::from)?;
     provider.delete_account().map_err(ErrorDto::from)?;
 
     let mut controller = state.controller.lock().unwrap();
@@ -1702,9 +1705,7 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
                     path: None,
                     detail: Some("Waiting for current sync to finish".to_owned()),
                 };
-                eprintln!(
-                    "[uniseq-debug] sync_now waiting_for_lock tick={wait_ticks}"
-                );
+                eprintln!("[uniseq-debug] sync_now waiting_for_lock tick={wait_ticks}");
                 if let Err(error) = app.emit(SYNC_PROGRESS_EVENT, &progress) {
                     eprintln!("[uniseq-debug] sync_progress waiting_emit_error={error}");
                 }
@@ -1737,8 +1738,10 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
                 .map_err(ErrorDto::from)?;
             sync::write_sync_auth_secrets(&workspace_root, &new_secrets).map_err(ErrorDto::from)?;
             let new_provider = sync_provider_for_config(&workspace_root, &config)?;
-            let refreshed =
-                sync::sync_once_with_progress(&workspace_root, &new_provider, |progress| {
+            let refreshed = sync::sync_once_with_progress(
+                &workspace_root,
+                &new_provider,
+                |progress| {
                     eprintln!(
                         "[uniseq-debug] sync_progress emit_after_refresh operation={:?} phase={:?} current={} total={} path={:?} detail={:?}",
                         progress.operation,
@@ -1751,7 +1754,8 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
                     if let Err(error) = app.emit(SYNC_PROGRESS_EVENT, &progress) {
                         eprintln!("[uniseq-debug] sync_progress emit_after_refresh_error={error}");
                     }
-                });
+                },
+            );
             match refreshed {
                 Err(error) if error.remote_missing => {
                     sync::clear_sync_metadata(&workspace_root).map_err(ErrorDto::from)?;

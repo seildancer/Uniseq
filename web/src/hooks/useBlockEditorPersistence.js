@@ -1,9 +1,9 @@
 import { useContext, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { replaceAll } from "@milkdown/utils";
 import { cleanEditorMarkdownForPersistence } from "../utils/stripBreak";
-import { toEditorMarkdown, toStoredMarkdown } from "../utils/imageMarkdown";
+import { toStoredMarkdown } from "../utils/imageMarkdown";
 import { WorkspaceContext } from "../WorkspaceContext.js";
+import { applyExternalEditorText } from "./applyExternalEditorText";
 
 const WRITE_DEBOUNCE_MS = 300;
 
@@ -28,7 +28,6 @@ export function useBlockEditorPersistence({
   const debounceRef = useRef(null);
 
   useEffect(() => {
-    latestTextRef.current = text;
     handleRef.current = blockHandle;
     persistedTextRef.current = text;
   }, [blockHandle, text]);
@@ -79,15 +78,14 @@ export function useBlockEditorPersistence({
   });
 
   useEffect(() => {
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      return;
-    }
-    const editor = get();
-    if (!editor) return;
-    suppressWriteRef.current = true;
-    editor.action(replaceAll(toEditorMarkdown(text, workspaceRootRef.current)));
-    setTimeout(() => { suppressWriteRef.current = false; }, 0);
+    applyExternalEditorText({
+      initializedRef,
+      getEditor: get,
+      nextText: text,
+      latestTextRef,
+      suppressWriteRef,
+      workspaceRoot: workspaceRootRef.current,
+    });
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 
   onMarkdownUpdatedRef.current = (markdown) => {

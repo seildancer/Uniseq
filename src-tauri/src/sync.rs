@@ -548,7 +548,9 @@ impl HttpSyncProvider {
     }
 
     pub fn delete_account(&self) -> SyncResult<()> {
-        let response = self.with_auth(self.client.delete(self.account_url())).send()?;
+        let response = self
+            .with_auth(self.client.delete(self.account_url()))
+            .send()?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err(SyncError::new_auth_expired("sync token expired"));
         }

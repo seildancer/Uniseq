@@ -33,7 +33,7 @@ Page references: `[[Page]]` and `#Page`. Only `block → page` references, never
 
 ## Write Model
 
-- **Content writes** are frontend-driven via `write_page_content`. Writes are optimistic; the caller may supply an expected file fingerprint revision to detect conflicts. Rust reparses immediately and updates derived state.
+- **Content writes** are frontend-driven via `write_page_content`.
 - **Structural mutations** are backend-owned: create, rename, move, merge, delete (pages and streams). These go through `apply_*` operations with transaction recovery — interrupted ops replay to their recorded final state rather than rolling back.
 - **Virtual stream writes** (`write_virtual_stream_page`) create the file only if content is non-empty. This enables lazy file creation in the stream editor.
 

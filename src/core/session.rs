@@ -17,7 +17,9 @@ use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
     page_and_fingerprint_from_text, page_from_markdown_in_location,
 };
-use crate::core::storage::{all_stream_names, is_reserved_root_name, is_supported_workspace_markdown_path};
+use crate::core::storage::{
+    all_stream_names, is_reserved_root_name, is_supported_workspace_markdown_path,
+};
 use crate::core::structure::{
     IncrementalWorkspaceUpdate, PageCreate, PageDeleteSubtree, PageMerge, PageMove, PageRename,
     StreamPageCreate, StreamPageDelete, apply_page_create_with_update,
@@ -440,6 +442,7 @@ impl WorkspaceSessionState {
         text: String,
         expected_revision: Option<super::FileFingerprint>,
     ) -> Result<PageContentSnapshot, CoreError> {
+        let old_states = self.page_event_states();
         let (location, workspace_path) = {
             let page = self.cache.page(page_id).ok_or(CoreError::MissingPage)?;
             if expected_revision.is_some_and(|revision| revision != page.fingerprint) {
@@ -453,6 +456,10 @@ impl WorkspaceSessionState {
         fs::write(&absolute_path, &text).map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, text)?;
         self.cache.refresh_page_content(new_page);
+        let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+        self.apply_snapshot_delta(&[], [(workspace_path.clone(), file_stamp)]);
+        self.emit_cache_diff(old_states);
+        self.last_watch_error = None;
         self.with_read_api(|api| api.page_content(page_id))
     }
 
@@ -461,6 +468,7 @@ impl WorkspaceSessionState {
         handle: &BlockHandle,
         replacement_markdown: String,
     ) -> Result<(), CoreError> {
+        let old_states = self.page_event_states();
         let (page_id, location, workspace_path, next_text) = {
             let page = self
                 .cache
@@ -496,9 +504,10 @@ impl WorkspaceSessionState {
             .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, next_text)?;
         self.cache.refresh_page_content(new_page);
-        self.enqueue_event(WorkspaceEvent::PagesChanged {
-            page_ids: vec![page_id],
-        });
+        let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
+        self.apply_snapshot_delta(&[], [(workspace_path.clone(), file_stamp)]);
+        self.emit_cache_diff(old_states);
+        self.last_watch_error = None;
         Ok(())
     }
 
@@ -1152,7 +1161,7 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("md"));
             if !is_markdown {
-                if !is_runtime_metadata_path(&relative_path) {
+                if !is_reserved_root_relative_path(&relative_path) {
                     saw_non_reserved_root_noise = true;
                 }
                 continue;
@@ -1182,7 +1191,28 @@ fn classify_native_event_burst(root: &Path, events: &[Event]) -> NativeEventActi
     }
 }
 
-fn is_runtime_metadata_path(relative_path: &Path) -> bool {
+fn should_ignore_native_watch_path(relative_path: &Path) -> bool {
+    matches!(
+        relative_path
+            .components()
+            .next()
+            .and_then(|component| match component {
+                std::path::Component::Normal(name) => name.to_str(),
+                _ => None,
+            }),
+        Some("uniseq" | ".uniseq-page-transaction")
+    )
+}
+
+fn filter_native_watch_event_paths(root: &Path, event: &mut Event) {
+    event.paths.retain(|path| {
+        path.strip_prefix(root)
+            .map(|relative_path| !should_ignore_native_watch_path(relative_path))
+            .unwrap_or(true)
+    });
+}
+
+fn is_reserved_root_relative_path(relative_path: &Path) -> bool {
     relative_path
         .components()
         .next()
@@ -1201,7 +1231,8 @@ fn format_native_event_burst(root: &Path, events: &[Event]) -> String {
             let paths = if event.paths.is_empty() {
                 "<none>".to_string()
             } else {
-                event.paths
+                event
+                    .paths
                     .iter()
                     .map(|path| {
                         path.strip_prefix(root)
@@ -1267,12 +1298,23 @@ fn run_native_watch_loop(
     poll_interval: Duration,
 ) -> Result<(), WatcherFallbackReason> {
     let root = state.read().unwrap().root.clone();
-    let mut watcher = notify::recommended_watcher(move |result| {
-        let _ = tx.send(WatchLoopMessage::Fs(result));
-    })
-    .map_err(|error| WatcherFallbackReason::NativeWatcherSetupFailed {
-        message: error.to_string(),
-    })?;
+    let callback_root = root.clone();
+    let mut watcher =
+        notify::recommended_watcher(move |result: notify::Result<notify::Event>| match result {
+            Ok(mut event) => {
+                filter_native_watch_event_paths(&callback_root, &mut event);
+                if event.paths.is_empty() {
+                    return;
+                }
+                let _ = tx.send(WatchLoopMessage::Fs(Ok(event)));
+            }
+            Err(error) => {
+                let _ = tx.send(WatchLoopMessage::Fs(Err(error)));
+            }
+        })
+        .map_err(|error| WatcherFallbackReason::NativeWatcherSetupFailed {
+            message: error.to_string(),
+        })?;
 
     watcher
         .configure(NotifyConfig::default())
@@ -1294,9 +1336,7 @@ fn run_native_watch_loop(
     loop {
         match rx.recv_timeout(poll_interval) {
             Ok(WatchLoopMessage::Fs(Ok(event))) => match collect_native_event_burst(event, rx)? {
-                NativeEventBurst::Events(events) => {
-                    apply_native_event_burst_once(state, &events);
-                }
+                NativeEventBurst::Events(events) => apply_native_event_burst_once(state, &events),
                 NativeEventBurst::Stop => return Ok(()),
             },
             Ok(WatchLoopMessage::Fs(Err(error))) => {
@@ -2417,6 +2457,88 @@ mod tests {
     }
 
     #[test]
+    fn write_and_reparse_updates_snapshot_and_deduplicates_native_echo() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .write_and_reparse(
+                &PageId::new(["Referrer"]).unwrap(),
+                "- after\n".to_owned(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["Referrer"]).unwrap(),
+                    PageId::new(["Target"]).unwrap(),
+                ],
+            }]
+        );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[markdown_event(&workspace, "Referrer.md", true)])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "Referrer.md", true),
+                markdown_event(&workspace, "Referrer.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+    }
+
+    #[test]
+    fn native_event_after_local_write_still_processes_real_foreign_change() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .write_and_reparse(
+                &PageId::new(["Referrer"]).unwrap(),
+                "- local\n".to_owned(),
+                None,
+            )
+            .unwrap();
+        session.drain_events();
+
+        workspace.write_file("Referrer.md", "- foreign [[Target]]\n");
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[markdown_event(&workspace, "Referrer.md", true)])
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["Referrer"]).unwrap(),
+                    PageId::new(["Target"]).unwrap(),
+                ],
+            }]
+        );
+    }
+
+    #[test]
     fn write_block_markdown_updates_source_owned_linked_reference_content() {
         let workspace = TestWorkspace::new("uniseq-session");
         workspace.write_file("Target.md", "");
@@ -2438,6 +2560,78 @@ mod tests {
             .unwrap();
         assert_eq!(refreshed.len(), 1);
         assert_eq!(refreshed[0].block.content, "after [[Target]]");
+    }
+
+    #[test]
+    fn write_block_markdown_updates_snapshot_and_deduplicates_native_echo() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        let linked_ref = session
+            .page_linked_refs(&PageId::new(["Target"]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        session
+            .write_block_markdown(&linked_ref.block.handle, "- after\n".to_owned())
+            .unwrap();
+
+        assert_eq!(
+            session.drain_events(),
+            vec![WorkspaceEvent::PagesChanged {
+                page_ids: vec![
+                    PageId::new(["Referrer"]).unwrap(),
+                    PageId::new(["Target"]).unwrap(),
+                ],
+            }]
+        );
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[markdown_event(&workspace, "Referrer.md", true)])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "Referrer.md", true),
+                markdown_event(&workspace, "Referrer.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
+    }
+
+    #[test]
+    fn structural_create_registers_local_echo_as_non_foreign_change() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+        session.drain_events();
+
+        session
+            .apply_page_create(PageCreate {
+                page_id: PageId::new(["A", "B"]).unwrap(),
+            })
+            .unwrap();
+        session.drain_events();
+
+        session
+            .state
+            .write()
+            .unwrap()
+            .apply_native_event_burst(&[
+                markdown_event(&workspace, "A.md", true),
+                markdown_event(&workspace, "A___B.md", true),
+            ])
+            .unwrap();
+        assert!(session.drain_events().is_empty());
     }
 
     #[test]
