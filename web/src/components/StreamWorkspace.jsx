@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { breadcrumbItemsForStreamSelection } from "./EditorBreadcrumb.jsx";
 import SidebarCalendar from "./SidebarCalendar.jsx";
 import StreamView from "./StreamView.jsx";
-import StreamViewMobile from "./StreamViewMobile.jsx";
 import { areArraysEqual } from "../utils/arrays.js";
 import {
   isDiaryStream,
@@ -177,27 +176,22 @@ export default function StreamWorkspace({
       const streamNames = streamSelection.kind === "stream_dual"
         ? dualStreamNames
         : [streamSelection.streamName];
-      const handleSelectDate = streamSelection.kind === "stream_dual"
-        ? onSelectStreamDual
-        : (dateName) => onSelectStreamSingle(streamSelection.streamName, dateName);
 
       const editorProps = {
+        isMobile,
         selectedDate: selectedStreamDate,
         streamNames,
-        streamPagesByDate: streamPagesByDate,
+        streamPagesByDate,
         pages: regularPages,
         reloadToken: streamReloadToken,
         scrollContainerRef: editorScrollRef,
         onNavigate: onNavigatePage,
         onError,
         onRefresh,
-        onSelectDate: handleSelectDate,
         diaryBlurEnabled,
       };
 
-      return isMobile
-        ? <StreamViewMobile {...editorProps} />
-        : <StreamView {...editorProps} />;
+      return <StreamView {...editorProps} />;
     })()
     : null;
 
@@ -620,7 +614,7 @@ export default function StreamWorkspace({
           {panelChrome(breadcrumbItemsForStreamSelection(streamSelection))}
           <div
             ref={editorScrollRef}
-            className={`editor-panel-scroll${isMobile ? " editor-panel-scroll--mobile-stream" : ""}${isKeyboardVisible ? " editor-panel-scroll--keyboard-visible" : ""}`}
+            className={`editor-panel-scroll${isKeyboardVisible ? " editor-panel-scroll--keyboard-visible" : ""}`}
           >
             {streamEditor}
           </div>

@@ -9,6 +9,7 @@ import {
 } from "../utils/streamWorkspace.js";
 
 export default function StreamView({
+  isMobile = false,
   selectedDate,
   streamNames,
   streamPagesByDate,
@@ -18,11 +19,9 @@ export default function StreamView({
   onNavigate,
   onError,
   onRefresh,
-  onSelectDate,
   diaryBlurEnabled = true,
 }) {
   const isDual = streamNames.length > 1;
-  const [mobileTab, setMobileTab] = useState(() => streamNames[0] ?? null);
   const [focusedEditor, setFocusedEditor] = useState(null);
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
@@ -136,14 +135,6 @@ export default function StreamView({
   }, [focusedEditor, visibleDates]);
 
   useEffect(() => {
-    if (!isDual) return;
-    if (mobileTab && streamNames.includes(mobileTab)) {
-      return;
-    }
-    setMobileTab(streamNames[0] ?? null);
-  }, [isDual, streamNames, mobileTab]);
-
-  useEffect(() => {
     if (focusedEditor && !streamNames.includes(focusedEditor.streamName)) {
       setFocusedEditor(null);
     }
@@ -173,10 +164,6 @@ export default function StreamView({
     }
   }, [focusedEditor, selectedDate, visibleDates, editorReadyByKey, streamNames, streamPagesByDate]);
 
-  function enterFocusMode(dateName, streamName) {
-    setFocusedEditor({ dateName, streamName });
-  }
-
   function editorFocusRefForKey(editorKey) {
     let focusRef = editorFocusRefs.current.get(editorKey);
     if (!focusRef) {
@@ -187,6 +174,9 @@ export default function StreamView({
   }
 
   function focusPaneEditor(event, editorKey) {
+    if (isMobile && event.pointerType && event.pointerType !== "mouse") {
+      return;
+    }
     if (event.target.closest?.(".ProseMirror")) {
       return;
     }
@@ -224,22 +214,7 @@ export default function StreamView({
   }
 
   return (
-    <div className="stream-dual-wrap">
-      {isDual ? (
-        <div className="stream-dual-tabs">
-          {streamNames.map((streamName) => (
-            <button
-              key={streamName}
-              type="button"
-              className={`stream-dual-tab${mobileTab === streamName ? " stream-dual-tab--active" : ""}`}
-              onClick={() => setMobileTab(streamName)}
-            >
-              {streamName}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
+    <div className={`stream-dual-wrap${isMobile ? " stream-dual-wrap--mobile" : ""}`}>
       <div className={`stream-day-list${focusedEditor ? " stream-day-list--has-focus" : ""}`}>
         {visibleDates.map((dateName) => {
           const focusedStreamName = focusedEditor?.dateName === dateName ? focusedEditor.streamName : null;
@@ -316,8 +291,7 @@ export default function StreamView({
                             onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
                             onFocusChange={(focused) => {
                               if (focused) {
-                                enterFocusMode(dateName, streamName);
-                                setMobileTab(streamName);
+                                setFocusedEditor({ dateName, streamName });
                                 return;
                               }
                               setFocusedEditor((current) => {
@@ -355,8 +329,7 @@ export default function StreamView({
                           onReadyChange={(ready) => handleEditorReadyChange(editorKey, ready)}
                           onFocusChange={(focused) => {
                             if (focused) {
-                              enterFocusMode(dateName, streamName);
-                              setMobileTab(streamName);
+                              setFocusedEditor({ dateName, streamName });
                               return;
                             }
                             setFocusedEditor((current) => {
