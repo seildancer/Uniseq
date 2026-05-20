@@ -8,6 +8,7 @@ import { areArraysEqual } from "./utils/arrays.js";
 import pageLeafName from "./utils/pageLeafName.js";
 import { todayDateName } from "./utils/streamDates.js";
 import {
+  dateHasContentForSelection,
   orderStreamNamesForDisplay,
   readStreamName,
   readDualStreamNames,
@@ -617,6 +618,25 @@ function WindowForwardIcon() {
   );
 }
 
+function WindowEyeOpenIcon() {
+  return (
+    <svg className="window-control-toggle-icon" viewBox="0 0 16 12" aria-hidden="true">
+      <path d="M1.5 6C4 1.5 12 1.5 14.5 6C12 10.5 4 10.5 1.5 6Z" />
+      <circle cx="8" cy="6" r="2" />
+    </svg>
+  );
+}
+
+function WindowEyeClosedIcon() {
+  return (
+    <svg className="window-control-toggle-icon" viewBox="0 0 16 12" aria-hidden="true">
+      <path d="M2 1.5 14 10.5" />
+      <path d="M5 4C3.2 5.2 1.5 6.5 1.5 6.5C4 10.5 12 10.5 14.5 6.5" />
+      <path d="M9.5 2.5C11.5 3.5 13.5 5.2 14.5 6.5" />
+    </svg>
+  );
+}
+
 function WindowRefreshIcon() {
   return (
     <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
@@ -675,6 +695,7 @@ export default function App() {
   const [streamNames, setStreamNames] = useState([]);
   const [streamOrder, setStreamOrder] = useState([]);
   const [diaryBlurEnabled, setDiaryBlurEnabled] = useState(true);
+  const [hideEmptyStreamDates, setHideEmptyStreamDates] = useState(false);
   const [selectionHistoryState, setSelectionHistoryState] = useState(() => ({
     entries: [defaultStreamSelection()],
     index: 0,
@@ -973,6 +994,19 @@ export default function App() {
               {syncConflicts.length === 1 ? "Conflict" : `${syncConflicts.length} conflicts`}
             </button>
           ) : null
+        ) : null}
+        {streamSelection ? (
+          <button
+            className={`window-control-button window-control-button--toggle${hideEmptyStreamDates ? " window-control-button--toggle-active" : ""}`}
+            type="button"
+            aria-pressed={hideEmptyStreamDates}
+            aria-label={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
+            title={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
+            onClick={() => setHideEmptyStreamDates((enabled) => !enabled)}
+          >
+            {hideEmptyStreamDates ? <WindowEyeClosedIcon /> : <WindowEyeOpenIcon />}
+            <span className="window-control-button-label">Empty</span>
+          </button>
         ) : null}
         <button
           className="window-control-button"
@@ -3472,6 +3506,7 @@ export default function App() {
                 regularPages={regularPages}
                 streamReloadToken={streamReloadToken}
                 diaryBlurEnabled={diaryBlurEnabled}
+                hideEmptyDates={hideEmptyStreamDates}
                 onDiaryBlurToggle={() => setDiaryBlurEnabled((enabled) => !enabled)}
                 onSidebarWidthChange={(width) => {
                   setSidebarCollapsed(false);

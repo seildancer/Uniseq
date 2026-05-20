@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import StreamSingleEditor from "./StreamSingleEditor";
 import { useLazyStreamDateRange } from "../hooks/useLazyStreamDateRange.js";
-import { formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
+import { compareDateNames, formatDateLabel, maxDateName, todayDateName } from "../utils/streamDates.js";
 import {
+  dateHasAnyStreamContent,
   isDiaryStream,
   streamPageExists,
   streamPageId,
@@ -20,25 +21,71 @@ export default function StreamView({
   onError,
   onRefresh,
   diaryBlurEnabled = true,
+  hideEmptyDates = false,
 }) {
   const isDual = streamNames.length > 1;
   const [focusedEditor, setFocusedEditor] = useState(null);
   const [editorReadyByKey, setEditorReadyByKey] = useState(() => new Map());
   const dayRefs = useRef(new Map());
   const editorFocusRefs = useRef(new Map());
+  const nonEmptyDateNames = useMemo(() => (
+    Array.from(streamPagesByDate.keys())
+      .filter((dateName) => dateHasAnyStreamContent(streamPagesByDate, dateName, streamNames))
+      .sort((leftDateName, rightDateName) => leftDateName.localeCompare(rightDateName))
+  ), [streamNames, streamPagesByDate]);
+  const earliestVisibleDateName = useMemo(() => {
+    if (!hideEmptyDates) {
+      return null;
+    }
+
+    const earliestNonEmptyDateName = nonEmptyDateNames[0] ?? null;
+    if (!earliestNonEmptyDateName) {
+      return selectedDate;
+    }
+    if (!selectedDate) {
+      return earliestNonEmptyDateName;
+    }
+    return compareDateNames(selectedDate, earliestNonEmptyDateName) < 0
+      ? selectedDate
+      : earliestNonEmptyDateName;
+  }, [hideEmptyDates, nonEmptyDateNames, selectedDate]);
+  const latestVisibleDateName = useMemo(() => {
+    if (!hideEmptyDates) {
+      return maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate);
+    }
+
+    const latestNonEmptyDateName = nonEmptyDateNames[nonEmptyDateNames.length - 1] ?? null;
+    if (!latestNonEmptyDateName) {
+      return selectedDate;
+    }
+    if (!selectedDate) {
+      return latestNonEmptyDateName;
+    }
+    return compareDateNames(selectedDate, latestNonEmptyDateName) > 0
+      ? selectedDate
+      : latestNonEmptyDateName;
+  }, [hideEmptyDates, nonEmptyDateNames, selectedDate, streamPagesByDate]);
   const latestDateName = useMemo(
-    () => maxDateName([todayDateName(), selectedDate, ...streamPagesByDate.keys()], selectedDate),
-    [selectedDate, streamPagesByDate],
+    () => latestVisibleDateName,
+    [latestVisibleDateName],
   );
   const { visibleDates: lazyVisibleDates } = useLazyStreamDateRange({
     selectedDate,
+    earliestDateName: earliestVisibleDateName,
     latestDateName,
     scrollContainerRef,
     disabled: Boolean(focusedEditor),
   });
   const visibleDates = useMemo(
-    () => lazyVisibleDates,
-    [lazyVisibleDates],
+    () => (
+      hideEmptyDates
+        ? lazyVisibleDates.filter((dateName) => (
+          dateName === selectedDate
+          || dateHasAnyStreamContent(streamPagesByDate, dateName, streamNames)
+        ))
+        : lazyVisibleDates
+    ),
+    [hideEmptyDates, lazyVisibleDates, selectedDate, streamNames, streamPagesByDate],
   );
   const pendingSelectedScrollRef = useRef(selectedDate);
   const selectedScrollStartedRef = useRef(false);

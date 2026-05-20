@@ -750,6 +750,52 @@ h2 {
   color: #a93226;
 }
 
+.window-control-button--toggle {
+  width: auto;
+  min-width: 0;
+  height: 32px;
+  align-self: center;
+  margin: 0 4px 0 2px;
+  padding: 0 10px 0 9px;
+  border-radius: 10px;
+  gap: 6px;
+}
+
+.window-control-button--toggle .window-control-icon {
+  width: 12px;
+  height: 12px;
+  stroke-width: 1.45;
+}
+
+.window-control-toggle-icon {
+  width: 13px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: 0 0 auto;
+}
+
+.window-control-button-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+}
+
+.window-control-button--toggle-active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.window-control-button--toggle-active:hover,
+.window-control-button--toggle-active:focus-visible {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+
 .window-control-button--close:hover {
   background: #d94b4b;
   color: #ffffff;
@@ -2915,6 +2961,13 @@ code {
     width: var(--mobile-toolbar-button-size);
     min-width: var(--mobile-toolbar-button-size);
     height: var(--mobile-toolbar-button-size);
+    border-radius: 9px;
+  }
+
+  .editor-panel-chrome .window-control-button--toggle {
+    width: auto;
+    min-width: 0;
+    padding: 0 10px 0 9px;
     border-radius: 9px;
   }
 

@@ -25,6 +25,7 @@ export default function StreamWorkspace({
   regularPages,
   streamReloadToken,
   diaryBlurEnabled,
+  hideEmptyDates,
   onDiaryBlurToggle,
   onSidebarWidthChange,
   sidebarCollapsed,
@@ -189,6 +190,7 @@ export default function StreamWorkspace({
         onError,
         onRefresh,
         diaryBlurEnabled,
+        hideEmptyDates,
       };
 
       return <StreamView {...editorProps} />;

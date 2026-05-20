@@ -44,6 +44,40 @@ export function selectionForCalendarDate(selection, dateName) {
   return { kind: "stream_dual", dateName };
 }
 
+export function dateHasAnyStreamContent(streamPagesByDate, dateName, streamNames) {
+  if (!dateName || !Array.isArray(streamNames) || streamNames.length === 0) {
+    return false;
+  }
+
+  const streamNamesForDate = streamPagesByDate.get(dateName);
+  if (!streamNamesForDate) {
+    return false;
+  }
+
+  return streamNames.some((streamName) => streamNamesForDate.has(streamName));
+}
+
+export function dateHasContentForSelection(
+  streamSelection,
+  dateName,
+  streamPagesByDate,
+  dualStreamNames = [],
+) {
+  if (!streamSelection || !dateName) {
+    return false;
+  }
+
+  if (streamSelection.kind === "stream_single" && streamSelection.streamName) {
+    return dateHasAnyStreamContent(streamPagesByDate, dateName, [streamSelection.streamName]);
+  }
+
+  if (streamSelection.kind === "stream_dual") {
+    return dateHasAnyStreamContent(streamPagesByDate, dateName, dualStreamNames);
+  }
+
+  return false;
+}
+
 export function selectionForPageId(pageId, location = null) {
   if (typeof pageId !== "string" || pageId.length === 0) {
     return null;

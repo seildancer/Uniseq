@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  dateHasAnyStreamContent,
+  dateHasContentForSelection,
   isDiaryStream,
   orderStreamNamesForDisplay,
   readDualStreamNames,
@@ -49,6 +51,40 @@ test("selectionForCalendarDate preserves the active stream mode when possible", 
   assert.deepEqual(
     selectionForCalendarDate({ kind: "page", pageId: "pages:A" }, "2026_05_14"),
     { kind: "stream_dual", dateName: "2026_05_14" },
+  );
+});
+
+test("stream date content checks follow the active stream mode", () => {
+  const streamPagesByDate = new Map([
+    ["2026_05_14", new Set(["diary"])],
+    ["2026_05_15", new Set(["journals", "diary"])],
+  ]);
+
+  assert.equal(
+    dateHasAnyStreamContent(streamPagesByDate, "2026_05_14", ["journals", "logs"]),
+    false,
+  );
+  assert.equal(
+    dateHasAnyStreamContent(streamPagesByDate, "2026_05_15", ["journals", "logs"]),
+    true,
+  );
+  assert.equal(
+    dateHasContentForSelection(
+      { kind: "stream_single", streamName: "journals", dateName: "2026_05_14" },
+      "2026_05_14",
+      streamPagesByDate,
+      ["journals", "diary"],
+    ),
+    false,
+  );
+  assert.equal(
+    dateHasContentForSelection(
+      { kind: "stream_dual", dateName: "2026_05_14" },
+      "2026_05_14",
+      streamPagesByDate,
+      ["journals", "diary"],
+    ),
+    true,
   );
 });
 
