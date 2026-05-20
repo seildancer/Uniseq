@@ -27,6 +27,7 @@ export function useEditorPersistence({
   const revisionRef = useRef(revision);
   const persistedTextRef = useRef(text);
   const initializedRef = useRef(false);
+  const persistPromiseRef = useRef(null);
 
   useEffect(() => {
     revisionRef.current = revision;
@@ -35,33 +36,49 @@ export function useEditorPersistence({
 
   async function persist(cleanedText) {
     if (cleanedText === persistedTextRef.current) {
-      return;
+      return false;
     }
 
-    try {
-      const updated = await invoke("write_page_content", {
-        pageId,
-        text: cleanedText,
-        expectedRevision: revisionRef.current,
-      });
-      latestTextRef.current = updated.text;
-      persistedTextRef.current = updated.text;
-      revisionRef.current = updated.revision;
-      onPersisted?.(updated);
-    } catch (error) {
-      if (error?.code === "structural_conflict") {
-        onConflict?.(error);
-        return;
+    if (persistPromiseRef.current) {
+      await persistPromiseRef.current;
+      if (cleanedText === persistedTextRef.current) {
+        return false;
       }
-      console.error(error);
     }
+
+    const persistPromise = (async () => {
+      try {
+        const updated = await invoke("write_page_content", {
+          pageId,
+          text: cleanedText,
+          expectedRevision: revisionRef.current,
+        });
+        latestTextRef.current = updated.text;
+        persistedTextRef.current = updated.text;
+        revisionRef.current = updated.revision;
+        onPersisted?.(updated);
+        return true;
+      } catch (error) {
+        if (error?.code === "structural_conflict") {
+          await onConflict?.(error);
+          return false;
+        }
+        console.error(error);
+        return false;
+      } finally {
+        persistPromiseRef.current = null;
+      }
+    })();
+
+    persistPromiseRef.current = persistPromise;
+    return persistPromise;
   }
 
   useEffect(() => {
-    flushRef.current = () => {
+    flushRef.current = async () => {
       clearTimeout(debounceRef.current);
       const cleaned = cleanEditorMarkdownForPersistence(toStoredMarkdown(latestTextRef.current));
-      void persist(cleaned);
+      return persist(cleaned);
     };
   });
 
