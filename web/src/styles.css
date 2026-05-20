@@ -2181,6 +2181,7 @@ h2 {
   min-height: 0;
   overflow-y: auto;
   scroll-padding: 12px 0 12px;
+  container-type: size;
 }
 
 .editor-panel-scroll--keyboard-visible {
@@ -2189,6 +2190,21 @@ h2 {
 
 .editor-panel-content {
   min-width: 0;
+}
+
+.editor-page-body {
+  display: flex;
+  flex-direction: column;
+  min-height: max(180px, 32vh);
+  min-height: max(180px, 40cqh);
+}
+
+.editor-page-body > .milkdown-editor {
+  flex: 1;
+}
+
+.editor-page-body > .milkdown-editor .ProseMirror {
+  min-height: 100%;
 }
 
 .editor-breadcrumb {

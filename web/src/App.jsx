@@ -3594,16 +3594,18 @@ export default function App() {
                               {loadedPage.title || pageLeafName(loadedPage.page_id) || loadedPage.page_id}
                             </h1>
                           )}
-                          <Editor
-                            pageId={loadedPageId}
-                            text={selectedPageText}
-                            revision={selectedPageRevision}
-                            key={loadedPageId}
-                            pages={regularPages}
-                            onNavigate={handleNavigateToPageId}
-                            onConflict={() => void handleEditorConflict()}
-                            onPersisted={handlePagePersisted}
-                          />
+                          <div className="editor-page-body">
+                            <Editor
+                              pageId={loadedPageId}
+                              text={selectedPageText}
+                              revision={selectedPageRevision}
+                              key={loadedPageId}
+                              pages={regularPages}
+                              onNavigate={handleNavigateToPageId}
+                              onConflict={() => void handleEditorConflict()}
+                              onPersisted={handlePagePersisted}
+                            />
+                          </div>
                           {loadedPageIsRegular ? (
                             <LinkedReferences
                               entries={linkedRefs}
