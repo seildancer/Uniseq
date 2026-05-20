@@ -2195,6 +2195,8 @@ h2 {
 .editor-page-body {
   display: flex;
   flex-direction: column;
+  padding-top: 10px;
+  box-sizing: border-box;
   min-height: max(180px, 32vh);
   min-height: max(180px, 40cqh);
 }

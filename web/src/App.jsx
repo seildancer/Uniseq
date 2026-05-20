@@ -733,6 +733,7 @@ export default function App() {
   const dragHoverExpandTimerRef = useRef(null);
   const suppressPageClickRef = useRef(false);
   const editorTitleInputRef = useRef(null);
+  const pageEditorFocusRef = useRef(null);
   const selectedPageTextRef = useRef(selectedPageText);
   selectedPageTextRef.current = selectedPageText;
   const selectedPageRevisionRef = useRef(selectedPageRevision);
@@ -2860,6 +2861,23 @@ export default function App() {
     void appWindow.startDragging();
   }
 
+  function handlePageEditorWrapperPointerDown(event) {
+    if (event.target.closest?.(".ProseMirror")) {
+      return;
+    }
+    if (event.button !== undefined && event.button !== 0) {
+      return;
+    }
+
+    const didFocus = pageEditorFocusRef.current?.({ atEnd: true });
+    if (!didFocus) {
+      event.currentTarget.querySelector(".ProseMirror")?.focus();
+    }
+    if (event.pointerType === "mouse") {
+      event.preventDefault();
+    }
+  }
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
     localStorage.setItem("theme", darkMode ? "dark" : "light");
@@ -3594,7 +3612,7 @@ export default function App() {
                               {loadedPage.title || pageLeafName(loadedPage.page_id) || loadedPage.page_id}
                             </h1>
                           )}
-                          <div className="editor-page-body">
+                          <div className="editor-page-body" onPointerDown={handlePageEditorWrapperPointerDown}>
                             <Editor
                               pageId={loadedPageId}
                               text={selectedPageText}
@@ -3604,6 +3622,7 @@ export default function App() {
                               onNavigate={handleNavigateToPageId}
                               onConflict={() => void handleEditorConflict()}
                               onPersisted={handlePagePersisted}
+                              focusEditorRef={pageEditorFocusRef}
                             />
                           </div>
                           {loadedPageIsRegular ? (
