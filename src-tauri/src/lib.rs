@@ -351,6 +351,35 @@ impl WorkspaceController {
             .collect())
     }
 
+    fn find_empty_pages(&self) -> CommandResult<Vec<PageSummaryDto>> {
+        let mut empty_pages = Vec::new();
+
+        for page in self.session()?.all_pages() {
+            if matches!(page.location, PageLocation::Pages) && page.child_page_count > 0 {
+                continue;
+            }
+
+            if !self
+                .session()?
+                .page_linked_refs(&page.page_id)
+                .map_err(ErrorDto::from)?
+                .is_empty()
+            {
+                continue;
+            }
+
+            let content = self
+                .session()?
+                .page_content(&page.page_id)
+                .map_err(ErrorDto::from)?;
+            if content.text.trim().is_empty() {
+                empty_pages.push(PageSummaryDto::from(page));
+            }
+        }
+
+        Ok(empty_pages)
+    }
+
     fn all_streams(&self) -> CommandResult<Vec<String>> {
         self.session()?.all_streams().map_err(ErrorDto::from)
     }
@@ -1867,6 +1896,11 @@ fn all_pages(state: State<'_, AppState>) -> CommandResult<Vec<PageSummaryDto>> {
 }
 
 #[tauri::command]
+fn find_empty_pages(state: State<'_, AppState>) -> CommandResult<Vec<PageSummaryDto>> {
+    state.controller.lock().unwrap().find_empty_pages()
+}
+
+#[tauri::command]
 fn all_streams(state: State<'_, AppState>) -> CommandResult<Vec<String>> {
     state.controller.lock().unwrap().all_streams()
 }
@@ -2320,6 +2354,7 @@ pub fn run() {
             sync_conflict_detail,
             resolve_sync_conflict,
             all_pages,
+            find_empty_pages,
             all_streams,
             page_order,
             page_summary,
@@ -3077,6 +3112,43 @@ mod tests {
         assert_eq!(
             fs::read_to_string(root.join("journals").join("2020_01_01.md")).unwrap(),
             "- keep\n"
+        );
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn find_empty_pages_lists_empty_stream_pages_and_leaf_pages_only() {
+        let root = unique_temp_dir("uniseq-app-find-empty-pages");
+        fs::create_dir_all(root.join("pages")).unwrap();
+        write_workspace_file(&root, "pages/EmptyLeaf.md", " \n");
+        write_workspace_file(&root, "pages/Parent.md", "");
+        write_workspace_file(&root, "pages/Parent___Child.md", "- keep\n");
+        write_workspace_file(&root, "pages/NonEmpty.md", "text\n");
+        write_workspace_file(&root, "pages/RefTarget.md", " \n");
+        write_workspace_file(&root, "pages/RefSource.md", "- [[RefTarget]]\n");
+        write_workspace_file(&root, "diary/2020_01_01.md", "\n");
+        write_workspace_file(&root, "journals/2020_01_01.md", "- keep\n");
+
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let empty_page_ids = controller
+            .find_empty_pages()
+            .unwrap()
+            .into_iter()
+            .map(|page| page.page_id)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            empty_page_ids,
+            vec![
+                "pages:EmptyLeaf".to_owned(),
+                "stream:diary/2020_01_01".to_owned()
+            ]
         );
 
         controller.close_workspace();

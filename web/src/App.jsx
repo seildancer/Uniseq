@@ -322,6 +322,23 @@ function isPageInSubtree(pageId, rootPageId) {
   return pageId === rootPageId || pageId.startsWith(rootPageId + "/");
 }
 
+function parseStreamPageId(pageId) {
+  if (typeof pageId !== "string" || !pageId.startsWith("stream:")) {
+    return null;
+  }
+
+  const normalizedPageId = pageId.slice("stream:".length);
+  const separatorIndex = normalizedPageId.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex >= normalizedPageId.length - 1) {
+    return null;
+  }
+
+  return {
+    streamName: normalizedPageId.slice(0, separatorIndex),
+    dateName: normalizedPageId.slice(separatorIndex + 1),
+  };
+}
+
 function remapPageOrderEntries(pageOrderByParent, sourcePageId, targetPageId) {
   const next = {};
 
@@ -1062,6 +1079,72 @@ export default function App() {
     };
   }
 
+  function replaceDeletedStreamPageSelectionEntry(entry, deletedStreamPage) {
+    if (
+      entry.kind !== "stream_single"
+      || !deletedStreamPage
+      || entry.streamName !== deletedStreamPage.streamName
+      || entry.dateName !== deletedStreamPage.dateName
+    ) {
+      return entry;
+    }
+
+    return {
+      kind: "stream_dual",
+      dateName: entry.dateName,
+    };
+  }
+
+  function applyDeletedPageIds(deletedPageIds) {
+    if (!Array.isArray(deletedPageIds) || deletedPageIds.length === 0) {
+      return;
+    }
+
+    const regularPageIds = deletedPageIds.filter((pageId) => typeof pageId === "string" && !pageId.startsWith("stream:"));
+    const deletedStreamPages = deletedPageIds
+      .map(parseStreamPageId)
+      .filter(Boolean);
+    const fallbackSelection = regularPageIds.length > 0
+      ? { kind: "page", pageId: "" }
+      : defaultStreamSelection();
+
+    if (regularPageIds.length > 0) {
+      setPageOrderByParent((current) => regularPageIds.reduce(
+        (next, pageId) => removePageOrderEntries(next, pageId),
+        current,
+      ));
+    }
+
+    transformSelectionHistory((entry) => {
+      let nextEntry = entry;
+
+      for (const pageId of regularPageIds) {
+        nextEntry = removePageSelectionEntry(nextEntry, pageId);
+        if (!nextEntry) {
+          return null;
+        }
+      }
+
+      for (const deletedStreamPage of deletedStreamPages) {
+        nextEntry = replaceDeletedStreamPageSelectionEntry(nextEntry, deletedStreamPage);
+      }
+
+      return nextEntry;
+    }, fallbackSelection);
+
+    const selectedPageWasDeleted = regularPageIds.some((pageId) => isPageInSubtree(selectedPageId, pageId));
+    const loadedPageWasDeleted = deletedPageIds.includes(loadedPageId)
+      || regularPageIds.some((pageId) => isPageInSubtree(loadedPageId, pageId));
+
+    if (selectedPageWasDeleted || loadedPageWasDeleted) {
+      setSelectedPageText("");
+      setSelectedPageRevision(null);
+    }
+    if (loadedPageWasDeleted) {
+      setLoadedPageId(null);
+    }
+  }
+
   function handleNavigateBack() {
     setSelectionHistoryState((current) => (
       current.index === 0
@@ -1789,6 +1872,23 @@ export default function App() {
   function openDeleteModal(pageId) {
     setPageMenuOpenId(null);
     setModal({ type: "delete", pageId });
+  }
+
+  async function openRemoveEmptyModal() {
+    setMenuOpen(false);
+    setActionError(null);
+    setBusyAction("find-empty");
+    try {
+      const emptyPages = await invoke("find_empty_pages");
+      setModal({
+        type: "remove_empty",
+        pages: Array.isArray(emptyPages) ? emptyPages : [],
+      });
+    } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
   }
 
   function closeModal() {
@@ -2561,21 +2661,63 @@ export default function App() {
     setActionError(null);
     try {
       await invoke("delete_page", { pageId: modal.pageId });
-      setPageOrderByParent((current) => removePageOrderEntries(current, modal.pageId));
-      transformSelectionHistory(
-        (entry) => removePageSelectionEntry(entry, modal.pageId),
-        { kind: "page", pageId: "" },
-      );
-      if (isPageInSubtree(selectedPageId, modal.pageId)) {
-        setSelectedPageText("");
-        setSelectedPageRevision(null);
-      }
-      if (isPageInSubtree(loadedPageId, modal.pageId)) {
-        setLoadedPageId(null);
-      }
+      applyDeletedPageIds([modal.pageId]);
       await loadWorkspaceLists();
       closeModal();
     } catch (error) {
+      setActionError(normalizeError(error));
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleConfirmRemoveEmpty() {
+    if (modal?.type !== "remove_empty") return;
+
+    const emptyPages = Array.isArray(modal.pages) ? modal.pages : [];
+    if (emptyPages.length === 0) {
+      closeModal();
+      return;
+    }
+
+    setBusyAction("remove-empty");
+    setActionError(null);
+    const removedPageIds = [];
+
+    try {
+      for (const page of emptyPages) {
+        const streamName = readStreamName(page.location);
+        if (streamName) {
+          await invoke("delete_stream_page", {
+            streamName,
+            dateName: pageLeafName(page.page_id),
+          });
+        } else {
+          await invoke("delete_page", { pageId: page.page_id });
+        }
+        removedPageIds.push(page.page_id);
+      }
+
+      applyDeletedPageIds(removedPageIds);
+      await loadWorkspaceLists();
+      closeModal();
+      setNotice({
+        id: Date.now(),
+        code: "remove_empty",
+        message: `Removed ${removedPageIds.length} empty ${removedPageIds.length === 1 ? "file" : "files"}.`,
+      });
+    } catch (error) {
+      if (removedPageIds.length > 0) {
+        const removedPageIdSet = new Set(removedPageIds);
+        applyDeletedPageIds(removedPageIds);
+        setModal((current) => current?.type === "remove_empty"
+          ? {
+            ...current,
+            pages: (current.pages ?? []).filter((page) => !removedPageIdSet.has(page.page_id)),
+          }
+          : current);
+        await loadWorkspaceLists().catch(() => { });
+      }
       setActionError(normalizeError(error));
     } finally {
       setBusyAction("");
@@ -3505,6 +3647,16 @@ export default function App() {
                 >
                   Info
                 </button>
+                <button
+                  className="topbar-menu-item"
+                  type="button"
+                  disabled={busyAction === "find-empty" || busyAction === "remove-empty"}
+                  onClick={() => {
+                    void openRemoveEmptyModal();
+                  }}
+                >
+                  {busyAction === "find-empty" ? "Checking..." : "Remove empty"}
+                </button>
                 <div className="topbar-menu-divider"></div>
                 <button
                   className="topbar-menu-item topbar-menu-item--danger"
@@ -3823,12 +3975,12 @@ export default function App() {
             ) : null}
           </section>
 
-          {modal && (
-            <div className="modal-overlay" onClick={closeModal}>
-              <div
-                className={`modal${modal.type === "search" ? " modal--search" : ""}${modal.type === "sync-setup" || modal.type === "sync-conflicts" ? " modal--sync" : ""}`}
-                onClick={(e) => e.stopPropagation()}
-              >
+            {modal && (
+              <div className="modal-overlay" onClick={closeModal}>
+                <div
+                  className={`modal${modal.type === "search" ? " modal--search" : ""}${modal.type === "sync-setup" || modal.type === "sync-conflicts" ? " modal--sync" : ""}${modal.type === "remove_empty" ? " modal--remove-empty" : ""}`}
+                  onClick={(e) => e.stopPropagation()}
+                >
                 {modal.type === "rename" && (
                   <>
                     <h3>Rename page</h3>
@@ -4390,6 +4542,47 @@ export default function App() {
                         onClick={() => void handleConfirmDelete()}
                       >
                         {busyAction === "delete" ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {modal.type === "remove_empty" && (
+                  <>
+                    <h3>Remove empty</h3>
+                    <p>
+                      {modal.pages.length === 0
+                        ? "No empty markdown files were found."
+                        : `Review ${modal.pages.length} empty ${modal.pages.length === 1 ? "file" : "files"} before deleting them.`}
+                    </p>
+                    <div className="modal-list">
+                      {modal.pages.length === 0 ? (
+                        <p className="topbar-search-empty">No empty regular pages or stream files.</p>
+                      ) : (
+                        modal.pages.map((page) => {
+                          const streamName = readStreamName(page.location);
+                          return (
+                            <div key={page.page_id} className="modal-list-item modal-list-item--static">
+                              <div className="modal-list-item-title">
+                                <span className="modal-list-badge">{streamName ? "Stream" : "Page"}</span>
+                                <strong>{pageLabel(page)}</strong>
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                    <div className="modal-actions">
+                      <button className="secondary-button" type="button" onClick={closeModal}>
+                        Cancel
+                      </button>
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={busyAction === "remove-empty" || modal.pages.length === 0}
+                        onClick={() => void handleConfirmRemoveEmpty()}
+                      >
+                        {busyAction === "remove-empty" ? "Removing..." : "Delete empty"}
                       </button>
                     </div>
                   </>

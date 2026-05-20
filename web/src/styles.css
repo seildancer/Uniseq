@@ -3084,6 +3084,14 @@ code {
   overflow: auto;
 }
 
+.modal--remove-empty {
+  max-width: min(720px, calc(100vw - 48px));
+  width: min(720px, calc(100vw - 48px));
+  max-height: min(88vh, 760px);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
 .modal h3 {
   margin: 0;
   font-size: 1.1rem;
@@ -3137,6 +3145,44 @@ code {
 
 .modal-list-item--active {
   background: var(--selected);
+}
+
+.modal-list-item--static {
+  cursor: default;
+  display: grid;
+  gap: 4px;
+}
+
+.modal-list-item--static:hover {
+  background: transparent;
+}
+
+.modal-list-item-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal-list-badge,
+.modal-list-item-meta {
+  color: var(--muted);
+}
+
+.modal-list-badge {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.modal-list-item-meta {
+  font-size: 0.82rem;
+  word-break: break-all;
 }
 
 .modal-tree-wrap {
