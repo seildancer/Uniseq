@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { WorkspaceContext } from "./WorkspaceContext.js";
 import Editor from "./Editor.jsx";
 import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
@@ -94,6 +95,143 @@ function shouldLogSyncProgress(progress) {
 
 function pageLabel(page) {
   return page.title || pageLeafName(page.page_id) || page.page_id;
+}
+
+function PageTreeMenu({
+  isOpen,
+  onToggle,
+  onRename,
+  onMove,
+  onDelete,
+}) {
+  const buttonRef = useRef(null);
+  const dropdownRef = useRef(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setMenuPosition(null);
+      return undefined;
+    }
+
+    function updateMenuPosition() {
+      const button = buttonRef.current;
+      const dropdown = dropdownRef.current;
+      if (!button || !dropdown) {
+        return;
+      }
+
+      const buttonRect = button.getBoundingClientRect();
+      const dropdownRect = dropdown.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const viewportMargin = 8;
+      const gap = 4;
+      const spaceAbove = Math.max(0, buttonRect.top - viewportMargin - gap);
+      const spaceBelow = Math.max(0, viewportHeight - buttonRect.bottom - viewportMargin - gap);
+      const openUpward = spaceBelow < dropdownRect.height && spaceAbove > spaceBelow;
+      const availableHeight = openUpward ? spaceAbove : spaceBelow;
+      const unclampedTop = openUpward
+        ? buttonRect.top - dropdownRect.height - gap
+        : buttonRect.bottom + gap;
+      const unclampedLeft = buttonRect.right - dropdownRect.width;
+      const maxTop = Math.max(viewportMargin, viewportHeight - viewportMargin - dropdownRect.height);
+      const maxLeft = Math.max(viewportMargin, viewportWidth - viewportMargin - dropdownRect.width);
+
+      setMenuPosition({
+        top: Math.min(Math.max(viewportMargin, unclampedTop), maxTop),
+        left: Math.min(Math.max(viewportMargin, unclampedLeft), maxLeft),
+        maxHeight: Math.max(0, availableHeight),
+        placement: openUpward ? "top" : "bottom",
+      });
+    }
+
+    updateMenuPosition();
+    window.addEventListener("resize", updateMenuPosition);
+    window.addEventListener("scroll", updateMenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition);
+      window.removeEventListener("scroll", updateMenuPosition, true);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        onToggle();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onToggle]);
+
+  return (
+    <div className="page-tree-menu-wrap">
+      <button
+        ref={buttonRef}
+        className="page-tree-action-btn"
+        type="button"
+        aria-label="More options"
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
+        onClick={onToggle}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
+          <circle cx="3" cy="8" r="1.5" />
+          <circle cx="8" cy="8" r="1.5" />
+          <circle cx="13" cy="8" r="1.5" />
+        </svg>
+      </button>
+      {isOpen && createPortal(
+        <div
+          ref={dropdownRef}
+          className="page-tree-dropdown"
+          data-placement={menuPosition?.placement ?? "bottom"}
+          role="menu"
+          style={menuPosition
+            ? {
+                top: menuPosition.top,
+                left: menuPosition.left,
+                maxHeight: menuPosition.maxHeight,
+              }
+            : { visibility: "hidden" }}
+        >
+          <button
+            className="page-tree-dropdown-item"
+            type="button"
+            role="menuitem"
+            onClick={onRename}
+          >
+            Rename
+          </button>
+          <button
+            className="page-tree-dropdown-item"
+            type="button"
+            role="menuitem"
+            onClick={onMove}
+          >
+            Move
+          </button>
+          <button
+            className="page-tree-dropdown-item"
+            type="button"
+            role="menuitem"
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
 }
 
 function searchResultLabel(result) {
@@ -441,6 +579,7 @@ function PageTree({
           isActive ? "page-tree-row--active" : "",
           isPicked ? "page-tree-row--picked" : "",
           isDisabled ? "page-tree-row--disabled" : "",
+          isMenuOpen ? "page-tree-row--menu-open" : "",
           isDragged ? "page-tree-row--dragged" : "",
           hoverMode === "before" ? "page-tree-row--drop-before" : "",
           hoverMode === "after" ? "page-tree-row--drop-after" : "",
@@ -510,46 +649,13 @@ function PageTree({
 
               {!pickerMode && (
                 <div className="page-tree-actions">
-                  <div className="page-tree-menu-wrap">
-                    <button
-                      className="page-tree-action-btn"
-                      type="button"
-                      aria-label="More options"
-                      aria-expanded={isMenuOpen}
-                      onClick={() => onPageMenuToggle(page.page_id)}
-                    >
-                      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true">
-                        <circle cx="3" cy="8" r="1.5" />
-                        <circle cx="8" cy="8" r="1.5" />
-                        <circle cx="13" cy="8" r="1.5" />
-                      </svg>
-                    </button>
-                    {isMenuOpen && (
-                      <div className="page-tree-dropdown">
-                        <button
-                          className="page-tree-dropdown-item"
-                          type="button"
-                          onClick={() => onRename(page.page_id)}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          className="page-tree-dropdown-item"
-                          type="button"
-                          onClick={() => onMove(page.page_id)}
-                        >
-                          Move
-                        </button>
-                        <button
-                          className="page-tree-dropdown-item"
-                          type="button"
-                          onClick={() => onDelete(page.page_id)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
+                  <PageTreeMenu
+                    isOpen={isMenuOpen}
+                    onToggle={() => onPageMenuToggle(page.page_id)}
+                    onRename={() => onRename(page.page_id)}
+                    onMove={() => onMove(page.page_id)}
+                    onDelete={() => onDelete(page.page_id)}
+                  />
                   <button
                     className="page-tree-action-btn"
                     type="button"
@@ -2985,13 +3091,28 @@ export default function App() {
 
   useEffect(() => {
     function handleClickOutside(event) {
-      if (!event.target.closest(".page-tree-menu-wrap")) {
+      if (
+        !event.target.closest(".page-tree-menu-wrap")
+        && !event.target.closest(".page-tree-dropdown")
+      ) {
         setPageMenuOpenId(null);
       }
     }
+
+    function handleScroll(event) {
+      if (event.target.closest?.(".page-tree-dropdown")) {
+        return;
+      }
+      setPageMenuOpenId(null);
+    }
+
     if (pageMenuOpenId !== null) {
       document.addEventListener("mousedown", handleClickOutside);
-      return () => document.removeEventListener("mousedown", handleClickOutside);
+      document.addEventListener("scroll", handleScroll, true);
+      return () => {
+        document.removeEventListener("mousedown", handleClickOutside);
+        document.removeEventListener("scroll", handleScroll, true);
+      };
     }
   }, [pageMenuOpenId]);
 
