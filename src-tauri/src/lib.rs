@@ -326,7 +326,7 @@ impl WorkspaceController {
         let _ = self.create_page("pages:page/subpage".to_string());
         let _ = self.write_page_content(
             "pages:page/subpage".to_string(),
-            "subpage can be made as well!".to_string(),
+            "subpages can be made as well!".to_string(),
             None,
         );
     }
