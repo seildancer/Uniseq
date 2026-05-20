@@ -66,6 +66,7 @@ const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
+const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
 const STREAM_ORDER_STORAGE_KEY_PREFIX = "streamOrder:";
 const UNISEQ_SYNC_ROOT_PREFIX = import.meta.env.VITE_SYNC_ROOT_PREFIX ?? "https://sync.example.com";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? "";
