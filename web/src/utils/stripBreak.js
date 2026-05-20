@@ -1,5 +1,6 @@
 const FENCE_RE = /^```/;
 const WIKILINK_RE = /\\?\[\\?\[([^\]\n]*?)\\?\]\\?\]/g;
+const HASHTAG_REF_RE = /(^|[^A-Za-z0-9_./-])(#[A-Za-z0-9_./\\-]+)/g;
 const LIST_MARKER_RE = /^\s*(?:[-*+] |\d+[.)] )/;
 const INDENTED_LIST_MARKER_RE = /^\s{2,}(?:[-*+] |\d+[.)] )/;
 
@@ -63,6 +64,20 @@ function unescapeLeadingHashTag(line) {
   return line.replace(/^(\s*(?:[-*+] |\d+[.)] )?)\\#(?=\S)/, "$1#");
 }
 
+function normalizePageRefBody(text) {
+  return text.replace(/\\([_./-])/g, "$1");
+}
+
+function normalizeWikilinks(line) {
+  return line.replace(WIKILINK_RE, (_match, target) => `[[${normalizePageRefBody(target)}]]`);
+}
+
+function normalizeHashtagRefBodies(line) {
+  return line.replace(HASHTAG_REF_RE, (_match, prefix, hashtagRef) => {
+    return `${prefix}${normalizePageRefBody(hashtagRef)}`;
+  });
+}
+
 function collapseListSpacingOutsideFencedCode(markdown) {
   const lines = markdown.split("\n");
   let inFence = false;
@@ -94,7 +109,7 @@ function collapseListSpacingOutsideFencedCode(markdown) {
 
 export function normalizeWikilinksOutsideFencedCode(markdown) {
   return mapOutsideFencedCode(markdown, (line) =>
-    line.replace(WIKILINK_RE, "[[$1]]")
+    normalizeWikilinks(line)
   );
 }
 
@@ -107,10 +122,12 @@ export function stripBreakOutsideFencedCode(markdown) {
 export function cleanEditorMarkdownForPersistence(markdown) {
   return collapseListSpacingOutsideFencedCode(
     mapOutsideFencedCode(markdown, (line) =>
-      unescapeLeadingHashTag(
-        line
-          .replace(WIKILINK_RE, "[[$1]]")
-          .replace(/<br\s*\/?>/gi, "")
+      normalizeHashtagRefBodies(
+        unescapeLeadingHashTag(
+          normalizeWikilinks(
+            line.replace(/<br\s*\/?>/gi, "")
+          )
+        )
       )
     )
   );

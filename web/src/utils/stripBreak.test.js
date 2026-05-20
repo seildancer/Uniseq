@@ -12,12 +12,30 @@ test("cleanEditorMarkdownForPersistence normalizes escaped hash tags at list sta
   );
 });
 
+test("cleanEditorMarkdownForPersistence unescapes hashtag page-ref bodies", () => {
+  const source = "- \\#some\\_page and #other\\_page";
+
+  assert.equal(
+    cleanEditorMarkdownForPersistence(source),
+    "- #some_page and #other_page",
+  );
+});
+
 test("cleanEditorMarkdownForPersistence keeps escaped headings intact", () => {
   const source = "\\# heading";
 
   assert.equal(
     cleanEditorMarkdownForPersistence(source),
     "\\# heading",
+  );
+});
+
+test("cleanEditorMarkdownForPersistence unescapes wikilink page-ref bodies", () => {
+  const source = "- \\[\\[some\\_page\\]\\]";
+
+  assert.equal(
+    cleanEditorMarkdownForPersistence(source),
+    "- [[some_page]]",
   );
 });
 
@@ -40,10 +58,19 @@ test("cleanEditorMarkdownForPersistence does not rewrite fenced code", () => {
 });
 
 test("cleanEditorMarkdownForPersistence leaves inline code spans untouched", () => {
-  const source = "- `\\[\\[A\\]\\] \\#foo <br>` and \\[\\[B\\]\\]";
+  const source = "- `\\[\\[A\\_B\\]\\] \\#foo\\_bar <br>` and \\[\\[B\\_C\\]\\] and #D\\_E";
 
   assert.equal(
     cleanEditorMarkdownForPersistence(source),
-    "- `\\[\\[A\\]\\] \\#foo <br>` and [[B]]",
+    "- `\\[\\[A\\_B\\]\\] \\#foo\\_bar <br>` and [[B_C]] and #D_E",
+  );
+});
+
+test("cleanEditorMarkdownForPersistence leaves escaped underscores outside refs untouched", () => {
+  const source = "plain some\\_text and #some\\_page";
+
+  assert.equal(
+    cleanEditorMarkdownForPersistence(source),
+    "plain some\\_text and #some_page",
   );
 });
