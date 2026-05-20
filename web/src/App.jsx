@@ -1136,9 +1136,19 @@ export default function App() {
     setActionError(null);
 
     try {
-      const defaultPath = await invoke("get_default_workspace_path");
-      await openWorkspaceRoot(defaultPath);
+      const openedWorkspace = await invoke("open_or_create_default_workspace");
+      setWorkspace(openedWorkspace);
+      resetSelectionHistory(defaultStreamSelection());
+      setLastStreamDate(todayDateName());
+      setStreamReloadToken(0);
+      setSelectedPageText("");
+      setSelectedPageRevision(null);
+      setLinkedRefs([]);
+      setLoadedPageId(null);
+      await loadWorkspaceLists();
+      await loadSyncStatus().catch(() => setSyncStatus(null));
       setStartupError(null);
+      setMode("workspace");
     } catch (error) {
       setActionError(normalizeError(error));
     } finally {
@@ -2944,43 +2954,20 @@ export default function App() {
       setMode("booting");
       setStartupError(null);
 
-      try {
-        const lastWorkspacePath = await invoke("get_last_workspace_path");
-        if (!lastWorkspacePath) {
-          if (isBootEffectMountedRef.current) {
-            if (window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches) {
-              try {
-                const defaultPath = await invoke("get_default_workspace_path");
-                await openWorkspaceRoot(defaultPath);
-              } catch {
-                setMode("onboarding");
-              }
-            } else {
+        try {
+          const lastWorkspacePath = await invoke("get_last_workspace_path");
+          if (!lastWorkspacePath) {
+            if (isBootEffectMountedRef.current) {
               setMode("onboarding");
             }
+            return;
           }
-          return;
-        }
 
-        await openWorkspaceRoot(lastWorkspacePath);
-      } catch (error) {
-        await invoke("clear_last_workspace_path").catch(() => undefined);
+          await openWorkspaceRoot(lastWorkspacePath);
+        } catch (error) {
+          await invoke("clear_last_workspace_path").catch(() => undefined);
 
-        if (isBootEffectMountedRef.current) {
-          if (window.matchMedia(MOBILE_WINDOW_CHROME_MEDIA_QUERY).matches) {
-            try {
-              const defaultPath = await invoke("get_default_workspace_path");
-              await openWorkspaceRoot(defaultPath);
-            } catch (fallbackError) {
-              setStartupError({
-                code: "workspace_reopen_failed",
-                message: "Could not open workspace. Please try again.",
-                path: null,
-                cause: normalizeError(fallbackError),
-              });
-              setMode("onboarding");
-            }
-          } else {
+          if (isBootEffectMountedRef.current) {
             setStartupError({
               code: "workspace_reopen_failed",
               message:
@@ -2992,7 +2979,6 @@ export default function App() {
           }
         }
       }
-    }
 
     void boot();
 

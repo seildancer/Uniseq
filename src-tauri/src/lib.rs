@@ -27,6 +27,7 @@ const PAGE_ORDER_FILE_NAME: &str = "page-order.json";
 const OLD_PAGE_ORDER_STORE_FILE_NAME: &str = "workspace-page-order.json";
 const ROOT_PARENT_ORDER_KEY: &str = "__root__";
 const SYNC_PROGRESS_EVENT: &str = "sync-progress";
+const DEFAULT_WORKSPACE_FOLDER_NAME: &str = "default_workspace";
 
 #[derive(Default)]
 struct AppState {
@@ -319,7 +320,7 @@ impl WorkspaceController {
         let _ = self.create_page("pages:page".to_string());
         let _ = self.write_page_content(
             "pages:page".to_string(),
-            "Time-independent (timeless/persistent) information can be put in a page".to_string(),
+            "We suggest timeless, persistent information to reside here.".to_string(),
             None,
         );
         let _ = self.create_page("pages:page/subpage".to_string());
@@ -2125,11 +2126,31 @@ fn open_url(url: String) {
 
 #[tauri::command]
 fn get_default_workspace_path(app: AppHandle) -> CommandResult<String> {
-    let data_dir = app.path().app_data_dir().map_err(|error| {
-        ErrorDto::app_config_unavailable(format!("failed to resolve app data directory: {error}"))
-    })?;
-    let workspace_path = data_dir.join("workspace");
+    let workspace_path = default_workspace_path(&app)?;
     Ok(workspace_path.to_string_lossy().replace('\\', "/"))
+}
+
+#[tauri::command]
+fn open_or_create_default_workspace(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<WorkspaceOpenDto> {
+    let parent_path = workspace_storage_dir(&app)?;
+    fs::create_dir_all(&parent_path).map_err(|error| ErrorDto::io(&parent_path, &error))?;
+
+    let default_root = parent_path.join(DEFAULT_WORKSPACE_FOLDER_NAME);
+    let mut controller = state.controller.lock().unwrap();
+    let opened = if default_root.join("pages").is_dir() {
+        controller.open_workspace(default_root.to_string_lossy().to_string())?
+    } else {
+        controller.create_workspace(
+            parent_path.to_string_lossy().to_string(),
+            DEFAULT_WORKSPACE_FOLDER_NAME.to_owned(),
+        )?
+    };
+    controller.start_sync_loop(app.clone(), Arc::clone(&state.sync_lock));
+    write_last_workspace_path(&app, &opened.root_path)?;
+    Ok(opened)
 }
 
 // Swift implementation required in the Xcode project (src-tauri/gen/apple):
@@ -2195,14 +2216,32 @@ fn remote_workspace_path(
     sync_root_url: &str,
     remote_workspace_id: &str,
 ) -> CommandResult<PathBuf> {
+    Ok(
+        workspace_storage_dir(app)?.join(safe_remote_folder_name(&format!(
+            "{sync_root_url}/{remote_workspace_id}"
+        ))),
+    )
+}
+
+fn workspace_storage_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     let data_dir = app.path().app_data_dir().map_err(|error| {
         ErrorDto::app_config_unavailable(format!("failed to resolve app data directory: {error}"))
     })?;
-    Ok(data_dir
-        .join("remote-workspaces")
-        .join(safe_remote_folder_name(&format!(
-            "{sync_root_url}/{remote_workspace_id}"
-        ))))
+    Ok(workspace_storage_dir_from_app_data(&data_dir))
+}
+
+fn default_workspace_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(default_workspace_path_from_storage_root(
+        &workspace_storage_dir(app)?,
+    ))
+}
+
+fn workspace_storage_dir_from_app_data(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("workspace")
+}
+
+fn default_workspace_path_from_storage_root(storage_root: &Path) -> PathBuf {
+    storage_root.join(DEFAULT_WORKSPACE_FOLDER_NAME)
 }
 
 fn safe_remote_folder_name(sync_root_url: &str) -> String {
@@ -2304,6 +2343,7 @@ pub fn run() {
             stop_watching,
             open_url,
             get_default_workspace_path,
+            open_or_create_default_workspace,
             open_icloud_workspace,
             create_stream_page,
             delete_stream,
@@ -2672,6 +2712,26 @@ mod tests {
     }
 
     #[test]
+    fn workspace_storage_paths_share_the_same_root_directory() {
+        let app_data_dir = PathBuf::from("/data/user/0/com.seildancer.uniseq");
+        let storage_root = workspace_storage_dir_from_app_data(&app_data_dir);
+
+        assert_eq!(storage_root, app_data_dir.join("workspace"));
+        assert_eq!(
+            default_workspace_path_from_storage_root(&storage_root),
+            app_data_dir.join("workspace").join("default_workspace")
+        );
+        assert_eq!(
+            storage_root.join(safe_remote_folder_name(
+                "https://sync.example.com/workspace-123"
+            )),
+            app_data_dir
+                .join("workspace")
+                .join("https-sync.example.com-workspace-123")
+        );
+    }
+
+    #[test]
     fn page_id_string_round_trips_for_pages_and_streams() {
         let page = PageId::new(["A", "B"]).unwrap();
         let stream = PageId::stream(
@@ -2825,7 +2885,18 @@ mod tests {
         assert!(workspace_root.join("uniseq").is_dir());
         assert!(workspace_root.join("journals").is_dir());
         assert!(workspace_root.join("diary").is_dir());
-        assert!(controller.all_pages().unwrap().is_empty());
+        let today = today_date_name();
+        let page_ids = controller
+            .all_pages()
+            .unwrap()
+            .into_iter()
+            .map(|page| page.page_id)
+            .collect::<Vec<_>>();
+        assert_eq!(page_ids.len(), 4);
+        assert!(page_ids.contains(&format!("stream:journals/{today}")));
+        assert!(page_ids.contains(&format!("stream:diary/{today}")));
+        assert!(page_ids.contains(&"pages:page".to_owned()));
+        assert!(page_ids.contains(&"pages:page/subpage".to_owned()));
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
@@ -2845,7 +2916,19 @@ mod tests {
         assert_eq!(PathBuf::from(&opened.root_path), root.join("Notebook"));
         assert!(root.join("Notebook").join("journals").is_dir());
         assert!(root.join("Notebook").join("diary").is_dir());
-        assert_eq!(controller.all_pages().unwrap().len(), 1);
+        let today = today_date_name();
+        let page_ids = controller
+            .all_pages()
+            .unwrap()
+            .into_iter()
+            .map(|page| page.page_id)
+            .collect::<Vec<_>>();
+        assert_eq!(page_ids.len(), 5);
+        assert!(page_ids.contains(&"pages:A".to_owned()));
+        assert!(page_ids.contains(&format!("stream:journals/{today}")));
+        assert!(page_ids.contains(&format!("stream:diary/{today}")));
+        assert!(page_ids.contains(&"pages:page".to_owned()));
+        assert!(page_ids.contains(&"pages:page/subpage".to_owned()));
 
         controller.close_workspace();
         let _ = fs::remove_dir_all(root);
