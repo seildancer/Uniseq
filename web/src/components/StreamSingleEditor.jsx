@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import MilkdownMarkdownEditor from "./MilkdownMarkdownEditor";
 import { useMarkdownEditorBridge } from "../hooks/useMarkdownEditorBridge";
 import { useEditorPersistence } from "../hooks/useEditorPersistence";
@@ -16,12 +16,14 @@ function BackedStreamEditor({
   onFocusChange,
 }) {
   const { flushRef, onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
+  const [isFocused, setIsFocused] = useState(false);
 
   useEditorPersistence({
     get: getEditor,
     text,
     revision,
     pageId,
+    isFocused,
     flushRef,
     onMarkdownUpdatedRef,
     onConflict,
@@ -38,7 +40,10 @@ function BackedStreamEditor({
       onMarkdownUpdatedRef={onMarkdownUpdatedRef}
       editorGetRef={editorGetRef}
       focusEditorRef={focusEditorRef}
-      onFocusChange={onFocusChange}
+      onFocusChange={(focused) => {
+        setIsFocused(focused);
+        onFocusChange?.(focused);
+      }}
     />
   );
 }

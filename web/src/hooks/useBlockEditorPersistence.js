@@ -11,6 +11,7 @@ export function useBlockEditorPersistence({
   get,
   blockHandle,
   text,
+  isFocused,
   flushRef,
   onMarkdownUpdatedRef,
   onConflict,
@@ -26,6 +27,8 @@ export function useBlockEditorPersistence({
   const initializedRef = useRef(false);
   const persistPromiseRef = useRef(null);
   const debounceRef = useRef(null);
+  const isFocusedRef = useRef(isFocused);
+  isFocusedRef.current = isFocused;
 
   useEffect(() => {
     handleRef.current = blockHandle;
@@ -85,6 +88,7 @@ export function useBlockEditorPersistence({
       latestTextRef,
       suppressWriteRef,
       workspaceRoot: workspaceRootRef.current,
+      shouldApply: () => !isFocusedRef.current,
     });
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -9,6 +9,7 @@ export function applyExternalEditorText({
   suppressWriteRef,
   workspaceRoot,
   clearPendingWrite,
+  shouldApply,
 }) {
   if (!initializedRef.current) {
     initializedRef.current = true;
@@ -16,7 +17,7 @@ export function applyExternalEditorText({
   }
 
   const editor = getEditor();
-  if (!editor || nextText === latestTextRef.current) {
+  if (!editor || nextText === latestTextRef.current || shouldApply?.() === false) {
     return;
   }
 

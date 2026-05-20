@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import MilkdownMarkdownEditor from "./components/MilkdownMarkdownEditor";
 import { useMarkdownEditorBridge } from "./hooks/useMarkdownEditorBridge";
 import { useBlockEditorPersistence } from "./hooks/useBlockEditorPersistence";
@@ -12,6 +12,7 @@ export default function BlockEditor({
   onFocusChange,
 }) {
   const { flushRef, onMarkdownUpdatedRef, editorGetRef, getEditor } = useMarkdownEditorBridge();
+  const [isFocused, setIsFocused] = useState(false);
 
   const handleConflict = useCallback(async () => {
     await onReload();
@@ -22,6 +23,7 @@ export default function BlockEditor({
     get: getEditor,
     blockHandle: entry.block.handle,
     text: entry.block.markdown,
+    isFocused,
     flushRef,
     onMarkdownUpdatedRef,
     onConflict: handleConflict,
@@ -43,7 +45,10 @@ export default function BlockEditor({
         flushRef={flushRef}
         onMarkdownUpdatedRef={onMarkdownUpdatedRef}
         editorGetRef={editorGetRef}
-        onFocusChange={onFocusChange}
+        onFocusChange={(focused) => {
+          setIsFocused(focused);
+          onFocusChange?.(focused);
+        }}
         className="milkdown-editor milkdown-editor--linked-ref"
       />
     </div>

@@ -1103,8 +1103,10 @@ export default function App() {
     });
   }
 
-  function handlePagePersisted(updated) {
-    setSelectedPageText((current) => (current === updated.text ? current : updated.text));
+  function handlePagePersisted(updated, meta) {
+    if (meta?.applyText !== false) {
+      setSelectedPageText((current) => (current === updated.text ? current : updated.text));
+    }
     setSelectedPageRevision((current) => (sameRevision(current, updated.revision) ? current : updated.revision));
     if (loadedPageIdRef.current) {
       void loadPageLinkedRefs(loadedPageIdRef.current).catch(() => { });

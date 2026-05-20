@@ -12,6 +12,7 @@ export function useEditorPersistence({
   pageId,
   text,
   revision,
+  isFocused,
   flushRef,
   onMarkdownUpdatedRef,
   onConflict,
@@ -28,6 +29,8 @@ export function useEditorPersistence({
   const persistedTextRef = useRef(text);
   const initializedRef = useRef(false);
   const persistPromiseRef = useRef(null);
+  const isFocusedRef = useRef(isFocused);
+  isFocusedRef.current = isFocused;
 
   useEffect(() => {
     revisionRef.current = revision;
@@ -53,10 +56,13 @@ export function useEditorPersistence({
           text: cleanedText,
           expectedRevision: revisionRef.current,
         });
-        latestTextRef.current = updated.text;
         persistedTextRef.current = updated.text;
         revisionRef.current = updated.revision;
-        onPersisted?.(updated);
+        const shouldApplyPersistedText = latestTextRef.current === cleanedText;
+        if (shouldApplyPersistedText) {
+          latestTextRef.current = updated.text;
+        }
+        onPersisted?.(updated, { applyText: shouldApplyPersistedText });
         return true;
       } catch (error) {
         if (error?.code === "structural_conflict") {
@@ -92,6 +98,7 @@ export function useEditorPersistence({
       suppressWriteRef,
       workspaceRoot: workspaceRootRef.current,
       clearPendingWrite: () => clearTimeout(debounceRef.current),
+      shouldApply: () => !isFocusedRef.current,
     });
   }, [text, revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
