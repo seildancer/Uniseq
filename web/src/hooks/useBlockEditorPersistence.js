@@ -49,12 +49,13 @@ export function useBlockEditorPersistence({
 
     const persistPromise = (async () => {
       try {
-        await invoke("write_block_markdown", {
+        const updated = await invoke("write_block_markdown", {
           handle: handleRef.current,
           replacementMarkdown: cleanedText,
         });
-        latestTextRef.current = cleanedText;
-        persistedTextRef.current = cleanedText;
+        handleRef.current = updated.handle;
+        latestTextRef.current = updated.markdown;
+        persistedTextRef.current = updated.markdown;
         return true;
       } catch (error) {
         if (error?.code === "structural_conflict") {

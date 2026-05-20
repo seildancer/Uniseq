@@ -4,6 +4,7 @@ import { useMarkdownEditorBridge } from "./hooks/useMarkdownEditorBridge";
 import { useBlockEditorPersistence } from "./hooks/useBlockEditorPersistence";
 
 export default function BlockEditor({
+  editorKey,
   entry,
   pages,
   onNavigate,
@@ -32,13 +33,7 @@ export default function BlockEditor({
   return (
     <div className="linked-ref-mini-editor">
       <MilkdownMarkdownEditor
-        documentKey={[
-          entry.source_page_id,
-          entry.block.handle.block_span.start,
-          entry.block.handle.block_span.end,
-          entry.ref_span.start,
-          entry.ref_span.end,
-        ].join(":")}
+        documentKey={editorKey}
         text={entry.block.markdown}
         pages={pages}
         onNavigate={onNavigate}

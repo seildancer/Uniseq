@@ -11,7 +11,7 @@ use notify::{Config as NotifyConfig, Event, EventKind, RecursiveMode, Watcher};
 use super::{
     BlockHandle, BlockSnapshot, CoreError, IncomingPageRefSnapshot, LinkedRefEntry,
     OutgoingPageRefSnapshot, PageContentSnapshot, PageDetail, PageId, PageSummary, SearchResult,
-    WorkspaceCache, WorkspaceReadApi,
+    SourceSpan, WorkspaceCache, WorkspaceReadApi,
 };
 use crate::core::files::{
     collect_supported_workspace_markdown_paths, load_workspace_cache,
@@ -273,7 +273,7 @@ impl WorkspaceSession {
         &self,
         handle: &BlockHandle,
         replacement_markdown: String,
-    ) -> Result<(), CoreError> {
+    ) -> Result<BlockSnapshot, CoreError> {
         self.state
             .write()
             .unwrap()
@@ -467,9 +467,9 @@ impl WorkspaceSessionState {
         &mut self,
         handle: &BlockHandle,
         replacement_markdown: String,
-    ) -> Result<(), CoreError> {
+    ) -> Result<BlockSnapshot, CoreError> {
         let old_states = self.page_event_states();
-        let (page_id, location, workspace_path, next_text) = {
+        let (page_id, location, workspace_path, next_text, next_block_span) = {
             let page = self
                 .cache
                 .page(&handle.source_page_id)
@@ -485,6 +485,10 @@ impl WorkspaceSessionState {
                 });
             };
             handle.block_span.validate_for_text(&page.text)?;
+            let next_block_span = SourceSpan::new(
+                handle.block_span.start(),
+                handle.block_span.start() + replacement_markdown.len(),
+            )?;
             let next_text = format!(
                 "{}{}{}",
                 &page.text[..handle.block_span.start()],
@@ -496,6 +500,7 @@ impl WorkspaceSessionState {
                 page.location.clone(),
                 page.workspace_path.clone(),
                 next_text,
+                next_block_span,
             )
         };
 
@@ -504,11 +509,22 @@ impl WorkspaceSessionState {
             .map_err(|e| CoreError::io(absolute_path.clone(), &e))?;
         let new_page = page_from_markdown_in_location(page_id.clone(), location, next_text)?;
         self.cache.refresh_page_content(new_page);
+        let updated_block = self.with_read_api(|api| {
+            api.block_snapshot(&BlockHandle {
+                source_page_id: page_id.clone(),
+                source_page_revision: self
+                    .cache
+                    .page(&page_id)
+                    .expect("page exists immediately after refresh")
+                    .fingerprint,
+                block_span: next_block_span,
+            })
+        })?;
         let file_stamp = FileStamp::from_absolute_path(&absolute_path)?;
         self.apply_snapshot_delta(&[], [(workspace_path.clone(), file_stamp)]);
         self.emit_cache_diff(old_states);
         self.last_watch_error = None;
-        Ok(())
+        Ok(updated_block)
     }
 
     fn drain_events(&mut self) -> Vec<WorkspaceEvent> {
@@ -2657,5 +2673,28 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn write_block_markdown_returns_fresh_handle_for_follow_up_writes() {
+        let workspace = TestWorkspace::new("uniseq-session");
+        workspace.write_file("Target.md", "");
+        workspace.write_file("Referrer.md", "- before [[Target]]\n");
+        let session = WorkspaceSession::open(&workspace.root).unwrap();
+
+        let linked_ref = session
+            .page_linked_refs(&PageId::new(["Target"]).unwrap())
+            .unwrap()
+            .remove(0);
+
+        let updated_block = session
+            .write_block_markdown(&linked_ref.block.handle, "- after once [[Target]]\n".to_owned())
+            .unwrap();
+
+        session
+            .write_block_markdown(&updated_block.handle, "- after twice [[Target]]\n".to_owned())
+            .unwrap();
+
+        assert_eq!(workspace.read_file("Referrer.md"), "- after twice [[Target]]\n");
     }
 }

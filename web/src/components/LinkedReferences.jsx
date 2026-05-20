@@ -22,6 +22,7 @@ export default function LinkedReferences({
 }) {
   const [focusedRefKey, setFocusedRefKey] = useState(null);
   const pagesById = useMemo(() => new Map(pages.map((page) => [page.page_id, page])), [pages]);
+
   const sourcePageSortTitle = (sourcePageId) => {
     const page = pagesById.get(sourcePageId);
     return page?.title || page?.page_id || sourcePageId;
@@ -78,14 +79,8 @@ export default function LinkedReferences({
                 </button>
                 <span>{group.entries.length} mention{group.entries.length === 1 ? "" : "s"}</span>
               </div>
-              {group.entries.map((entry) => {
-                const refKey = [
-                  entry.source_page_id,
-                  entry.block.handle.block_span.start,
-                  entry.block.handle.block_span.end,
-                  entry.ref_span.start,
-                  entry.ref_span.end,
-                ].join(":");
+              {group.entries.map((entry, entryIndex) => {
+                const refKey = `${entry.source_page_id}:${entryIndex}`;
                 const shouldBlurReference = diaryBlurEnabled && isDiarySource && focusedRefKey !== refKey;
 
                 return (
@@ -94,6 +89,7 @@ export default function LinkedReferences({
                     key={refKey}
                   >
                     <BlockEditor
+                      editorKey={refKey}
                       entry={entry}
                       pages={pages}
                       onNavigate={onNavigate}

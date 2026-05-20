@@ -779,11 +779,12 @@ impl WorkspaceController {
         &self,
         handle: BlockHandleDto,
         replacement_markdown: String,
-    ) -> CommandResult<()> {
+    ) -> CommandResult<BlockSnapshotDto> {
         let handle = BlockHandle::try_from(handle)?;
         let result = self
             .session()?
             .write_block_markdown(&handle, replacement_markdown)
+            .map(BlockSnapshotDto::from)
             .map_err(ErrorDto::from);
         self.finish_local_mutation(result)
     }
@@ -2091,7 +2092,7 @@ fn write_block_markdown(
     state: State<'_, AppState>,
     handle: BlockHandleDto,
     replacement_markdown: String,
-) -> CommandResult<()> {
+) -> CommandResult<BlockSnapshotDto> {
     state
         .controller
         .lock()
