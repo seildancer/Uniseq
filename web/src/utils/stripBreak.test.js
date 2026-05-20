@@ -38,3 +38,12 @@ test("cleanEditorMarkdownForPersistence does not rewrite fenced code", () => {
     source,
   );
 });
+
+test("cleanEditorMarkdownForPersistence leaves inline code spans untouched", () => {
+  const source = "- `\\[\\[A\\]\\] \\#foo <br>` and \\[\\[B\\]\\]";
+
+  assert.equal(
+    cleanEditorMarkdownForPersistence(source),
+    "- `\\[\\[A\\]\\] \\#foo <br>` and [[B]]",
+  );
+});

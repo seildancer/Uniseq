@@ -3,6 +3,46 @@ const WIKILINK_RE = /\\?\[\\?\[([^\]\n]*?)\\?\]\\?\]/g;
 const LIST_MARKER_RE = /^\s*(?:[-*+] |\d+[.)] )/;
 const INDENTED_LIST_MARKER_RE = /^\s{2,}(?:[-*+] |\d+[.)] )/;
 
+function consumeInlineCodeSpan(line, offset) {
+  if (line[offset] !== "`") {
+    return null;
+  }
+
+  let fenceLen = 0;
+  while (line[offset + fenceLen] === "`") {
+    fenceLen += 1;
+  }
+
+  const closing = line.slice(offset + fenceLen).indexOf("`".repeat(fenceLen));
+  if (closing < 0) {
+    return null;
+  }
+
+  return fenceLen + closing + fenceLen;
+}
+
+function mapOutsideInlineCode(line, transformSegment) {
+  let result = "";
+  let segmentStart = 0;
+  let offset = 0;
+
+  while (offset < line.length) {
+    const consumed = consumeInlineCodeSpan(line, offset);
+    if (consumed == null) {
+      offset += 1;
+      continue;
+    }
+
+    result += transformSegment(line.slice(segmentStart, offset));
+    result += line.slice(offset, offset + consumed);
+    offset += consumed;
+    segmentStart = offset;
+  }
+
+  result += transformSegment(line.slice(segmentStart));
+  return result;
+}
+
 function mapOutsideFencedCode(markdown, transformLine) {
   const lines = markdown.split("\n");
   let inFence = false;
@@ -14,7 +54,7 @@ function mapOutsideFencedCode(markdown, transformLine) {
         return line;
       }
       if (inFence) return line;
-      return transformLine(line);
+      return mapOutsideInlineCode(line, transformLine);
     })
     .join("\n");
 }

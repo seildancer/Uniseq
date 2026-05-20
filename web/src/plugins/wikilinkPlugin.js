@@ -1,7 +1,7 @@
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { invoke } from "@tauri-apps/api/core";
-import pageLeafName from "../utils/pageLeafName";
+import pageLeafName from "../utils/pageLeafName.js";
 
 const wikilinkKey = new PluginKey("wikilinks");
 
@@ -10,7 +10,7 @@ export function resetWikilinkFocus() {
 }
 
 function isCodeTextNode(node, parent) {
-  return node.marks?.some((mark) => mark.type.name === "code") || parent?.type?.name === "code_block";
+  return node.marks?.some((mark) => mark.type.spec?.code) || parent?.type?.spec?.code;
 }
 
 export default function createWikilinkPlugin(navigateRef, pagesRef) {

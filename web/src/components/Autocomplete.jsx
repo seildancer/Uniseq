@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { editorViewCtx } from "@milkdown/core";
 import { invoke } from "@tauri-apps/api/core";
 import pageLeafName from "../utils/pageLeafName";
+import { isSelectionInsideCode } from "../utils/autocompleteCodeGuards.js";
 
 function detectTagTrigger(text) {
   const bracketMatch = text.match(/\[\[([^\]]*)$/);
@@ -14,11 +15,6 @@ function detectTagTrigger(text) {
     return { kind: "hash", query: hashMatch[1], triggerStart: hashMatch.index };
   }
   return null;
-}
-
-function isSelectionInsideCode(state) {
-  const { $from } = state.selection;
-  return $from.marks().some((mark) => mark.type.name === "code") || $from.parent.type.name === "code_block";
 }
 
 export default function AutocompleteEditor({
@@ -52,7 +48,7 @@ export default function AutocompleteEditor({
 
   function checkAutocomplete() {
     const info = getBlockInfo();
-    if (!info) return;
+    if (!info) { setAutocomplete(null); return; }
     const { view, from, blockStart, textBefore } = info;
     const trigger = detectTagTrigger(textBefore);
     if (!trigger) { setAutocomplete(null); return; }
