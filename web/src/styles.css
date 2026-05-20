@@ -1859,7 +1859,6 @@ h2 {
 .stream-dual-panel+.stream-dual-panel {
   border-left: 1px solid var(--line);
   padding-left: 16px;
-  margin-left: 16px;
 }
 
 .stream-panel-label {
