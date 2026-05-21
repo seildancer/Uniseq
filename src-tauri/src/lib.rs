@@ -20,6 +20,7 @@ use uniseq_backend::{
     WorkspaceSession, create_workspace_root, prepare_workspace_root,
 };
 
+mod ai;
 mod sync;
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -28,6 +29,8 @@ const OLD_PAGE_ORDER_STORE_FILE_NAME: &str = "workspace-page-order.json";
 const ROOT_PARENT_ORDER_KEY: &str = "__root__";
 const SYNC_PROGRESS_EVENT: &str = "sync-progress";
 const DEFAULT_WORKSPACE_FOLDER_NAME: &str = "default_workspace";
+const AI_CHAT_CONTEXT_TOKEN_BUDGET: usize = 100_000;
+const AI_CHAT_APPROX_CHARS_PER_TOKEN: usize = 4;
 
 #[derive(Default)]
 struct AppState {
@@ -59,6 +62,8 @@ impl Drop for SyncLoop {
 struct WorkspaceController {
     session: Option<WorkspaceSession>,
     sync_loop: Option<SyncLoop>,
+    active_ai_chat_session: Option<ActiveAiChatSession>,
+    next_ai_chat_session_nonce: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -258,6 +263,47 @@ struct WorkspacePageOrder {
     sibling_order_by_parent: BTreeMap<String, Vec<String>>,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AiChatContextSpecDto {
+    Page { page_id: String },
+    StreamSingle { stream_name: String },
+    StreamDual { stream_names: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct AiChatSessionOpenDto {
+    session_id: String,
+    preview_summary: String,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct AiChatResponseDto {
+    assistant_text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct AiChatMessageDto {
+    role: String,
+    content: String,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone)]
+struct PreparedAiChatSession {
+    system_prompt: String,
+    preview_summary: String,
+    truncated: bool,
+    included_page_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveAiChatSession {
+    session_id: String,
+    system_prompt: String,
+}
+
 type CommandResult<T> = Result<T, ErrorDto>;
 
 mod u64_string {
@@ -287,6 +333,7 @@ impl WorkspaceController {
         session.start_watching_default();
         let watcher_status = WatcherStatusDto::from_session(&session);
         self.session = Some(session);
+        self.active_ai_chat_session = None;
         Ok(WorkspaceOpenDto {
             root_path: root_path.to_string_lossy().to_string(),
             watcher_status,
@@ -333,6 +380,7 @@ impl WorkspaceController {
 
     fn close_workspace(&mut self) -> bool {
         self.stop_sync_loop();
+        self.active_ai_chat_session = None;
         self.session.take().is_some()
     }
 
@@ -340,6 +388,40 @@ impl WorkspaceController {
         let workspace_root = self.session()?.workspace_root();
         self.open_workspace(workspace_root.to_string_lossy().to_string())
             .map(|_| ())
+    }
+
+    fn open_ai_chat_session(
+        &mut self,
+        context_spec: AiChatContextSpecDto,
+    ) -> CommandResult<AiChatSessionOpenDto> {
+        let prepared = build_ai_chat_session(
+            self.session()?,
+            &context_spec,
+            ai_context_char_budget(),
+        )?;
+        self.next_ai_chat_session_nonce = self.next_ai_chat_session_nonce.saturating_add(1);
+        let session_id = format!("ai-session-{}", self.next_ai_chat_session_nonce);
+        self.active_ai_chat_session = Some(ActiveAiChatSession {
+            session_id: session_id.clone(),
+            system_prompt: prepared.system_prompt,
+        });
+        Ok(AiChatSessionOpenDto {
+            session_id,
+            preview_summary: prepared.preview_summary,
+            truncated: prepared.truncated,
+        })
+    }
+
+    fn close_ai_chat_session(&mut self, session_id: String) -> bool {
+        if self
+            .active_ai_chat_session
+            .as_ref()
+            .is_some_and(|session| session.session_id == session_id)
+        {
+            self.active_ai_chat_session = None;
+            return true;
+        }
+        false
     }
 
     fn all_pages(&self) -> CommandResult<Vec<PageSummaryDto>> {
@@ -996,6 +1078,16 @@ impl WorkspaceController {
             .ok_or_else(ErrorDto::no_workspace_open)
     }
 
+    fn active_ai_chat_session(
+        &self,
+        session_id: &str,
+    ) -> CommandResult<&ActiveAiChatSession> {
+        self.active_ai_chat_session
+            .as_ref()
+            .filter(|session| session.session_id == session_id)
+            .ok_or_else(ErrorDto::ai_chat_session_missing)
+    }
+
     fn remap_page_order_subtree(
         &self,
         app: &AppHandle,
@@ -1326,6 +1418,38 @@ impl ErrorDto {
     fn sync(message: impl Into<String>) -> Self {
         Self {
             code: "sync_error",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn ai_chat_session_missing() -> Self {
+        Self {
+            code: "ai_chat_session_missing",
+            message: "AI chat session is no longer available".to_owned(),
+            path: None,
+        }
+    }
+
+    fn ai_chat_config(message: impl Into<String>) -> Self {
+        Self {
+            code: "ai_chat_config_invalid",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn ai_chat_request(message: impl Into<String>) -> Self {
+        Self {
+            code: "ai_chat_request_failed",
+            message: message.into(),
+            path: None,
+        }
+    }
+
+    fn invalid_ai_chat_message(message: impl Into<String>) -> Self {
+        Self {
+            code: "invalid_ai_chat_message",
             message: message.into(),
             path: None,
         }
@@ -1865,6 +1989,76 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
 }
 
 #[tauri::command]
+fn open_ai_chat_session(
+    state: State<'_, AppState>,
+    context_spec: AiChatContextSpecDto,
+) -> CommandResult<AiChatSessionOpenDto> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .open_ai_chat_session(context_spec)
+}
+
+#[tauri::command]
+fn close_ai_chat_session(state: State<'_, AppState>, session_id: String) -> bool {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .close_ai_chat_session(session_id)
+}
+
+#[tauri::command]
+async fn ai_chat(
+    state: State<'_, AppState>,
+    session_id: String,
+    prior_messages: Vec<AiChatMessageDto>,
+    latest_user_message: String,
+    api_key: String,
+) -> CommandResult<AiChatResponseDto> {
+    let latest_user_message = latest_user_message.trim().to_owned();
+    if latest_user_message.is_empty() {
+        return Err(ErrorDto::invalid_ai_chat_message(
+            "latest user message cannot be empty",
+        ));
+    }
+    let api_key = api_key.trim().to_owned();
+    if api_key.is_empty() {
+        return Err(ErrorDto::ai_chat_config("Gemini API key is required"));
+    }
+
+    let system_prompt = {
+        let controller = state.controller.lock().unwrap();
+        let active_session = controller.active_ai_chat_session(&session_id)?;
+        active_session.system_prompt.clone()
+    };
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let prior_messages = prior_messages
+            .into_iter()
+            .map(|message| ai::ChatMessage {
+                role: message.role,
+                content: message.content,
+            })
+            .collect::<Vec<_>>();
+        ai::chat_completion(
+            &system_prompt,
+            &prior_messages,
+            &latest_user_message,
+            &api_key,
+        )
+            .map(|assistant_text| AiChatResponseDto { assistant_text })
+            .map_err(|error| match error {
+                ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
+                ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
+            })
+    })
+    .await
+    .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat task failed: {error}")))?
+}
+
+#[tauri::command]
 fn notify_user_activity(state: State<'_, AppState>) {
     state.controller.lock().unwrap().notify_user_activity();
 }
@@ -2350,6 +2544,9 @@ pub fn run() {
             sync_status,
             set_workspace_sync_enabled,
             sync_now,
+            open_ai_chat_session,
+            close_ai_chat_session,
+            ai_chat,
             notify_user_activity,
             sync_conflict_detail,
             resolve_sync_conflict,
@@ -2390,6 +2587,351 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri app");
+}
+
+fn build_ai_chat_session(
+    session: &WorkspaceSession,
+    context_spec: &AiChatContextSpecDto,
+    char_budget: usize,
+) -> CommandResult<PreparedAiChatSession> {
+    match context_spec {
+        AiChatContextSpecDto::Page { page_id } => {
+            let page_id =
+                parse_page_id_input(page_id).map_err(|_| ErrorDto::invalid_page_id(page_id))?;
+            build_page_ai_chat_session(session, &page_id, char_budget)
+        }
+        AiChatContextSpecDto::StreamSingle { stream_name } => {
+            build_stream_ai_chat_session(session, &[stream_name.clone()], char_budget)
+        }
+        AiChatContextSpecDto::StreamDual { stream_names } => {
+            if stream_names.is_empty() {
+                return Err(ErrorDto::invalid_ai_chat_message(
+                    "dual-stream AI chat requires at least one stream name",
+                ));
+            }
+            build_stream_ai_chat_session(session, stream_names, char_budget)
+        }
+    }
+}
+
+fn build_page_ai_chat_session(
+    session: &WorkspaceSession,
+    page_id: &PageId,
+    char_budget: usize,
+) -> CommandResult<PreparedAiChatSession> {
+    let all_pages = session.all_pages();
+    let page_summary = session.page_summary(page_id).map_err(ErrorDto::from)?;
+    let page_content = session.page_content(page_id).map_err(ErrorDto::from)?;
+    let linked_refs = session.page_linked_refs(page_id).map_err(ErrorDto::from)?;
+    let mut remaining_chars = char_budget;
+    let mut context_body = String::new();
+    let mut truncated = false;
+    let mut included_page_ids = vec![page_id_to_string(page_id)];
+    let mut preview_related_page_titles = Vec::<String>::new();
+    let mut preview_stream_dates_by_name = BTreeMap::<String, Vec<String>>::new();
+    let page_section = format!(
+        "{}\n\n{}\n",
+        display_page_title(&page_summary.title, page_id),
+        page_content.text.trim()
+    );
+    if !push_fragment_with_optional_truncation(
+        &mut context_body,
+        &page_section,
+        &mut remaining_chars,
+        true,
+    ) {
+        truncated = true;
+    } else {
+        for linked_ref in linked_refs {
+            let source_title = related_note_label(&all_pages, &linked_ref.source_page_id)
+                .unwrap_or_else(|| page_id_to_string(&linked_ref.source_page_id));
+            let source_id = page_id_to_string(&linked_ref.source_page_id);
+            let source_block = if linked_ref.block.markdown.trim().is_empty() {
+                linked_ref.block.content.trim().to_owned()
+            } else {
+                linked_ref.block.markdown.trim().to_owned()
+            };
+            let fragment = format!(
+                "\nRelated note: {}\n\n{}\n",
+                source_title, source_block
+            );
+            if !push_fragment_with_optional_truncation(
+                &mut context_body,
+                &fragment,
+                &mut remaining_chars,
+                false,
+            ) {
+                truncated = true;
+                break;
+            }
+            included_page_ids.push(source_id);
+            match linked_ref.source_page_id.location() {
+                PageLocation::Pages => {
+                    if !preview_related_page_titles.iter().any(|title| title == &source_title) {
+                        preview_related_page_titles.push(source_title);
+                    }
+                }
+                PageLocation::Stream { stream_name } => {
+                    let entry = preview_stream_dates_by_name
+                        .entry(stream_name.as_str().to_owned())
+                        .or_default();
+                    let date_name = linked_ref.source_page_id.leaf_name().as_str().to_owned();
+                    if !entry.iter().any(|existing| existing == &date_name) {
+                        entry.push(date_name);
+                    }
+                }
+            }
+        }
+    }
+
+    let preview_related_note_sources = summarize_related_note_sources(
+        &preview_related_page_titles,
+        &preview_stream_dates_by_name,
+    );
+    let preview_summary = if preview_related_note_sources.is_empty() {
+        format!(
+            "Start chat based on {}.",
+            display_page_title(&page_summary.title, page_id)
+        )
+    } else {
+        format!(
+            "Start chat based on {} and related notes from {}.",
+            display_page_title(&page_summary.title, page_id),
+            human_join(&preview_related_note_sources)
+        )
+    };
+    let system_prompt = build_ai_system_prompt(
+        &preview_summary,
+        &context_body,
+        Some(
+            "The main page content should be treated as relatively time-agnostic reference information. Related notes may add dated context around it.",
+        ),
+    );
+    Ok(PreparedAiChatSession {
+        system_prompt,
+        preview_summary,
+        truncated,
+        included_page_ids,
+    })
+}
+
+fn build_stream_ai_chat_session(
+    session: &WorkspaceSession,
+    stream_names: &[String],
+    char_budget: usize,
+) -> CommandResult<PreparedAiChatSession> {
+    let mut ordered_pages = session
+        .all_pages()
+        .into_iter()
+        .filter(|page| match &page.location {
+            PageLocation::Stream { stream_name } => {
+                stream_names.iter().any(|value| value == stream_name.as_str())
+            }
+            PageLocation::Pages => false,
+        })
+        .collect::<Vec<_>>();
+    ordered_pages.sort_by(|left, right| compare_stream_pages(left, right, stream_names));
+
+    let mut remaining_chars = char_budget;
+    let mut truncated = false;
+    let mut context_body = String::new();
+    let mut included_page_ids = Vec::<String>::new();
+    let mut included_dates = Vec::<String>::new();
+    for page in ordered_pages {
+        let page_id = page_id_to_string(&page.page_id);
+        let stream_name = read_stream_name_from_location(&page.location)
+            .unwrap_or_default()
+            .to_owned();
+        let date_name = page.page_id.leaf_name().as_str().to_owned();
+        let content = session.page_content(&page.page_id).map_err(ErrorDto::from)?;
+        let fragment = format!(
+            "{}\n{}\n\n{}\n\n",
+            format_date_name(&date_name),
+            stream_name,
+            content.text.trim()
+        );
+        if !push_fragment_with_optional_truncation(
+            &mut context_body,
+            &fragment,
+            &mut remaining_chars,
+            false,
+        ) {
+            truncated = true;
+            break;
+        }
+        included_dates.push(date_name);
+        included_page_ids.push(page_id);
+    }
+
+    let preview_summary = build_stream_preview_summary(stream_names, &included_dates);
+    let system_prompt = build_ai_system_prompt(&preview_summary, &context_body, None);
+    Ok(PreparedAiChatSession {
+        system_prompt,
+        preview_summary,
+        truncated,
+        included_page_ids,
+    })
+}
+
+fn build_ai_system_prompt(
+    preview_summary: &str,
+    context_body: &str,
+    context_guidance: Option<&str>,
+) -> String {
+    format!(
+        "You are chatting with the owner of the notes below.\n\
+Use the notes as context for the conversation.\n\
+The notes belong the the owner but mind that some contents might be external, rather than written by the owner themselves.\n\
+Make useful links between the user's question and what can be inferred from the notes.\n\
+Pay attention to chronology and how ideas develop over time.\n\
+If the notes do not support a claim, say so clearly.\n\
+{}\n\n\
+Context: {preview_summary}\n\n\
+Notes:\n{context_body}",
+        context_guidance.unwrap_or("")
+    )
+}
+
+fn compare_stream_pages(
+    left: &PageSummary,
+    right: &PageSummary,
+    stream_names: &[String],
+) -> std::cmp::Ordering {
+    let left_date = left.page_id.leaf_name().as_str();
+    let right_date = right.page_id.leaf_name().as_str();
+    right_date
+        .cmp(left_date)
+        .then_with(|| {
+            let left_index = read_stream_name_from_location(&left.location)
+                .and_then(|stream_name| stream_names.iter().position(|name| name == stream_name))
+                .unwrap_or(usize::MAX);
+            let right_index = read_stream_name_from_location(&right.location)
+                .and_then(|stream_name| stream_names.iter().position(|name| name == stream_name))
+                .unwrap_or(usize::MAX);
+            left_index.cmp(&right_index)
+        })
+        .then_with(|| page_id_to_string(&left.page_id).cmp(&page_id_to_string(&right.page_id)))
+}
+
+fn read_stream_name_from_location(location: &PageLocation) -> Option<&str> {
+    match location {
+        PageLocation::Stream { stream_name } => Some(stream_name.as_str()),
+        PageLocation::Pages => None,
+    }
+}
+
+fn build_stream_preview_summary(stream_names: &[String], included_dates: &[String]) -> String {
+    let scope = human_join(stream_names);
+    let Some(newest) = included_dates.first() else {
+        return format!("Start chat based on {}.", scope);
+    };
+    let oldest = included_dates.last().unwrap_or(newest);
+    if newest == oldest {
+        format!(
+            "Start chat based on {} on {}.",
+            scope,
+            format_date_name(newest)
+        )
+    } else {
+        format!(
+            "Start chat based on {} from {} to {}.",
+            scope,
+            format_date_name(oldest),
+            format_date_name(newest)
+        )
+    }
+}
+
+fn summarize_related_note_sources(
+    page_titles: &[String],
+    stream_dates_by_name: &BTreeMap<String, Vec<String>>,
+) -> Vec<String> {
+    let mut items = page_titles.to_vec();
+    for (stream_name, date_names) in stream_dates_by_name {
+        if date_names.is_empty() {
+            continue;
+        }
+        let mut sorted_dates = date_names.to_vec();
+        sorted_dates.sort();
+        let oldest = sorted_dates.first().unwrap();
+        let newest = sorted_dates.last().unwrap();
+        if oldest == newest {
+            items.push(format!("{stream_name} on {}", format_date_name(newest)));
+        } else {
+            items.push(format!(
+                "{stream_name} from {} to {}",
+                format_date_name(oldest),
+                format_date_name(newest)
+            ));
+        }
+    }
+    items
+}
+
+fn display_page_title(title: &str, page_id: &PageId) -> String {
+    if title.trim().is_empty() {
+        page_id_to_string(page_id)
+    } else {
+        title.to_owned()
+    }
+}
+
+fn related_note_label(all_pages: &[PageSummary], page_id: &PageId) -> Option<String> {
+    let page = all_pages.iter().find(|page| page.page_id == *page_id)?;
+    let title = display_page_title(&page.title, &page.page_id);
+    let stream_name = read_stream_name_from_location(&page.location)?;
+    Some(format!("{title} ({stream_name})"))
+}
+
+fn push_fragment_with_optional_truncation(
+    target: &mut String,
+    fragment: &str,
+    remaining_chars: &mut usize,
+    allow_truncation: bool,
+) -> bool {
+    let fragment_chars = fragment.chars().count();
+    if fragment_chars <= *remaining_chars {
+        target.push_str(fragment);
+        *remaining_chars -= fragment_chars;
+        return true;
+    }
+    if allow_truncation && *remaining_chars > 0 {
+        target.push_str(&prefix_chars(fragment, *remaining_chars));
+        *remaining_chars = 0;
+    }
+    false
+}
+
+fn prefix_chars(value: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    match value.char_indices().nth(max_chars) {
+        Some((index, _)) => value[..index].to_owned(),
+        None => value.to_owned(),
+    }
+}
+
+fn human_join(values: &[String]) -> String {
+    match values {
+        [] => String::new(),
+        [only] => only.clone(),
+        [left, right] => format!("{left} and {right}"),
+        _ => {
+            let mut joined = values[..values.len() - 1].join(", ");
+            joined.push_str(", and ");
+            joined.push_str(values.last().unwrap());
+            joined
+        }
+    }
+}
+
+fn ai_context_char_budget() -> usize {
+    AI_CHAT_CONTEXT_TOKEN_BUDGET.saturating_mul(AI_CHAT_APPROX_CHARS_PER_TOKEN)
+}
+
+fn format_date_name(date_name: &str) -> String {
+    date_name.replace('_', "-")
 }
 
 fn parse_page_id_input(input: &str) -> Result<PageId, ()> {
@@ -2747,6 +3289,11 @@ mod tests {
         }
     }
 
+    fn open_test_session(root: &Path) -> WorkspaceSession {
+        fs::create_dir_all(root.join("pages")).unwrap();
+        WorkspaceSession::open(root).unwrap()
+    }
+
     #[test]
     fn workspace_storage_paths_share_the_same_root_directory() {
         let app_data_dir = PathBuf::from("/data/user/0/com.seildancer.uniseq");
@@ -2882,6 +3429,8 @@ mod tests {
         let mut controller = WorkspaceController {
             session: Some(WorkspaceSession::open(&root).unwrap()),
             sync_loop: None,
+            active_ai_chat_session: None,
+            next_ai_chat_session_nonce: 0,
         };
         let _ = controller.drain_workspace_events().unwrap();
 
@@ -3237,5 +3786,225 @@ mod tests {
                 .sibling_order_by_parent
                 .contains_key("pages:A/B")
         );
+    }
+
+    #[test]
+    fn ai_page_session_includes_page_body_and_linked_refs() {
+        let root = unique_temp_dir("uniseq-app-ai-page");
+        write_workspace_file(&root, "pages/Target.md", "main body");
+        write_workspace_file(&root, "pages/Source.md", "- [[Target]]\n  linked thought");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            2_000,
+        )
+        .unwrap();
+
+        assert!(prepared.system_prompt.contains("main body"));
+        assert!(prepared.system_prompt.contains("linked thought"));
+        assert!(prepared.preview_summary.contains("Target"));
+        assert!(prepared.preview_summary.contains("Source"));
+        assert!(prepared
+            .system_prompt
+            .contains("time-agnostic reference information"));
+        assert_eq!(
+            prepared.included_page_ids,
+            vec!["pages:Target".to_owned(), "pages:Source".to_owned()]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_page_session_labels_stream_backed_related_notes_with_stream_name() {
+        let root = unique_temp_dir("uniseq-app-ai-page-stream-ref");
+        write_workspace_file(&root, "pages/Target.md", "main body");
+        write_workspace_file(&root, "journals/2026_05_20.md", "- [[Target]]\n  linked thought");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            2_000,
+        )
+        .unwrap();
+
+        assert!(prepared.system_prompt.contains("Related note: 2026_05_20 (journals)"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_page_preview_summarizes_stream_related_notes_as_date_ranges() {
+        let root = unique_temp_dir("uniseq-app-ai-page-stream-range");
+        write_workspace_file(&root, "pages/Target.md", "main body");
+        write_workspace_file(&root, "journals/2026_05_18.md", "- [[Target]]\n  first linked thought");
+        write_workspace_file(&root, "journals/2026_05_20.md", "- [[Target]]\n  second linked thought");
+        write_workspace_file(&root, "pages/Project.md", "- [[Target]]\n  page linked thought");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            4_000,
+        )
+        .unwrap();
+
+        assert!(prepared.preview_summary.contains("Project"));
+        assert!(prepared
+            .preview_summary
+            .contains("journals from 2026-05-18 to 2026-05-20"));
+        assert!(!prepared.preview_summary.contains("2026_05_18 (journals)"));
+        assert!(!prepared.preview_summary.contains("2026_05_20 (journals)"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_single_stream_session_orders_notes_newest_to_oldest() {
+        let root = unique_temp_dir("uniseq-app-ai-single-stream");
+        write_workspace_file(&root, "journals/2026_05_19.md", "older note");
+        write_workspace_file(&root, "journals/2026_05_20.md", "newer note");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::StreamSingle {
+                stream_name: "journals".to_owned(),
+            },
+            4_000,
+        )
+        .unwrap();
+
+        let newer_index = prepared
+            .system_prompt
+            .find("2026-05-20\njournals")
+            .unwrap();
+        let older_index = prepared
+            .system_prompt
+            .find("2026-05-19\njournals")
+            .unwrap();
+        assert!(newer_index < older_index);
+        assert!(!prepared
+            .system_prompt
+            .contains("time-agnostic reference information"));
+        assert_eq!(
+            prepared.included_page_ids,
+            vec![
+                "stream:journals/2026_05_20".to_owned(),
+                "stream:journals/2026_05_19".to_owned()
+            ]
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_dual_stream_session_interleaves_by_date_and_stream_order() {
+        let root = unique_temp_dir("uniseq-app-ai-dual-stream");
+        write_workspace_file(&root, "journals/2026_05_20.md", "journal latest");
+        write_workspace_file(&root, "diary/2026_05_20.md", "diary latest");
+        write_workspace_file(&root, "journals/2026_05_19.md", "journal older");
+        write_workspace_file(&root, "diary/2026_05_18.md", "diary oldest");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::StreamDual {
+                stream_names: vec!["journals".to_owned(), "diary".to_owned()],
+            },
+            8_000,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared.included_page_ids,
+            vec![
+                "stream:journals/2026_05_20".to_owned(),
+                "stream:diary/2026_05_20".to_owned(),
+                "stream:journals/2026_05_19".to_owned(),
+                "stream:diary/2026_05_18".to_owned()
+            ]
+        );
+        assert_eq!(
+            prepared.preview_summary,
+            "Start chat based on journals and diary from 2026-05-18 to 2026-05-20."
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_stream_truncation_drops_oldest_notes_first_and_updates_preview_range() {
+        let root = unique_temp_dir("uniseq-app-ai-stream-truncation");
+        write_workspace_file(&root, "journals/2026_05_18.md", "old note old note old note old note old note old note old note old note");
+        write_workspace_file(&root, "journals/2026_05_19.md", "mid note mid note mid note mid note mid note mid note mid note mid note");
+        write_workspace_file(&root, "journals/2026_05_20.md", "new note new note new note new note new note new note new note new note");
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::StreamSingle {
+                stream_name: "journals".to_owned(),
+            },
+            260,
+        )
+        .unwrap();
+
+        assert!(prepared.truncated);
+        assert_eq!(
+            prepared.included_page_ids,
+            vec![
+                "stream:journals/2026_05_20".to_owned(),
+                "stream:journals/2026_05_19".to_owned()
+            ]
+        );
+        assert_eq!(
+            prepared.preview_summary,
+            "Start chat based on journals from 2026-05-19 to 2026-05-20."
+        );
+        assert!(!prepared.system_prompt.contains("2026-05-18\njournals"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_page_truncation_preserves_page_body_before_linked_refs() {
+        let root = unique_temp_dir("uniseq-app-ai-page-truncation");
+        write_workspace_file(
+            &root,
+            "pages/Target.md",
+            "page body page body page body page body page body",
+        );
+        write_workspace_file(
+            &root,
+            "pages/Source.md",
+            "- [[Target]]\n  ref body ref body ref body ref body ref body",
+        );
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            90,
+        )
+        .unwrap();
+
+        assert!(prepared.truncated);
+        assert!(prepared.system_prompt.contains("page body"));
+        assert!(!prepared.system_prompt.contains("ref body"));
+        assert_eq!(prepared.included_page_ids, vec!["pages:Target".to_owned()]);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

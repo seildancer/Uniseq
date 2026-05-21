@@ -3,11 +3,19 @@ import { createPortal } from "react-dom";
 import { WorkspaceContext } from "./WorkspaceContext.js";
 import Editor from "./Editor.jsx";
 import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
+import AiChatPanel from "./components/AiChatPanel.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
 import { areArraysEqual } from "./utils/arrays.js";
 import pageLeafName from "./utils/pageLeafName.js";
 import { todayDateName } from "./utils/streamDates.js";
+import {
+  applyOpenedAiChatSession,
+  appendAiChatMessage,
+  buildAiChatContextSpec,
+  createClosedAiChatState,
+  createOpeningAiChatState,
+} from "./utils/aiChat.js";
 import {
   dateHasContentForSelection,
   orderStreamNamesForDisplay,
@@ -66,6 +74,7 @@ const DRAG_MOVE_SLOP_PX = 8;
 const AUTO_EXPAND_ON_HOVER_MS = 600;
 const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
+const AI_CHAT_API_KEY_STORAGE_KEY = "aiChatGoogleApiKey";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
@@ -510,6 +519,26 @@ function formatUnixTimestamp(unixSeconds) {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
+function readStoredAiChatApiKey() {
+  try {
+    return localStorage.getItem(AI_CHAT_API_KEY_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function persistAiChatApiKey(apiKey) {
+  try {
+    if (apiKey) {
+      localStorage.setItem(AI_CHAT_API_KEY_STORAGE_KEY, apiKey);
+    } else {
+      localStorage.removeItem(AI_CHAT_API_KEY_STORAGE_KEY);
+    }
+  } catch {
+    // Ignore storage failures and keep the key only in memory.
+  }
+}
+
 function remoteProviderStatePatch(provider) {
   return {
     provider,
@@ -733,6 +762,15 @@ function WindowBackIcon() {
   );
 }
 
+function WindowAiIcon() {
+  return (
+    <svg className="window-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 1.8 9.2 5l3.2 1.2L9.2 7.4 8 10.6 6.8 7.4 3.6 6.2 6.8 5 8 1.8Z" />
+      <path d="M12.4 9.4 13 11l1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6.6-1.6Z" />
+    </svg>
+  );
+}
+
 function WindowForwardIcon() {
   return (
     <svg className="window-control-icon" viewBox="0 0 12 12" aria-hidden="true">
@@ -828,6 +866,7 @@ export default function App() {
   const [selectedPageText, setSelectedPageText] = useState("");
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [linkedRefs, setLinkedRefs] = useState([]);
+  const [aiChat, setAiChat] = useState(() => createClosedAiChatState(readStoredAiChatApiKey()));
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -884,6 +923,7 @@ export default function App() {
   selectedPageRevisionRef.current = selectedPageRevision;
   const loadedPageIdRef = useRef(loadedPageId);
   loadedPageIdRef.current = loadedPageId;
+  const aiChatOpenSeqRef = useRef(0);
 
   const mobileViewportStyle = useMemo(() => (
     isMobile
@@ -1163,6 +1203,112 @@ export default function App() {
     setActionError(null);
   }
 
+  function handleCloseAiChat() {
+    const activeSessionId = aiChat.sessionId;
+    const apiKey = aiChat.apiKey;
+    aiChatOpenSeqRef.current += 1;
+    setAiChat(createClosedAiChatState(apiKey));
+    if (activeSessionId) {
+      invoke("close_ai_chat_session", { sessionId: activeSessionId }).catch(() => undefined);
+    }
+  }
+
+  function handleAiChatApiKeyChange(apiKey) {
+    persistAiChatApiKey(apiKey);
+    setAiChat((current) => ({
+      ...current,
+      apiKey,
+      error: current.error === "Enter your Gemini API key first." ? "" : current.error,
+    }));
+  }
+
+  async function handleOpenAiChat() {
+    const contextSpec = buildAiChatContextSpec(selection, dualStreamNames);
+    if (!contextSpec) {
+      return;
+    }
+
+    const apiKey = aiChat.apiKey;
+    const seq = ++aiChatOpenSeqRef.current;
+    setAiChat(createOpeningAiChatState(isMobile, apiKey));
+    try {
+      const openedSession = await invoke("open_ai_chat_session", { contextSpec });
+      if (seq !== aiChatOpenSeqRef.current) {
+        invoke("close_ai_chat_session", { sessionId: openedSession?.session_id ?? "" }).catch(() => undefined);
+        return;
+      }
+      setAiChat(applyOpenedAiChatSession(openedSession, isMobile, apiKey));
+    } catch (error) {
+      if (seq !== aiChatOpenSeqRef.current) {
+        return;
+      }
+      setAiChat((current) => ({
+        ...current,
+        loadingSession: false,
+        error: formatError(normalizeError(error)),
+      }));
+    }
+  }
+
+  async function handleSubmitAiChat(event) {
+    event.preventDefault();
+    const latestUserMessage = aiChat.draft.trim();
+    if (!latestUserMessage || !aiChat.sessionId || aiChat.loadingSession || aiChat.sending) {
+      return;
+    }
+    const apiKey = aiChat.apiKey.trim();
+    if (!apiKey) {
+      setAiChat((current) => ({
+        ...current,
+        error: "Enter your Gemini API key first.",
+      }));
+      return;
+    }
+
+    const sessionId = aiChat.sessionId;
+    const priorMessages = aiChat.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+    const nextUserState = appendAiChatMessage(aiChat, "user", latestUserMessage);
+    setAiChat({
+      ...nextUserState,
+      draft: "",
+      sending: true,
+      error: "",
+    });
+
+    try {
+      const response = await invoke("ai_chat", {
+        sessionId,
+        priorMessages,
+        latestUserMessage,
+        apiKey,
+      });
+      setAiChat((current) => {
+        if (current.sessionId !== sessionId) {
+          return current;
+        }
+        return {
+          ...appendAiChatMessage(current, "assistant", response.assistant_text ?? ""),
+          sending: false,
+          error: "",
+        };
+      });
+    } catch (error) {
+      setAiChat((current) => {
+        if (current.sessionId !== sessionId) {
+          return current;
+        }
+        return {
+          ...current,
+          sending: false,
+          error: formatError(normalizeError(error)),
+        };
+      });
+    }
+  }
+
   function renderWindowControls() {
     const canNavigateBack = selectionHistoryState.index > 0;
     const canNavigateForward = selectionHistoryState.index < selectionHistoryState.entries.length - 1;
@@ -1197,6 +1343,15 @@ export default function App() {
             <span className="window-control-button-label">Empty</span>
           </button>
         ) : null}
+        <button
+          className={`window-control-button${aiChat.isOpen ? " window-control-button--active" : ""}`}
+          type="button"
+          aria-label="Open AI chat"
+          title="Open AI chat"
+          onClick={() => void handleOpenAiChat()}
+        >
+          <WindowAiIcon />
+        </button>
         <button
           className="window-control-button"
           type="button"
@@ -1716,6 +1871,7 @@ export default function App() {
   }
 
   async function handleCloseWorkspace() {
+    handleCloseAiChat();
     await invoke("close_workspace");
     setWorkspace(null);
     setPages([]);
@@ -3974,6 +4130,26 @@ export default function App() {
               </div>
             ) : null}
           </section>
+
+          {aiChat.isOpen ? createPortal(
+            <AiChatPanel
+              isOpen={aiChat.isOpen}
+              presentation={aiChat.presentation}
+              previewSummary={aiChat.previewSummary}
+              truncated={aiChat.truncated}
+              messages={aiChat.messages}
+              draft={aiChat.draft}
+              apiKey={aiChat.apiKey}
+              loadingSession={aiChat.loadingSession}
+              sending={aiChat.sending}
+              error={aiChat.error}
+              onClose={handleCloseAiChat}
+              onDraftChange={(draft) => setAiChat((current) => ({ ...current, draft }))}
+              onApiKeyChange={handleAiChatApiKeyChange}
+              onSubmit={(event) => void handleSubmitAiChat(event)}
+            />,
+            document.body,
+          ) : null}
 
             {modal && (
               <div className="modal-overlay" onClick={closeModal}>
