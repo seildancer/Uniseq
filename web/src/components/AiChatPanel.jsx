@@ -1,10 +1,24 @@
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import breaks from "remark-breaks";
+
+function AiChatThinking() {
+  return (
+    <div className="ai-chat-thinking">
+      <div className="ai-chat-message-label">AI</div>
+      <div className="ai-chat-thinking-dots">
+        <span /><span /><span />
+      </div>
+    </div>
+  );
+}
 
 function AiChatMessage({ message }) {
   return (
     <article className={`ai-chat-message ai-chat-message--${message.role}`}>
-      <div className="ai-chat-message-label">{message.role === "assistant" ? "AI" : "You"}</div>
+      {message.role === "assistant" && (
+        <div className="ai-chat-message-label">AI</div>
+      )}
       <div className="ai-chat-message-body">
         <ReactMarkdown remarkPlugins={[breaks]}>
           {message.content}
@@ -30,9 +44,37 @@ export default function AiChatPanel({
   onApiKeyChange,
   onSubmit,
 }) {
-  if (!isOpen) {
-    return null;
+  const transcriptRef = useRef(null);
+  const textareaRef = useRef(null);
+  const [keyExpanded, setKeyExpanded] = useState(!apiKey);
+
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [messages, sending]);
+
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (ta) {
+      ta.style.height = "auto";
+      ta.style.height = `${ta.scrollHeight}px`;
+    }
+  }, [draft]);
+
+  function handleDraftChange(event) {
+    onDraftChange(event.target.value);
   }
+
+  function handleKeyDown(event) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      onSubmit(event);
+    }
+  }
+
+  if (!isOpen) return null;
 
   const panelClassName = presentation === "mobile"
     ? "ai-chat-panel ai-chat-panel--mobile"
@@ -48,6 +90,7 @@ export default function AiChatPanel({
         <header className="ai-chat-header">
           <div className="ai-chat-header-copy">
             <strong>AI Chat</strong>
+            {loadingSession && <span>Loading context...</span>}
           </div>
           <button
             className="ai-chat-close"
@@ -61,45 +104,57 @@ export default function AiChatPanel({
           </button>
         </header>
 
-        <section className="ai-chat-preview">
-          {loadingSession ? (
-            <p>Preparing a frozen snapshot of the current notes...</p>
-          ) : previewSummary ? (
-            <>
-              <p>{previewSummary}</p>
-              {truncated ? (
-                <div className="ai-chat-preview-meta">
-                  <span>Oldest notes were trimmed to fit.</span>
-                </div>
-              ) : null}
-            </>
+        <section className="ai-chat-settings">
+          {apiKey && !keyExpanded ? (
+            <div className="ai-chat-key-compact">
+              <span className="ai-chat-key-set">API key ••••••••</span>
+              <button
+                type="button"
+                className="ai-chat-key-edit"
+                onClick={() => setKeyExpanded(true)}
+              >
+                Edit
+              </button>
+            </div>
           ) : (
-            <p>Open a session to chat against the current notes.</p>
+            <>
+              <label className="field ai-chat-field">
+                <span>Gemini API key</span>
+                <input
+                  className="ai-chat-key-input"
+                  type="password"
+                  value={apiKey}
+                  placeholder="Paste your Gemini API key"
+                  autoComplete="off"
+                  spellCheck="false"
+                  onChange={(event) => onApiKeyChange(event.target.value)}
+                  onBlur={() => { if (apiKey) setKeyExpanded(false); }}
+                />
+              </label>
+              <p className="ai-chat-hint">Stored locally and sent only with AI chat requests.</p>
+            </>
           )}
         </section>
 
-        <section className="ai-chat-settings">
-          <label className="field ai-chat-field">
-            <span>Gemini API key</span>
-            <input
-              className="ai-chat-key-input"
-              type="password"
-              value={apiKey}
-              placeholder="Paste your Gemini API key"
-              autoComplete="off"
-              spellCheck="false"
-              onChange={(event) => onApiKeyChange(event.target.value)}
-            />
-          </label>
-          <p className="ai-chat-hint">Stored locally on this device and sent only with AI chat requests.</p>
-        </section>
+        {(loadingSession || previewSummary) && (
+          <section className="ai-chat-preview">
+            {loadingSession ? (
+              <p>Preparing a snapshot of the current notes...</p>
+            ) : (
+              <>
+                <p>{previewSummary}</p>
+                {truncated && (
+                  <div className="ai-chat-preview-meta">
+                    <span>Oldest notes were trimmed to fit.</span>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        )}
 
-        <div className="ai-chat-transcript" aria-live="polite">
-          {messages.length === 0 ? (
-            <div className="ai-chat-empty">
-              <p>Ask a question about this snapshot.</p>
-            </div>
-          ) : (
+        <div className="ai-chat-transcript" ref={transcriptRef} aria-live="polite">
+          {messages.length === 0 ? null : (
             messages.map((message, index) => (
               <AiChatMessage
                 key={`${message.role}-${index}`}
@@ -107,25 +162,34 @@ export default function AiChatPanel({
               />
             ))
           )}
+          {sending && <AiChatThinking />}
         </div>
 
         <form className="ai-chat-composer" onSubmit={onSubmit}>
           <textarea
+            ref={textareaRef}
             className="ai-chat-input"
-            rows={3}
+            rows={1}
             value={draft}
             placeholder="Ask about the current notes"
-            onChange={(event) => onDraftChange(event.target.value)}
+            onChange={handleDraftChange}
+            onKeyDown={handleKeyDown}
             disabled={loadingSession || sending}
           />
           <div className="ai-chat-composer-footer">
-            {error ? <p className="ai-chat-error">{error}</p> : <span className="ai-chat-hint">This chat is not saved after close.</span>}
+            {error ? (
+              <p className="ai-chat-error">{error}</p>
+            ) : (
+              <span className="ai-chat-hint">
+                <kbd>⌘</kbd><kbd>↵</kbd> to send
+              </span>
+            )}
             <button
               className="primary-button"
               type="submit"
               disabled={loadingSession || sending || !draft.trim() || !apiKey.trim()}
             >
-              {sending ? "Thinking..." : "Send"}
+              Send
             </button>
           </div>
         </form>
