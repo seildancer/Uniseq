@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { editorViewCtx } from "@milkdown/core";
 import { invoke } from "@tauri-apps/api/core";
 import pageLeafName from "../utils/pageLeafName";
+import { pageRefBody, pageRefLabel } from "../utils/pageRefs.js";
 import { isSelectionInsideCode } from "../utils/autocompleteCodeGuards.js";
 
 function detectTagTrigger(text) {
@@ -55,10 +56,10 @@ export default function AutocompleteEditor({
     const q = trigger.query.toLowerCase();
     const suggestions = pages
       .filter((p) => {
-        const id = p.page_id.toLowerCase();
+        const refBody = pageRefBody(p.page_id).toLowerCase();
         const title = (p.title || "").toLowerCase();
         const leaf = pageLeafName(p.page_id).toLowerCase();
-        return id.includes(q) || title.includes(q) || leaf.includes(q);
+        return refBody.includes(q) || title.includes(q) || leaf.includes(q);
       })
       .slice(0, 8);
     const createName = suggestions.length === 0 && trigger.query.length > 0 ? trigger.query : null;
@@ -81,7 +82,7 @@ export default function AutocompleteEditor({
     const { view, from, blockStart, textBefore } = info;
     const trigger = detectTagTrigger(textBefore);
     if (!trigger) return;
-    const name = page ? pageLeafName(page.page_id) : autocomplete.createName;
+    const name = page ? pageRefBody(page.page_id) : autocomplete.createName;
     if (!page && autocomplete.createName) {
       invoke("create_page", { pageId: `pages:${autocomplete.createName}` }).catch(console.error);
     }
@@ -198,8 +199,10 @@ export default function AutocompleteEditor({
               role="option"
               onMouseDown={(e) => { e.preventDefault(); applyAutocomplete(page); }}
             >
-              <span className="autocomplete-item-title">{page.title || pageLeafName(page.page_id)}</span>
-              <span className="autocomplete-item-id">{pageLeafName(page.page_id)}</span>
+              <span className="autocomplete-item-title">{pageRefLabel(page)}</span>
+              {page.title && page.title !== pageRefLabel(page) ? (
+                <span className="autocomplete-item-id">{page.title}</span>
+              ) : null}
             </li>
           ))}
           {autocomplete.createName && (

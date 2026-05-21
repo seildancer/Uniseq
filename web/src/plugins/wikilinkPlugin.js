@@ -1,7 +1,7 @@
 import { Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import { invoke } from "@tauri-apps/api/core";
-import pageLeafName from "../utils/pageLeafName.js";
+import { pageMatchesRefText } from "../utils/pageRefs.js";
 
 const wikilinkKey = new PluginKey("wikilinks");
 
@@ -103,9 +103,7 @@ export default function createWikilinkPlugin(navigateRef, pagesRef) {
         }
         if (!pageName) return false;
         const allPages = pagesRef.current ?? [];
-        const found = allPages.find(
-          (p) => pageLeafName(p.page_id) === pageName || p.page_id === pageName || p.title === pageName
-        );
+        const found = allPages.find((p) => pageMatchesRefText(p, pageName));
         if (found) {
           navigateRef.current?.(found.page_id);
         } else {

@@ -54,3 +54,27 @@ test("wikilink plugin ignores refs inside inline code", () => {
 
   assert.deepEqual(decorationClassesForDoc(doc), []);
 });
+
+test("wikilink plugin resolves hierarchical hashtag refs to existing pages", () => {
+  let navigatedTo = null;
+  const plugin = createWikilinkPlugin(
+    { current: (pageId) => { navigatedTo = pageId; } },
+    { current: [{ page_id: "pages:foo/bar", title: "bar" }] },
+  );
+  const tagEl = {
+    textContent: "#foo/bar",
+    classList: {
+      contains: (name) => name === "tag-link-hash",
+    },
+  };
+  const event = {
+    target: {
+      closest: (selector) => (selector === ".tag-link" ? tagEl : null),
+    },
+  };
+
+  const handled = plugin.props.handleClick(null, 0, event);
+
+  assert.equal(handled, false);
+  assert.equal(navigatedTo, "pages:foo/bar");
+});
