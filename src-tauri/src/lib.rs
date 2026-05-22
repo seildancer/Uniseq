@@ -2397,7 +2397,7 @@ fn open_or_create_default_workspace(
 //
 // Also requires iCloud Documents entitlement and NSUbiquitousContainers in Info.plist.
 #[cfg(target_os = "ios")]
-extern "C" {
+unsafe extern "C" {
     fn uniseq_icloud_container_path(buf: *mut u8, len: usize) -> usize;
 }
 
