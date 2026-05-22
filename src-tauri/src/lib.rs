@@ -2621,82 +2621,134 @@ fn build_page_ai_chat_session(
 ) -> CommandResult<PreparedAiChatSession> {
     let all_pages = session.all_pages();
     let page_summary = session.page_summary(page_id).map_err(ErrorDto::from)?;
-    let page_content = session.page_content(page_id).map_err(ErrorDto::from)?;
-    let linked_refs = session.page_linked_refs(page_id).map_err(ErrorDto::from)?;
+    let subtree_pages =
+        collect_page_subtree_summaries(session, &page_summary).map_err(ErrorDto::from)?;
+    let subtree_title_by_hierarchy = build_subtree_title_lookup(&subtree_pages);
     let mut remaining_chars = char_budget;
     let mut context_body = String::new();
     let mut truncated = false;
-    let mut included_page_ids = vec![page_id_to_string(page_id)];
+    let mut included_page_ids = Vec::<String>::new();
+    let mut included_subpage_count = 0usize;
     let mut preview_related_page_titles = Vec::<String>::new();
     let mut preview_stream_dates_by_name = BTreeMap::<String, Vec<String>>::new();
-    let page_section = format!(
-        "{}\n\n{}\n",
-        display_page_title(&page_summary.title, page_id),
-        page_content.text.trim()
-    );
+
+    let hierarchy_section =
+        build_subtree_hierarchy_section(page_id, &subtree_pages, &subtree_title_by_hierarchy);
     if !push_fragment_with_optional_truncation(
         &mut context_body,
-        &page_section,
+        &hierarchy_section,
         &mut remaining_chars,
         true,
     ) {
         truncated = true;
-    } else {
-        for linked_ref in linked_refs {
-            let source_title = related_note_label(&all_pages, &linked_ref.source_page_id)
-                .unwrap_or_else(|| page_id_to_string(&linked_ref.source_page_id));
-            let source_id = page_id_to_string(&linked_ref.source_page_id);
-            let source_block = if linked_ref.block.markdown.trim().is_empty() {
-                linked_ref.block.content.trim().to_owned()
-            } else {
-                linked_ref.block.markdown.trim().to_owned()
-            };
-            let fragment = format!(
-                "\nRelated note: {}\n\n{}\n",
-                source_title, source_block
-            );
-            if !push_fragment_with_optional_truncation(
-                &mut context_body,
-                &fragment,
-                &mut remaining_chars,
-                false,
-            ) {
-                truncated = true;
-                break;
-            }
-            included_page_ids.push(source_id);
-            match linked_ref.source_page_id.location() {
-                PageLocation::Pages => {
-                    if !preview_related_page_titles.iter().any(|title| title == &source_title) {
-                        preview_related_page_titles.push(source_title);
-                    }
+    }
+
+    for (index, subtree_page) in subtree_pages.iter().enumerate() {
+        if truncated {
+            break;
+        }
+        let page_content = session
+            .page_content(&subtree_page.page_id)
+            .map_err(ErrorDto::from)?;
+        let hierarchy_label =
+            subtree_page_hierarchy_label(page_id, &subtree_page.page_id, &subtree_title_by_hierarchy);
+        let depth = subtree_page_depth(page_id, &subtree_page.page_id);
+        let section_heading = if depth == 0 {
+            format!("Page: {hierarchy_label}")
+        } else {
+            format!("Subpage (depth {depth}): {hierarchy_label}")
+        };
+        let page_section = format!("{section_heading}\n\n{}\n", page_content.text.trim());
+        if !push_fragment_with_optional_truncation(
+            &mut context_body,
+            &page_section,
+            &mut remaining_chars,
+            true,
+        ) {
+            truncated = true;
+            break;
+        }
+        included_page_ids.push(page_id_to_string(&subtree_page.page_id));
+        if index > 0 {
+            included_subpage_count += 1;
+        }
+    }
+
+    if !truncated {
+        for subtree_page in &subtree_pages {
+            let linked_refs = session
+                .page_linked_refs(&subtree_page.page_id)
+                .map_err(ErrorDto::from)?;
+            let target_label =
+                subtree_page_hierarchy_label(page_id, &subtree_page.page_id, &subtree_title_by_hierarchy);
+            for linked_ref in linked_refs {
+                let target_prefix = if &linked_ref.target_page_id == page_id {
+                    "Related note".to_owned()
+                } else {
+                    format!("Related note for {target_label}")
+                };
+                let source_title = related_note_label(&all_pages, &linked_ref.source_page_id)
+                    .unwrap_or_else(|| page_id_to_string(&linked_ref.source_page_id));
+                let source_id = page_id_to_string(&linked_ref.source_page_id);
+                let source_block = if linked_ref.block.markdown.trim().is_empty() {
+                    linked_ref.block.content.trim().to_owned()
+                } else {
+                    linked_ref.block.markdown.trim().to_owned()
+                };
+                let fragment = format!(
+                    "\n{}: {}\n\n{}\n",
+                    target_prefix, source_title, source_block
+                );
+                if !push_fragment_with_optional_truncation(
+                    &mut context_body,
+                    &fragment,
+                    &mut remaining_chars,
+                    false,
+                ) {
+                    truncated = true;
+                    break;
                 }
-                PageLocation::Stream { stream_name } => {
-                    let entry = preview_stream_dates_by_name
-                        .entry(stream_name.as_str().to_owned())
-                        .or_default();
-                    let date_name = linked_ref.source_page_id.leaf_name().as_str().to_owned();
-                    if !entry.iter().any(|existing| existing == &date_name) {
-                        entry.push(date_name);
+                included_page_ids.push(source_id);
+                match linked_ref.source_page_id.location() {
+                    PageLocation::Pages => {
+                        if !preview_related_page_titles
+                            .iter()
+                            .any(|title| title == &source_title)
+                        {
+                            preview_related_page_titles.push(source_title);
+                        }
+                    }
+                    PageLocation::Stream { stream_name } => {
+                        let entry = preview_stream_dates_by_name
+                            .entry(stream_name.as_str().to_owned())
+                            .or_default();
+                        let date_name = linked_ref.source_page_id.leaf_name().as_str().to_owned();
+                        if !entry.iter().any(|existing| existing == &date_name) {
+                            entry.push(date_name);
+                        }
                     }
                 }
             }
         }
     }
 
-    let preview_related_note_sources = summarize_related_note_sources(
-        &preview_related_page_titles,
-        &preview_stream_dates_by_name,
-    );
-    let preview_summary = if preview_related_note_sources.is_empty() {
-        format!(
-            "Start chat based on {}.",
-            display_page_title(&page_summary.title, page_id)
-        )
+    let preview_related_note_sources =
+        summarize_related_note_sources(&preview_related_page_titles, &preview_stream_dates_by_name);
+    let preview_root = display_page_title(&page_summary.title, page_id);
+    let preview_scope = if included_subpage_count == 0 {
+        preview_root
     } else {
         format!(
-            "Start chat based on {} and related notes from {}.",
-            display_page_title(&page_summary.title, page_id),
+            "{preview_root} and {} subpage{}",
+            included_subpage_count,
+            if included_subpage_count == 1 { "" } else { "s" }
+        )
+    };
+    let preview_summary = if preview_related_note_sources.is_empty() {
+        format!("Start chat based on {preview_scope}.")
+    } else {
+        format!(
+            "Start chat based on {preview_scope} and related notes from {}.",
             human_join(&preview_related_note_sources)
         )
     };
@@ -2704,7 +2756,7 @@ fn build_page_ai_chat_session(
         &preview_summary,
         &context_body,
         Some(
-            "The main page content should be treated as relatively time-agnostic reference information. Related notes may add dated context around it.",
+            "The main page content and any included subpages should be treated as relatively time-agnostic reference information. Related notes may add dated context around them.",
         ),
     );
     Ok(PreparedAiChatSession {
@@ -2713,6 +2765,90 @@ fn build_page_ai_chat_session(
         truncated,
         included_page_ids,
     })
+}
+
+fn build_subtree_title_lookup(subtree_pages: &[PageSummary]) -> BTreeMap<String, String> {
+    subtree_pages
+        .iter()
+        .map(|page| {
+            (
+                page.page_id.hierarchy_display(),
+                display_page_title(&page.title, &page.page_id),
+            )
+        })
+        .collect()
+}
+
+fn build_subtree_hierarchy_section(
+    root_page_id: &PageId,
+    subtree_pages: &[PageSummary],
+    title_by_hierarchy: &BTreeMap<String, String>,
+) -> String {
+    let mut hierarchy = String::from("Page hierarchy:\n");
+    for page in subtree_pages {
+        let depth = subtree_page_depth(root_page_id, &page.page_id);
+        hierarchy.push_str(&"  ".repeat(depth));
+        hierarchy.push_str("- ");
+        hierarchy.push_str(&subtree_page_hierarchy_label(
+            root_page_id,
+            &page.page_id,
+            title_by_hierarchy,
+        ));
+        hierarchy.push('\n');
+    }
+    hierarchy.push('\n');
+    hierarchy
+}
+
+fn subtree_page_depth(root_page_id: &PageId, page_id: &PageId) -> usize {
+    page_id
+        .segments()
+        .len()
+        .saturating_sub(root_page_id.segments().len())
+}
+
+fn subtree_page_hierarchy_label(
+    root_page_id: &PageId,
+    page_id: &PageId,
+    title_by_hierarchy: &BTreeMap<String, String>,
+) -> String {
+    let root_depth = root_page_id.segments().len();
+    (root_depth..=page_id.segments().len())
+        .map(|depth| {
+            let hierarchy = page_id.segments()[..depth]
+                .iter()
+                .map(PageName::as_str)
+                .collect::<Vec<_>>()
+                .join("/");
+            title_by_hierarchy
+                .get(&hierarchy)
+                .cloned()
+                .unwrap_or_else(|| hierarchy)
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
+}
+
+fn collect_page_subtree_summaries(
+    session: &WorkspaceSession,
+    page_summary: &PageSummary,
+) -> Result<Vec<PageSummary>, CoreError> {
+    let mut pages = vec![page_summary.clone()];
+    collect_child_page_summaries(session, &page_summary.page_id, &mut pages)?;
+    Ok(pages)
+}
+
+fn collect_child_page_summaries(
+    session: &WorkspaceSession,
+    page_id: &PageId,
+    pages: &mut Vec<PageSummary>,
+) -> Result<(), CoreError> {
+    for child_page in session.child_pages(page_id)? {
+        let child_page_id = child_page.page_id.clone();
+        pages.push(child_page);
+        collect_child_page_summaries(session, &child_page_id, pages)?;
+    }
+    Ok(())
 }
 
 fn build_stream_ai_chat_session(
@@ -3808,9 +3944,11 @@ mod tests {
         assert!(prepared.system_prompt.contains("linked thought"));
         assert!(prepared.preview_summary.contains("Target"));
         assert!(prepared.preview_summary.contains("Source"));
-        assert!(prepared
-            .system_prompt
-            .contains("time-agnostic reference information"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("time-agnostic reference information")
+        );
         assert_eq!(
             prepared.included_page_ids,
             vec!["pages:Target".to_owned(), "pages:Source".to_owned()]
@@ -3823,7 +3961,11 @@ mod tests {
     fn ai_page_session_labels_stream_backed_related_notes_with_stream_name() {
         let root = unique_temp_dir("uniseq-app-ai-page-stream-ref");
         write_workspace_file(&root, "pages/Target.md", "main body");
-        write_workspace_file(&root, "journals/2026_05_20.md", "- [[Target]]\n  linked thought");
+        write_workspace_file(
+            &root,
+            "journals/2026_05_20.md",
+            "- [[Target]]\n  linked thought",
+        );
         let session = open_test_session(&root);
 
         let prepared = build_ai_chat_session(
@@ -3835,7 +3977,88 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prepared.system_prompt.contains("Related note: 2026_05_20 (journals)"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("Related note: 2026_05_20 (journals)")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_page_session_includes_subpages_and_their_linked_refs() {
+        let root = unique_temp_dir("uniseq-app-ai-page-subtree");
+        write_workspace_file(&root, "pages/Target.md", "main body");
+        write_workspace_file(&root, "pages/Target___Subpage.md", "child body");
+        write_workspace_file(&root, "pages/Target___Subpage___Deep.md", "deep body");
+        write_workspace_file(
+            &root,
+            "pages/SourceRoot.md",
+            "- [[Target]]\n  root linked thought",
+        );
+        write_workspace_file(
+            &root,
+            "pages/SourceChild.md",
+            "- [[Target/Subpage]]\n  child linked thought",
+        );
+        write_workspace_file(
+            &root,
+            "pages/SourceDeep.md",
+            "- [[Target/Subpage/Deep]]\n  deep linked thought",
+        );
+        let session = open_test_session(&root);
+
+        let prepared = build_ai_chat_session(
+            &session,
+            &AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            4_000,
+        )
+        .unwrap();
+
+        assert!(prepared.system_prompt.contains("main body"));
+        assert!(prepared.system_prompt.contains("Page hierarchy:\n- Target"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("  - Target / Subpage\n    - Target / Subpage / Deep")
+        );
+        assert!(prepared.system_prompt.contains("Page: Target"));
+        assert!(prepared
+            .system_prompt
+            .contains("Subpage (depth 1): Target / Subpage"));
+        assert!(prepared
+            .system_prompt
+            .contains("Subpage (depth 2): Target / Subpage / Deep"));
+        assert!(prepared.system_prompt.contains("child body"));
+        assert!(prepared.system_prompt.contains("deep body"));
+        assert!(prepared.system_prompt.contains("root linked thought"));
+        assert!(prepared
+            .system_prompt
+            .contains("Related note for Target / Subpage:"));
+        assert!(prepared.system_prompt.contains("child linked thought"));
+        assert!(prepared
+            .system_prompt
+            .contains("Related note for Target / Subpage / Deep:"));
+        assert!(prepared.system_prompt.contains("deep linked thought"));
+        assert!(prepared.system_prompt.contains(
+            "included subpages should be treated as relatively time-agnostic reference information"
+        ));
+        assert_eq!(
+            prepared.included_page_ids,
+            vec![
+                "pages:Target".to_owned(),
+                "pages:Target/Subpage".to_owned(),
+                "pages:Target/Subpage/Deep".to_owned(),
+                "pages:SourceRoot".to_owned(),
+                "pages:SourceChild".to_owned(),
+                "pages:SourceDeep".to_owned()
+            ]
+        );
+        assert!(prepared.preview_summary.contains("Target and 2 subpages"));
+        assert!(prepared.preview_summary.contains("related notes from"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -3844,9 +4067,21 @@ mod tests {
     fn ai_page_preview_summarizes_stream_related_notes_as_date_ranges() {
         let root = unique_temp_dir("uniseq-app-ai-page-stream-range");
         write_workspace_file(&root, "pages/Target.md", "main body");
-        write_workspace_file(&root, "journals/2026_05_18.md", "- [[Target]]\n  first linked thought");
-        write_workspace_file(&root, "journals/2026_05_20.md", "- [[Target]]\n  second linked thought");
-        write_workspace_file(&root, "pages/Project.md", "- [[Target]]\n  page linked thought");
+        write_workspace_file(
+            &root,
+            "journals/2026_05_18.md",
+            "- [[Target]]\n  first linked thought",
+        );
+        write_workspace_file(
+            &root,
+            "journals/2026_05_20.md",
+            "- [[Target]]\n  second linked thought",
+        );
+        write_workspace_file(
+            &root,
+            "pages/Project.md",
+            "- [[Target]]\n  page linked thought",
+        );
         let session = open_test_session(&root);
 
         let prepared = build_ai_chat_session(
@@ -3859,9 +4094,11 @@ mod tests {
         .unwrap();
 
         assert!(prepared.preview_summary.contains("Project"));
-        assert!(prepared
-            .preview_summary
-            .contains("journals from 2026-05-18 to 2026-05-20"));
+        assert!(
+            prepared
+                .preview_summary
+                .contains("journals from 2026-05-18 to 2026-05-20")
+        );
         assert!(!prepared.preview_summary.contains("2026_05_18 (journals)"));
         assert!(!prepared.preview_summary.contains("2026_05_20 (journals)"));
 
@@ -3884,18 +4121,14 @@ mod tests {
         )
         .unwrap();
 
-        let newer_index = prepared
-            .system_prompt
-            .find("2026-05-20\njournals")
-            .unwrap();
-        let older_index = prepared
-            .system_prompt
-            .find("2026-05-19\njournals")
-            .unwrap();
+        let newer_index = prepared.system_prompt.find("2026-05-20\njournals").unwrap();
+        let older_index = prepared.system_prompt.find("2026-05-19\njournals").unwrap();
         assert!(newer_index < older_index);
-        assert!(!prepared
-            .system_prompt
-            .contains("time-agnostic reference information"));
+        assert!(
+            !prepared
+                .system_prompt
+                .contains("time-agnostic reference information")
+        );
         assert_eq!(
             prepared.included_page_ids,
             vec![
@@ -3945,9 +4178,21 @@ mod tests {
     #[test]
     fn ai_stream_truncation_drops_oldest_notes_first_and_updates_preview_range() {
         let root = unique_temp_dir("uniseq-app-ai-stream-truncation");
-        write_workspace_file(&root, "journals/2026_05_18.md", "old note old note old note old note old note old note old note old note");
-        write_workspace_file(&root, "journals/2026_05_19.md", "mid note mid note mid note mid note mid note mid note mid note mid note");
-        write_workspace_file(&root, "journals/2026_05_20.md", "new note new note new note new note new note new note new note new note");
+        write_workspace_file(
+            &root,
+            "journals/2026_05_18.md",
+            "old note old note old note old note old note old note old note old note",
+        );
+        write_workspace_file(
+            &root,
+            "journals/2026_05_19.md",
+            "mid note mid note mid note mid note mid note mid note mid note mid note",
+        );
+        write_workspace_file(
+            &root,
+            "journals/2026_05_20.md",
+            "new note new note new note new note new note new note new note new note",
+        );
         let session = open_test_session(&root);
 
         let prepared = build_ai_chat_session(

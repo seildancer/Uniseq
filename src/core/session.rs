@@ -206,6 +206,13 @@ impl WorkspaceSession {
             .with_read_api(|read_api| read_api.page_detail(page_id))
     }
 
+    pub fn child_pages(&self, page_id: &PageId) -> Result<Vec<PageSummary>, CoreError> {
+        self.state
+            .read()
+            .unwrap()
+            .with_read_api(|read_api| read_api.child_pages(page_id))
+    }
+
     pub fn page_content(&self, page_id: &PageId) -> Result<PageContentSnapshot, CoreError> {
         self.state
             .read()
