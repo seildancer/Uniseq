@@ -1309,7 +1309,7 @@ export default function App() {
     }
   }
 
-  function renderWindowControls() {
+  function renderWindowControls({ showWorkspaceControls = true } = {}) {
     const canNavigateBack = selectionHistoryState.index > 0;
     const canNavigateForward = selectionHistoryState.index < selectionHistoryState.entries.length - 1;
     const hasSyncConflicts = syncConflicts.length > 0;
@@ -1317,61 +1317,65 @@ export default function App() {
 
     return (
       <div className="window-controls" data-no-window-drag="true">
-        {workspace ? (
-          isSyncing ? (
-            <span className="window-sync-status">Syncing...</span>
-          ) : hasSyncConflicts ? (
+        {showWorkspaceControls ? (
+          <>
+            {workspace ? (
+              isSyncing ? (
+                <span className="window-sync-status">Syncing...</span>
+              ) : hasSyncConflicts ? (
+                <button
+                  className="window-control-button window-control-button--sync-conflict"
+                  type="button"
+                  onClick={openSyncConflictsModal}
+                >
+                  {syncConflicts.length === 1 ? "Conflict" : `${syncConflicts.length} conflicts`}
+                </button>
+              ) : null
+            ) : null}
+            {streamSelection ? (
+              <button
+                className={`window-control-button window-control-button--toggle${hideEmptyStreamDates ? " window-control-button--toggle-active" : ""}`}
+                type="button"
+                aria-pressed={hideEmptyStreamDates}
+                aria-label={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
+                title={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
+                onClick={() => setHideEmptyStreamDates((enabled) => !enabled)}
+              >
+                {hideEmptyStreamDates ? <WindowEyeClosedIcon /> : <WindowEyeOpenIcon />}
+                <span className="window-control-button-label">Empty</span>
+              </button>
+            ) : null}
             <button
-              className="window-control-button window-control-button--sync-conflict"
+              className={`window-control-button${aiChat.isOpen ? " window-control-button--active" : ""}`}
               type="button"
-              onClick={openSyncConflictsModal}
+              aria-label="Open AI chat"
+              title="Open AI chat"
+              onClick={() => void handleOpenAiChat()}
             >
-              {syncConflicts.length === 1 ? "Conflict" : `${syncConflicts.length} conflicts`}
+              <WindowAiIcon />
             </button>
-          ) : null
+            <button
+              className="window-control-button"
+              type="button"
+              aria-label="Go back"
+              title="Go back"
+              disabled={!canNavigateBack}
+              onClick={handleNavigateBack}
+            >
+              <WindowBackIcon />
+            </button>
+            <button
+              className="window-control-button"
+              type="button"
+              aria-label="Go forward"
+              title="Go forward"
+              disabled={!canNavigateForward}
+              onClick={handleNavigateForward}
+            >
+              <WindowForwardIcon />
+            </button>
+          </>
         ) : null}
-        {streamSelection ? (
-          <button
-            className={`window-control-button window-control-button--toggle${hideEmptyStreamDates ? " window-control-button--toggle-active" : ""}`}
-            type="button"
-            aria-pressed={hideEmptyStreamDates}
-            aria-label={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
-            title={hideEmptyStreamDates ? "Show empty dates" : "Hide empty dates"}
-            onClick={() => setHideEmptyStreamDates((enabled) => !enabled)}
-          >
-            {hideEmptyStreamDates ? <WindowEyeClosedIcon /> : <WindowEyeOpenIcon />}
-            <span className="window-control-button-label">Empty</span>
-          </button>
-        ) : null}
-        <button
-          className={`window-control-button${aiChat.isOpen ? " window-control-button--active" : ""}`}
-          type="button"
-          aria-label="Open AI chat"
-          title="Open AI chat"
-          onClick={() => void handleOpenAiChat()}
-        >
-          <WindowAiIcon />
-        </button>
-        <button
-          className="window-control-button"
-          type="button"
-          aria-label="Go back"
-          title="Go back"
-          disabled={!canNavigateBack}
-          onClick={handleNavigateBack}
-        >
-          <WindowBackIcon />
-        </button>
-        <button
-          className="window-control-button"
-          type="button"
-          aria-label="Go forward"
-          title="Go forward"
-          disabled={!canNavigateForward}
-          onClick={handleNavigateForward}
-        >
-          <WindowForwardIcon />
-        </button>
         {showDesktopWindowControls ? (
           <>
             <button className="window-control-button" type="button" aria-label="Minimize window" onClick={handleMinimizeWindow}>
@@ -4779,7 +4783,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <div className="onboard-topbar" onMouseDown={handleWindowDragMouseDown}>
-        {renderWindowControls()}
+        {renderWindowControls({ showWorkspaceControls: false })}
       </div>
       <section className="hero-panel minimal-panel">
         <img src="/uniseq.svg" alt="Uniseq" className="onboard-logo" />
