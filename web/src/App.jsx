@@ -2383,6 +2383,12 @@ export default function App() {
             </div>
           ) : (
             <div className="remote-auth-panel">
+              <div className="feature-note feature-note--compact">
+                <div className="feature-note-title">
+                  <span className="feature-badge feature-badge--soft">Beta</span>
+                  <span>Early access based on Supabase free tier.</span>
+                </div>
+              </div>
               <div className="remote-provider-toggle" role="tablist">
                 <button
                   className={remoteState.loginMode === "login" ? "onboard-tab onboard-tab--active" : "onboard-tab"}

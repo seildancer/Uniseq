@@ -89,7 +89,10 @@ export default function AiChatPanel({
       <section className={panelClassName} onClick={(event) => event.stopPropagation()}>
         <header className="ai-chat-header">
           <div className="ai-chat-header-copy">
-            <strong>AI Chat</strong>
+            <div className="ai-chat-header-title">
+              <strong>AI Chat</strong>
+              <span className="feature-badge feature-badge--soft">Beta</span>
+            </div>
             {loadingSession && <span>Loading context...</span>}
           </div>
           <button
@@ -103,7 +106,6 @@ export default function AiChatPanel({
             </svg>
           </button>
         </header>
-
         <section className="ai-chat-settings">
           {apiKey && !keyExpanded ? (
             <div className="ai-chat-key-compact">

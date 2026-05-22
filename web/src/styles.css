@@ -466,6 +466,64 @@ h2 {
   padding: 10px 0 0;
 }
 
+.feature-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #8a6542 32%, var(--line) 68%);
+  background: color-mix(in srgb, #f0dfcb 64%, var(--panel) 36%);
+  color: #8a6542;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.feature-badge--soft {
+  background: color-mix(in srgb, var(--panel) 84%, #f0dfcb 16%);
+}
+
+.feature-note {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, #8a6542 16%, var(--line) 84%);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 90%, #f6ecdf 10%);
+}
+
+.feature-note--compact {
+  padding: 10px 12px;
+}
+
+.feature-note-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feature-note-title strong {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.feature-note-title span:not(.feature-badge) {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.feature-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 .remote-auth-panel a {
   color: var(--accent);
   font-size: 0.9rem;
@@ -2830,6 +2888,21 @@ code {
   color: var(--muted);
 }
 
+[data-theme="dark"] .feature-badge {
+  border-color: color-mix(in srgb, #c7a37f 34%, var(--line) 66%);
+  background: color-mix(in srgb, #3a2f27 58%, var(--panel) 42%);
+  color: #dfc1a2;
+}
+
+[data-theme="dark"] .feature-badge--soft {
+  background: color-mix(in srgb, #322821 42%, var(--panel) 58%);
+}
+
+[data-theme="dark"] .feature-note {
+  border-color: color-mix(in srgb, #c7a37f 16%, var(--line) 84%);
+  background: color-mix(in srgb, #2b2622 34%, var(--panel) 66%);
+}
+
 @media (max-width: 900px) {
   .action-grid {
     grid-template-columns: 1fr;
@@ -3066,6 +3139,12 @@ code {
 .ai-chat-header-copy {
   display: grid;
   gap: 3px;
+}
+
+.ai-chat-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .ai-chat-header-copy strong {
