@@ -2382,37 +2382,16 @@ fn open_or_create_default_workspace(
     Ok(opened)
 }
 
-// Swift implementation required in the Xcode project (src-tauri/gen/apple):
-//
-//   @_cdecl("uniseq_icloud_container_path")
-//   func icloudContainerPath(buf: UnsafeMutablePointer<UInt8>, len: Int) -> Int {
-//       guard let url = FileManager.default
-//           .url(forUbiquityContainerIdentifier: nil)?
-//           .appendingPathComponent("Documents") else { return 0 }
-//       let bytes = Array(url.path.utf8)
-//       let count = min(bytes.count, len)
-//       buf.initialize(from: bytes, count: count)
-//       return count
-//   }
-//
-// Also requires iCloud Documents entitlement and NSUbiquitousContainers in Info.plist.
-#[cfg(target_os = "ios")]
-unsafe extern "C" {
-    fn uniseq_icloud_container_path(buf: *mut u8, len: usize) -> usize;
-}
-
 #[cfg(target_os = "ios")]
 fn resolve_icloud_container_path() -> CommandResult<String> {
-    let mut buf = vec![0u8; 4096];
-    let len = unsafe { uniseq_icloud_container_path(buf.as_mut_ptr(), buf.len()) };
-    if len == 0 {
-        return Err(ErrorDto::app_config_unavailable(
-            "iCloud is not available on this device".to_string(),
-        ));
-    }
-    buf.truncate(len);
-    String::from_utf8(buf).map_err(|_| {
-        ErrorDto::app_config_unavailable("iCloud path contains invalid UTF-8".to_string())
+    use objc2_foundation::{NSFileManager, NSString};
+    let documents = NSString::from_str("Documents");
+    let url = NSFileManager::defaultManager()
+        .URLForUbiquityContainerIdentifier(None)
+        .and_then(|u| u.URLByAppendingPathComponent(&documents))
+        .and_then(|u| u.path());
+    url.map(|p| p.to_string()).ok_or_else(|| {
+        ErrorDto::app_config_unavailable("iCloud is not available on this device".to_string())
     })
 }
 

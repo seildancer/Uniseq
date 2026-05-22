@@ -26,7 +26,9 @@
       "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\1004w\\\\Documents\\\\develop\\\\Uniseq\" -Recurse -Depth 2)",
       "Bash(Select-Object FullName)",
       "Bash(Get-ChildItem -Path . -Force)",
-      "Bash(Select-Object Name, Mode)"
+      "Bash(Select-Object Name, Mode)",
+      "Bash(cargo tauri *)",
+      "Bash(grep \"\\\\.rs$\")"
     ]
   }
 }
