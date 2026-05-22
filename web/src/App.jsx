@@ -878,6 +878,7 @@ export default function App() {
   const [remoteOpenStep, setRemoteOpenStep] = useState("remote");
   const [remoteState, setRemoteState] = useState(INITIAL_REMOTE_STATE);
   const [onboardingTab, setOnboardingTab] = useState("create");
+  const [remoteOpenTab, setRemoteOpenTab] = useState("uniseq");
   const [syncStatus, setSyncStatus] = useState(null);
   const [syncProgress, setSyncProgress] = useState(null);
   const [syncConflictDetail, setSyncConflictDetail] = useState(null);
@@ -2328,7 +2329,20 @@ export default function App() {
     }
   }
 
-  function renderRemoteSetupFields(mode = "open") {
+  function handleSelectRemoteOpenTab(nextTab) {
+    setRemoteOpenStep("remote");
+    setRemoteLocalState(INITIAL_REMOTE_LOCAL_STATE);
+    setRemoteOpenTab(nextTab);
+    if (nextTab === "uniseq" || nextTab === "custom") {
+      setRemoteState((current) => (
+        current.provider === nextTab
+          ? current
+          : { ...current, ...remoteProviderStatePatch(nextTab) }
+      ));
+    }
+  }
+
+  function renderRemoteSetupFields(mode = "open", { showProviderTabs = true } = {}) {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     const isSyncSetup = mode === "sync-setup";
     const syncSetupWorkspaceName = isSyncSetup ? workspaceNameFromRootPath(workspace?.root_path) : "";
@@ -2339,22 +2353,24 @@ export default function App() {
     const isUniseqLoggedIn = remoteState.provider === "uniseq" && !!remoteState.loggedInEmail;
     return (
       <>
-        <div className="remote-provider-toggle" role="tablist">
-          <button
-            className={remoteState.provider === "uniseq" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
-            type="button"
-            onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("uniseq") }))}
-          >
-            Uniseq Sync
-          </button>
-          <button
-            className={remoteState.provider === "custom" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
-            type="button"
-            onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("custom") }))}
-          >
-            Custom URL
-          </button>
-        </div>
+        {showProviderTabs ? (
+          <div className="remote-provider-toggle" role="tablist">
+            <button
+              className={remoteState.provider === "uniseq" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+              type="button"
+              onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("uniseq") }))}
+            >
+              Uniseq Sync
+            </button>
+            <button
+              className={remoteState.provider === "custom" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+              type="button"
+              onClick={() => setRemoteState((current) => ({ ...current, ...remoteProviderStatePatch("custom") }))}
+            >
+              Custom URL
+            </button>
+          </div>
+        ) : null}
         {remoteState.provider === "uniseq" ? (
           isUniseqLoggedIn ? (
             <div className="remote-auth-panel">
@@ -2587,9 +2603,55 @@ export default function App() {
   }
 
   function renderOpenRemoteForm() {
+    const openingIcloud = remoteOpenTab === "icloud";
     return (
-      <form className="create-form" onSubmit={handleOpenRemoteWorkspace}>
-        {remoteOpenStep === "local-path" ? (
+      <form className="create-form" onSubmit={openingIcloud ? handleOpenIcloudWorkspace : handleOpenRemoteWorkspace}>
+        <div className="remote-provider-toggle" role="tablist">
+          {isIos ? (
+            <button
+              className={remoteOpenTab === "icloud" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+              type="button"
+              onClick={() => handleSelectRemoteOpenTab("icloud")}
+            >
+              iCloud
+            </button>
+          ) : null}
+          <button
+            className={remoteOpenTab === "uniseq" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+            type="button"
+            onClick={() => handleSelectRemoteOpenTab("uniseq")}
+          >
+            Uniseq Sync
+          </button>
+          <button
+            className={remoteOpenTab === "custom" ? "onboard-tab onboard-tab--active" : "onboard-tab"}
+            type="button"
+            onClick={() => handleSelectRemoteOpenTab("custom")}
+          >
+            Custom URL
+          </button>
+        </div>
+        {openingIcloud ? (
+          <>
+            <div className="field">
+              <span>Workspace name</span>
+              <input
+                type="text"
+                value={icloudFolderName}
+                onChange={(event) => setIcloudFolderName(event.target.value)}
+                placeholder="My Notes"
+                autoFocus
+              />
+            </div>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={!icloudFolderName.trim() || busyAction === "open-icloud"}
+            >
+              {busyAction === "open-icloud" ? "Opening..." : "Open iCloud Workspace"}
+            </button>
+          </>
+        ) : remoteOpenStep === "local-path" ? (
           <>
             <div className="field">
               <span>Local location</span>
@@ -2642,9 +2704,7 @@ export default function App() {
             </div>
           </>
         ) : (
-          <>
-            {renderRemoteSetupFields()}
-          </>
+          renderRemoteSetupFields("open", { showProviderTabs: false })
         )}
       </form>
     );
@@ -4828,36 +4888,14 @@ export default function App() {
               {onboardingTab === "remote" ? (
                 renderOpenRemoteForm()
               ) : (
-                <>
-                  <button
-                    className="primary-button"
-                    type="button"
-                    onClick={handleOpenDefaultWorkspace}
-                    disabled={busyAction === "open"}
-                  >
-                    {busyAction === "open" ? "Opening..." : "Open Workspace"}
-                  </button>
-                  {isIos && (
-                    <form className="create-form" onSubmit={handleOpenIcloudWorkspace}>
-                      <div className="field">
-                        <span>Workspace name</span>
-                        <input
-                          type="text"
-                          value={icloudFolderName}
-                          onChange={(e) => setIcloudFolderName(e.target.value)}
-                          placeholder="My Notes"
-                        />
-                      </div>
-                      <button
-                        className="primary-button"
-                        type="submit"
-                        disabled={!icloudFolderName.trim() || busyAction === "open-icloud"}
-                      >
-                        {busyAction === "open-icloud" ? "Opening..." : "Open iCloud Workspace"}
-                      </button>
-                    </form>
-                  )}
-                </>
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={handleOpenDefaultWorkspace}
+                  disabled={busyAction === "open"}
+                >
+                  {busyAction === "open" ? "Opening..." : "Open Workspace"}
+                </button>
               )}
             </div>
           </>
