@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 const AI_HTTP_TIMEOUT_SECS: u64 = 90;
-const GOOGLE_MODEL: &str = "gemini-2.5-flash-lite";
+const GOOGLE_MODEL: &str = "gemini-3.5-flash-lite";
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
