@@ -960,10 +960,6 @@ where
     })
 }
 
-pub fn sync_once(root: &Path, provider: &dyn SyncProvider) -> SyncResult<SyncRunSummary> {
-    sync_once_with_progress(root, provider, |_| {})
-}
-
 pub fn sync_once_with_progress<F>(
     root: &Path,
     provider: &dyn SyncProvider,
@@ -1739,6 +1735,7 @@ pub fn run_sync_loop(
     sync_lock: Arc<Mutex<()>>,
     rx: mpsc::Receiver<SyncLoopMessage>,
 ) {
+    const SYNC_PROGRESS_EVENT: &str = "sync-progress";
     let min_interval = Duration::from_secs(5);
     let max_interval = Duration::from_secs(80);
     let mut interval = min_interval;
@@ -1753,7 +1750,10 @@ pub fn run_sync_loop(
                 activity_pending = true;
                 if last_sync_at.elapsed() >= min_interval {
                     if let Ok(guard) = sync_lock.try_lock() {
-                        let status = do_background_sync(&root).map(|mut status| {
+                        let status = do_background_sync(&root, |progress| {
+                            let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
+                        })
+                        .map(|mut status| {
                             status.background_loop_running = true;
                             status
                         });
@@ -1770,7 +1770,10 @@ pub fn run_sync_loop(
             Ok(SyncLoopMessage::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if let Ok(guard) = sync_lock.try_lock() {
-                    let status = do_background_sync(&root).map(|mut status| {
+                    let status = do_background_sync(&root, |progress| {
+                        let _ = app.emit(SYNC_PROGRESS_EVENT, &progress);
+                    })
+                    .map(|mut status| {
                         status.background_loop_running = true;
                         status
                     });
@@ -1791,7 +1794,10 @@ pub fn run_sync_loop(
     }
 }
 
-fn do_background_sync(root: &Path) -> Option<SyncStatus> {
+fn do_background_sync<F>(root: &Path, mut progress: F) -> Option<SyncStatus>
+where
+    F: FnMut(SyncProgress),
+{
     fn finalize_background_sync(
         root: &Path,
         result: SyncResult<SyncRunSummary>,
@@ -1810,24 +1816,36 @@ fn do_background_sync(root: &Path) -> Option<SyncStatus> {
         Ok(Some(c)) if c.enabled => c,
         _ => return None,
     };
-    let secrets = read_sync_auth_secrets(root).ok()?;
-    let provider = HttpSyncProvider::new_workspace_with_auth(
+    let secrets = match read_sync_auth_secrets(root) {
+        Ok(secrets) => secrets,
+        Err(_) => return sync_status(root).ok(),
+    };
+    let provider = match HttpSyncProvider::new_workspace_with_auth(
         &config.sync_root_url,
         &config.remote_workspace_id,
         secrets.bearer_token.clone(),
-    )
-    .ok()?;
-    match sync_once(root, &provider) {
+    ) {
+        Ok(provider) => provider,
+        Err(_) => return sync_status(root).ok(),
+    };
+    match sync_once_with_progress(root, &provider, &mut progress) {
         Err(e) if e.auth_expired => {
-            let new_secrets = refresh_supabase_auth(&config.sync_root_url, &secrets).ok()?;
-            write_sync_auth_secrets(root, &new_secrets).ok()?;
-            let new_provider = HttpSyncProvider::new_workspace_with_auth(
+            let new_secrets = match refresh_supabase_auth(&config.sync_root_url, &secrets) {
+                Ok(secrets) => secrets,
+                Err(_) => return sync_status(root).ok(),
+            };
+            if write_sync_auth_secrets(root, &new_secrets).is_err() {
+                return sync_status(root).ok();
+            }
+            let new_provider = match HttpSyncProvider::new_workspace_with_auth(
                 &config.sync_root_url,
                 &config.remote_workspace_id,
                 new_secrets.bearer_token,
-            )
-            .ok()?;
-            finalize_background_sync(root, sync_once(root, &new_provider))
+            ) {
+                Ok(provider) => provider,
+                Err(_) => return sync_status(root).ok(),
+            };
+            finalize_background_sync(root, sync_once_with_progress(root, &new_provider, progress))
         }
         other => finalize_background_sync(root, other),
     }

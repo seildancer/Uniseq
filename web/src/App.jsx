@@ -895,6 +895,7 @@ export default function App() {
   const [moveTarget, setMoveTarget] = useState("");
   const [dragState, setDragState] = useState(null);
   const [windowIsMaximized, setWindowIsMaximized] = useState(false);
+  const startupSyncOverlayStateRef = useRef("idle");
   const [showDesktopWindowControls] = useState(() => {
     try {
       const p = platform();
@@ -1496,7 +1497,7 @@ export default function App() {
     }
   }
 
-  async function openWorkspaceRoot(rootPath) {
+  async function openWorkspaceRoot(rootPath, { showStartupSyncOverlay = false } = {}) {
     const openedWorkspace = await invoke("open_workspace", { rootPath });
     setWorkspace(openedWorkspace);
     resetSelectionHistory(defaultStreamSelection());
@@ -1507,7 +1508,17 @@ export default function App() {
     setLinkedRefs([]);
     setLoadedPageId(null);
     await loadWorkspaceLists();
-    await loadSyncStatus().catch(() => setSyncStatus(null));
+    const status = await loadSyncStatus().catch(() => {
+      setSyncStatus(null);
+      return null;
+    });
+    if (showStartupSyncOverlay) {
+      if (status?.enabled && startupSyncOverlayStateRef.current === "awaiting_status") {
+        setBusyAction("startup-sync");
+      } else {
+        startupSyncOverlayStateRef.current = "idle";
+      }
+    }
     setMode("workspace");
   }
 
@@ -2719,7 +2730,7 @@ export default function App() {
   function renderSyncProgressOverlay() {
     const activeOperation = busyAction === "open-remote"
       ? "initial_pull"
-      : busyAction === "sync"
+      : busyAction === "sync" || busyAction === "startup-sync"
         ? "sync"
         : "";
     if (!activeOperation) {
@@ -3506,8 +3517,10 @@ export default function App() {
             return;
           }
 
-          await openWorkspaceRoot(lastWorkspacePath);
+          startupSyncOverlayStateRef.current = "awaiting_status";
+          await openWorkspaceRoot(lastWorkspacePath, { showStartupSyncOverlay: true });
         } catch (error) {
+          startupSyncOverlayStateRef.current = "idle";
           await invoke("clear_last_workspace_path").catch(() => undefined);
 
           if (isBootEffectMountedRef.current) {
@@ -3619,11 +3632,19 @@ export default function App() {
 
   // Listen for sync-status events emitted by the Rust background sync loop.
   useEffect(() => {
-    if (mode !== "workspace") return undefined;
     let unlisten;
-    listen("sync-status", (event) => setSyncStatus(event.payload)).then((fn) => { unlisten = fn; });
+    listen("sync-status", (event) => {
+      setSyncStatus(event.payload);
+      if (
+        startupSyncOverlayStateRef.current === "awaiting_status"
+        && event.payload?.background_loop_running
+      ) {
+        startupSyncOverlayStateRef.current = "idle";
+        setBusyAction((current) => (current === "startup-sync" ? "" : current));
+      }
+    }).then((fn) => { unlisten = fn; });
     return () => { unlisten?.(); };
-  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let unlisten;
@@ -3644,7 +3665,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (busyAction !== "open-remote" && busyAction !== "sync") {
+    if (busyAction !== "open-remote" && busyAction !== "sync" && busyAction !== "startup-sync") {
       setSyncProgress(null);
     }
   }, [busyAction]);
