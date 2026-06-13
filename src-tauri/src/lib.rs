@@ -29,7 +29,6 @@ const DEFAULT_WORKSPACE_FOLDER_NAME: &str = "default_workspace";
 const AI_CHAT_CONTEXT_TOKEN_BUDGET: usize = 100_000;
 const AI_CHAT_APPROX_CHARS_PER_TOKEN: usize = 4;
 const AI_MEMORY_MODEL: &str = "gemini-2.5-flash-lite";
-const AI_MEMORY_USER_TURN_CHECKPOINT: usize = 10;
 const AI_RECENT_MESSAGE_WINDOW: usize = 20;
 const AI_MEMORY_TARGET_WORDS: usize = 1_500;
 
@@ -2235,19 +2234,6 @@ async fn ai_chat(
         session.user_turn_count = session.user_turn_count.saturating_add(1);
         session.status = AiChatSessionStatus::Active;
         session.updated_at = unix_timestamp_string();
-        let checkpointed_user_turns = session
-            .messages
-            .iter()
-            .take(session.last_memory_checkpoint_message_index)
-            .filter(|message| message.role == "user")
-            .count();
-        if session
-            .user_turn_count
-            .saturating_sub(checkpointed_user_turns)
-            >= AI_MEMORY_USER_TURN_CHECKPOINT
-        {
-            let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
-        }
         write_ai_chat_session(&workspace_root, &session)?;
         Ok(AiChatResponseDto {
             assistant_text,
