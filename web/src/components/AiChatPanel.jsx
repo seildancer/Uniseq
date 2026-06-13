@@ -30,7 +30,6 @@ function AiChatMessage({ message }) {
 
 export default function AiChatPanel({
   isOpen,
-  presentation,
   sessionTitle,
   sessions,
   activeSessionId,
@@ -44,6 +43,9 @@ export default function AiChatPanel({
   loadingSession,
   sending,
   error,
+  viewportHeight,
+  keyboardHeight,
+  keyboardVisible,
   onClose,
   onSelectSession,
   onDraftChange,
@@ -90,19 +92,28 @@ export default function AiChatPanel({
 
   if (!isOpen) return null;
 
-  const panelClassName = presentation === "mobile"
-    ? "ai-chat-panel ai-chat-panel--mobile"
-    : "ai-chat-panel ai-chat-panel--desktop";
   const selectedModel = models.find((entry) => entry.value === model);
   const selectedModelLabel = selectedModel?.label ?? model;
+  const overlayStyle = {
+    "--ai-chat-visible-height": viewportHeight ? `${viewportHeight}px` : "100dvh",
+    "--ai-chat-keyboard-height": `${keyboardHeight ?? 0}px`,
+    "--ai-chat-keyboard-active": keyboardVisible ? "1" : "0",
+  };
 
   return (
     <div
-      className={`ai-chat-overlay${presentation === "mobile" ? " ai-chat-overlay--mobile" : ""}`}
+      className="ai-chat-overlay"
       data-no-window-drag="true"
+      style={overlayStyle}
       onClick={onClose}
     >
-      <section className={panelClassName} onClick={(event) => event.stopPropagation()}>
+      <section
+        className="ai-chat-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="AI Chat"
+        onClick={(event) => event.stopPropagation()}
+      >
         <header className="ai-chat-header">
           <div className="ai-chat-header-copy">
             <div className="ai-chat-header-title">
@@ -202,7 +213,7 @@ export default function AiChatPanel({
                     title={session.preview_summary}
                   >
                     <span>{session.title || "New chat"}</span>
-                    <small>{session.message_count ?? 0} messages</small>
+                    <small>{session.message_count ?? 0} msg</small>
                   </button>
                 ))}
               </section>
@@ -255,7 +266,8 @@ export default function AiChatPanel({
                   <p className="ai-chat-error">{error}</p>
                 ) : (
                   <span className="ai-chat-hint">
-                    <kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline
+                    <span className="ai-chat-hint-desktop"><kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline</span>
+                    <span className="ai-chat-hint-compact">Ask about the current notes</span>
                   </span>
                 )}
                 <button

@@ -4353,7 +4353,6 @@ export default function App() {
           {aiChat.isOpen ? createPortal(
             <AiChatPanel
               isOpen={aiChat.isOpen}
-              presentation={aiChat.presentation}
               sessionTitle={aiChat.sessionTitle}
               sessions={aiChat.sessions}
               activeSessionId={aiChat.sessionId}
@@ -4367,6 +4366,9 @@ export default function App() {
               loadingSession={aiChat.loadingSession}
               sending={aiChat.sending}
               error={aiChat.error}
+              viewportHeight={visibleViewportHeight}
+              keyboardHeight={keyboardHeight}
+              keyboardVisible={isKeyboardVisible}
               onClose={handleCloseAiChat}
               onSelectSession={(sessionId) => void handleSelectAiChatSession(sessionId)}
               onDraftChange={(draft) => setAiChat((current) => ({ ...current, draft }))}
@@ -4993,7 +4995,7 @@ export default function App() {
             </div>
           )}
 
-          {isKeyboardVisible && (
+          {isKeyboardVisible && !aiChat.isOpen && (
             <MobileKeyboardBar keyboardHeight={keyboardHeight} />
           )}
           {renderSyncProgressOverlay()}
