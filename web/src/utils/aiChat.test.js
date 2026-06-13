@@ -2,10 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  AI_CHAT_MODELS,
+  DEFAULT_AI_CHAT_MODEL,
   appendAiChatMessage,
   applyOpenedAiChatSession,
   buildAiChatContextSpec,
   createOpeningAiChatState,
+  normalizeAiChatModel,
   resolveAiChatPresentation,
   shouldShowAiChatPreview,
 } from "./aiChat.js";
@@ -32,7 +35,7 @@ test("opening a new AI session discards prior transcript state", () => {
         session_id: "ai-session-1",
         preview_summary: "Old preview",
         truncated: false,
-      }, false, "test-key"),
+      }, false, "test-key", "gemini-2.5-pro"),
       "user",
       "First question",
     ),
@@ -44,7 +47,7 @@ test("opening a new AI session discards prior transcript state", () => {
     session_id: "ai-session-2",
     preview_summary: "Fresh preview",
     truncated: true,
-  }, false, "test-key");
+  }, false, "test-key", "gemini-2.5-pro");
 
   assert.equal(prior.messages.length, 2);
   assert.equal(reopened.messages.length, 0);
@@ -52,23 +55,32 @@ test("opening a new AI session discards prior transcript state", () => {
   assert.equal(reopened.previewSummary, "Fresh preview");
   assert.equal(reopened.truncated, true);
   assert.equal(reopened.apiKey, "test-key");
+  assert.equal(reopened.model, "gemini-2.5-pro");
 });
 
 test("preview summary is available before the first message is sent", () => {
-  const opening = createOpeningAiChatState(false, "test-key");
+  const opening = createOpeningAiChatState(false, "test-key", "gemini-2.5-flash");
   const opened = applyOpenedAiChatSession({
     session_id: "ai-session-3",
     preview_summary: "Start chat based on journals from 2026-05-20 to 2026-05-21.",
     truncated: false,
-  }, false, "test-key");
+  }, false, "test-key", "gemini-2.5-flash");
 
   assert.equal(shouldShowAiChatPreview(opening), false);
   assert.equal(shouldShowAiChatPreview(opened), true);
   assert.equal(opened.messages.length, 0);
   assert.equal(opening.apiKey, "test-key");
+  assert.equal(opening.model, "gemini-2.5-flash");
 });
 
 test("resolveAiChatPresentation switches mobile sessions to full-screen mode", () => {
   assert.equal(resolveAiChatPresentation(false), "desktop");
   assert.equal(resolveAiChatPresentation(true), "mobile");
+});
+
+test("normalizeAiChatModel falls back to the default for unknown values", () => {
+  assert.equal(normalizeAiChatModel("gemini-2.5-pro"), "gemini-2.5-pro");
+  assert.equal(normalizeAiChatModel(""), DEFAULT_AI_CHAT_MODEL);
+  assert.equal(normalizeAiChatModel("not-a-real-model"), DEFAULT_AI_CHAT_MODEL);
+  assert.ok(AI_CHAT_MODELS.length >= 7);
 });

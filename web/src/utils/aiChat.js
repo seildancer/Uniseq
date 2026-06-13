@@ -25,7 +25,26 @@ export function resolveAiChatPresentation(isMobile) {
   return isMobile ? "mobile" : "desktop";
 }
 
-export function createClosedAiChatState(apiKey = "") {
+export const DEFAULT_AI_CHAT_MODEL = "gemini-3.5-flash";
+
+export const AI_CHAT_MODELS = [
+  { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", status: "Stable" },
+  { value: "gemini-3-flash-preview", label: "Gemini 3 Flash", status: "Preview" },
+  { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", status: "Preview" },
+  { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite", status: "Stable" },
+  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro", status: "Stable" },
+  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", status: "Stable" },
+  { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", status: "Stable" },
+];
+
+export function normalizeAiChatModel(model) {
+  const trimmed = typeof model === "string" ? model.trim() : "";
+  return AI_CHAT_MODELS.some((entry) => entry.value === trimmed)
+    ? trimmed
+    : DEFAULT_AI_CHAT_MODEL;
+}
+
+export function createClosedAiChatState(apiKey = "", model = DEFAULT_AI_CHAT_MODEL) {
   return {
     isOpen: false,
     loadingSession: false,
@@ -37,22 +56,28 @@ export function createClosedAiChatState(apiKey = "") {
     messages: [],
     draft: "",
     apiKey,
+    model: normalizeAiChatModel(model),
     error: "",
   };
 }
 
-export function createOpeningAiChatState(isMobile, apiKey = "") {
+export function createOpeningAiChatState(isMobile, apiKey = "", model = DEFAULT_AI_CHAT_MODEL) {
   return {
-    ...createClosedAiChatState(apiKey),
+    ...createClosedAiChatState(apiKey, model),
     isOpen: true,
     loadingSession: true,
     presentation: resolveAiChatPresentation(isMobile),
   };
 }
 
-export function applyOpenedAiChatSession(openedSession, isMobile, apiKey = "") {
+export function applyOpenedAiChatSession(
+  openedSession,
+  isMobile,
+  apiKey = "",
+  model = DEFAULT_AI_CHAT_MODEL,
+) {
   return {
-    ...createOpeningAiChatState(isMobile, apiKey),
+    ...createOpeningAiChatState(isMobile, apiKey, model),
     loadingSession: false,
     sessionId: openedSession?.session_id ?? "",
     previewSummary: openedSession?.preview_summary ?? "",

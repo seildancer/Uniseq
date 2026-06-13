@@ -10,11 +10,14 @@ import { areArraysEqual } from "./utils/arrays.js";
 import pageLeafName from "./utils/pageLeafName.js";
 import { todayDateName } from "./utils/streamDates.js";
 import {
+  AI_CHAT_MODELS,
+  DEFAULT_AI_CHAT_MODEL,
   applyOpenedAiChatSession,
   appendAiChatMessage,
   buildAiChatContextSpec,
   createClosedAiChatState,
   createOpeningAiChatState,
+  normalizeAiChatModel,
 } from "./utils/aiChat.js";
 import {
   dateHasContentForSelection,
@@ -75,6 +78,7 @@ const AUTO_EXPAND_ON_HOVER_MS = 600;
 const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
 const AI_CHAT_API_KEY_STORAGE_KEY = "aiChatGoogleApiKey";
+const AI_CHAT_MODEL_STORAGE_KEY = "aiChatGeminiModel";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
@@ -527,6 +531,14 @@ function readStoredAiChatApiKey() {
   }
 }
 
+function readStoredAiChatModel() {
+  try {
+    return normalizeAiChatModel(localStorage.getItem(AI_CHAT_MODEL_STORAGE_KEY) ?? DEFAULT_AI_CHAT_MODEL);
+  } catch {
+    return DEFAULT_AI_CHAT_MODEL;
+  }
+}
+
 function persistAiChatApiKey(apiKey) {
   try {
     if (apiKey) {
@@ -536,6 +548,14 @@ function persistAiChatApiKey(apiKey) {
     }
   } catch {
     // Ignore storage failures and keep the key only in memory.
+  }
+}
+
+function persistAiChatModel(model) {
+  try {
+    localStorage.setItem(AI_CHAT_MODEL_STORAGE_KEY, normalizeAiChatModel(model));
+  } catch {
+    // Ignore storage failures and keep the model only in memory.
   }
 }
 
@@ -866,7 +886,9 @@ export default function App() {
   const [selectedPageText, setSelectedPageText] = useState("");
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [linkedRefs, setLinkedRefs] = useState([]);
-  const [aiChat, setAiChat] = useState(() => createClosedAiChatState(readStoredAiChatApiKey()));
+  const [aiChat, setAiChat] = useState(() => (
+    createClosedAiChatState(readStoredAiChatApiKey(), readStoredAiChatModel())
+  ));
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -1208,8 +1230,9 @@ export default function App() {
   function handleCloseAiChat() {
     const activeSessionId = aiChat.sessionId;
     const apiKey = aiChat.apiKey;
+    const model = aiChat.model;
     aiChatOpenSeqRef.current += 1;
-    setAiChat(createClosedAiChatState(apiKey));
+    setAiChat(createClosedAiChatState(apiKey, model));
     if (activeSessionId) {
       invoke("close_ai_chat_session", { sessionId: activeSessionId }).catch(() => undefined);
     }
@@ -1224,6 +1247,15 @@ export default function App() {
     }));
   }
 
+  function handleAiChatModelChange(model) {
+    const normalizedModel = normalizeAiChatModel(model);
+    persistAiChatModel(normalizedModel);
+    setAiChat((current) => ({
+      ...current,
+      model: normalizedModel,
+    }));
+  }
+
   async function handleOpenAiChat() {
     const contextSpec = buildAiChatContextSpec(selection, dualStreamNames);
     if (!contextSpec) {
@@ -1231,15 +1263,16 @@ export default function App() {
     }
 
     const apiKey = aiChat.apiKey;
+    const model = aiChat.model;
     const seq = ++aiChatOpenSeqRef.current;
-    setAiChat(createOpeningAiChatState(isMobile, apiKey));
+    setAiChat(createOpeningAiChatState(isMobile, apiKey, model));
     try {
       const openedSession = await invoke("open_ai_chat_session", { contextSpec });
       if (seq !== aiChatOpenSeqRef.current) {
         invoke("close_ai_chat_session", { sessionId: openedSession?.session_id ?? "" }).catch(() => undefined);
         return;
       }
-      setAiChat(applyOpenedAiChatSession(openedSession, isMobile, apiKey));
+      setAiChat(applyOpenedAiChatSession(openedSession, isMobile, apiKey, model));
     } catch (error) {
       if (seq !== aiChatOpenSeqRef.current) {
         return;
@@ -1259,6 +1292,7 @@ export default function App() {
       return;
     }
     const apiKey = aiChat.apiKey.trim();
+    const model = normalizeAiChatModel(aiChat.model);
     if (!apiKey) {
       setAiChat((current) => ({
         ...current,
@@ -1286,6 +1320,7 @@ export default function App() {
         priorMessages,
         latestUserMessage,
         apiKey,
+        model,
       });
       setAiChat((current) => {
         if (current.sessionId !== sessionId) {
@@ -4231,12 +4266,15 @@ export default function App() {
               messages={aiChat.messages}
               draft={aiChat.draft}
               apiKey={aiChat.apiKey}
+              model={aiChat.model}
+              models={AI_CHAT_MODELS}
               loadingSession={aiChat.loadingSession}
               sending={aiChat.sending}
               error={aiChat.error}
               onClose={handleCloseAiChat}
               onDraftChange={(draft) => setAiChat((current) => ({ ...current, draft }))}
               onApiKeyChange={handleAiChatApiKeyChange}
+              onModelChange={handleAiChatModelChange}
               onSubmit={(event) => void handleSubmitAiChat(event)}
             />,
             document.body,

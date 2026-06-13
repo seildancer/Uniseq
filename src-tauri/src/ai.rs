@@ -1,8 +1,17 @@
 use std::time::Duration;
 
 const AI_HTTP_TIMEOUT_SECS: u64 = 90;
-const GOOGLE_MODEL: &str = "gemini-3.5-flash-lite";
+const GOOGLE_MODEL: &str = "gemini-3.5-flash";
 const GOOGLE_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
+const GOOGLE_ALLOWED_MODELS: &[&str] = &[
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -28,8 +37,9 @@ pub fn chat_completion(
     prior_messages: &[ChatMessage],
     latest_user_message: &str,
     api_key: &str,
+    model: &str,
 ) -> Result<String, ChatError> {
-    let config = GoogleAiConfig::from_runtime(api_key)?;
+    let config = GoogleAiConfig::from_runtime(api_key, model)?;
     let mut contents = Vec::<serde_json::Value>::with_capacity(prior_messages.len() + 1);
     for message in prior_messages {
         let role = message.role.trim();
@@ -107,12 +117,12 @@ pub fn chat_completion(
 }
 
 impl GoogleAiConfig {
-    fn from_runtime(api_key: &str) -> Result<Self, ChatError> {
+    fn from_runtime(api_key: &str, model: &str) -> Result<Self, ChatError> {
         let api_key = api_key.trim().to_owned();
         if api_key.is_empty() {
             return Err(ChatError::Config("Gemini API key is required".to_owned()));
         }
-        let model = GOOGLE_MODEL.to_owned();
+        let model = normalize_model(model);
         let api_base = GOOGLE_API_BASE
             .trim()
             .trim_end_matches('/')
@@ -122,6 +132,15 @@ impl GoogleAiConfig {
             model,
             api_base,
         })
+    }
+}
+
+fn normalize_model(model: &str) -> String {
+    let trimmed = model.trim();
+    if GOOGLE_ALLOWED_MODELS.contains(&trimmed) {
+        trimmed.to_owned()
+    } else {
+        GOOGLE_MODEL.to_owned()
     }
 }
 
@@ -167,8 +186,20 @@ mod tests {
     #[test]
     fn google_ai_config_requires_non_empty_api_key() {
         assert_eq!(
-            GoogleAiConfig::from_runtime("   ").unwrap_err(),
+            GoogleAiConfig::from_runtime("   ", GOOGLE_MODEL).unwrap_err(),
             ChatError::Config("Gemini API key is required".to_owned())
         );
+    }
+
+    #[test]
+    fn google_ai_config_uses_selected_model_when_allowed() {
+        let config = GoogleAiConfig::from_runtime("test-key", "gemini-2.5-pro").unwrap();
+        assert_eq!(config.model, "gemini-2.5-pro");
+    }
+
+    #[test]
+    fn google_ai_config_falls_back_for_unknown_model() {
+        let config = GoogleAiConfig::from_runtime("test-key", "not-a-model").unwrap();
+        assert_eq!(config.model, GOOGLE_MODEL);
     }
 }

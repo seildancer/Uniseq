@@ -36,12 +36,15 @@ export default function AiChatPanel({
   messages,
   draft,
   apiKey,
+  model,
+  models,
   loadingSession,
   sending,
   error,
   onClose,
   onDraftChange,
   onApiKeyChange,
+  onModelChange,
   onSubmit,
 }) {
   const transcriptRef = useRef(null);
@@ -109,7 +112,7 @@ export default function AiChatPanel({
         <section className="ai-chat-settings">
           {apiKey && !keyExpanded ? (
             <div className="ai-chat-key-compact">
-              <span className="ai-chat-key-set">API key ••••••••</span>
+              <span className="ai-chat-key-set">API key set</span>
               <button
                 type="button"
                 className="ai-chat-key-edit"
@@ -119,23 +122,31 @@ export default function AiChatPanel({
               </button>
             </div>
           ) : (
-            <>
-              <label className="field ai-chat-field">
-                <span>Gemini API key</span>
-                <input
-                  className="ai-chat-key-input"
-                  type="password"
-                  value={apiKey}
-                  placeholder="Paste your Gemini API key"
-                  autoComplete="off"
-                  spellCheck="false"
-                  onChange={(event) => onApiKeyChange(event.target.value)}
-                  onBlur={() => { if (apiKey) setKeyExpanded(false); }}
-                />
-              </label>
-              <p className="ai-chat-hint">Stored locally and sent only with AI chat requests.</p>
-            </>
+            <label className="field ai-chat-field">
+              <span>Gemini API key</span>
+              <input
+                className="ai-chat-key-input"
+                type="password"
+                value={apiKey}
+                placeholder="Paste your Gemini API key"
+                autoComplete="off"
+                spellCheck="false"
+                onChange={(event) => onApiKeyChange(event.target.value)}
+                onBlur={() => { if (apiKey) setKeyExpanded(false); }}
+              />
+            </label>
           )}
+          <label className="field ai-chat-field">
+            <span>Model</span>
+            <select value={model} onChange={(event) => onModelChange(event.target.value)}>
+              {models.map((entry) => (
+                <option key={entry.value} value={entry.value}>
+                  {entry.label} ({entry.status})
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="ai-chat-hint">Stored locally and sent only with AI chat requests.</p>
         </section>
 
         {(loadingSession || previewSummary) && (
@@ -183,7 +194,7 @@ export default function AiChatPanel({
               <p className="ai-chat-error">{error}</p>
             ) : (
               <span className="ai-chat-hint">
-                <kbd>⌘</kbd><kbd>↵</kbd> to send
+                <kbd>Ctrl</kbd><kbd>Enter</kbd> to send
               </span>
             )}
             <button

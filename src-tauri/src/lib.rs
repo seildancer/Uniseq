@@ -2016,6 +2016,7 @@ async fn ai_chat(
     prior_messages: Vec<AiChatMessageDto>,
     latest_user_message: String,
     api_key: String,
+    model: String,
 ) -> CommandResult<AiChatResponseDto> {
     let latest_user_message = latest_user_message.trim().to_owned();
     if latest_user_message.is_empty() {
@@ -2047,6 +2048,7 @@ async fn ai_chat(
             &prior_messages,
             &latest_user_message,
             &api_key,
+            &model,
         )
             .map(|assistant_text| AiChatResponseDto { assistant_text })
             .map_err(|error| match error {
