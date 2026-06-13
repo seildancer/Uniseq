@@ -12,6 +12,7 @@ import { todayDateName } from "./utils/streamDates.js";
 import {
   AI_CHAT_MODELS,
   DEFAULT_AI_CHAT_MODEL,
+  applyLoadedAiChatSession,
   applyOpenedAiChatSession,
   appendAiChatMessage,
   buildAiChatContextSpec,
@@ -1227,15 +1228,34 @@ export default function App() {
     setActionError(null);
   }
 
+  async function refreshAiChatSessions() {
+    try {
+      const sessions = await invoke("list_ai_chat_sessions");
+      setAiChat((current) => ({
+        ...current,
+        sessions: Array.isArray(sessions) ? sessions : [],
+      }));
+    } catch {
+      // Session listing is non-critical; keep the active chat usable.
+    }
+  }
+
   function handleCloseAiChat() {
     const activeSessionId = aiChat.sessionId;
     const apiKey = aiChat.apiKey;
     const model = aiChat.model;
+    const sessions = aiChat.sessions;
     aiChatOpenSeqRef.current += 1;
-    setAiChat(createClosedAiChatState(apiKey, model));
+    setAiChat({
+      ...createClosedAiChatState(apiKey, model),
+      sessions,
+    });
     if (activeSessionId) {
-      invoke("close_ai_chat_session", { sessionId: activeSessionId }).catch(() => undefined);
+      return invoke("close_ai_chat_session", { sessionId: activeSessionId, apiKey })
+        .then(() => refreshAiChatSessions())
+        .catch(() => undefined);
     }
+    return Promise.resolve();
   }
 
   function handleAiChatApiKeyChange(apiKey) {
@@ -1264,15 +1284,68 @@ export default function App() {
 
     const apiKey = aiChat.apiKey;
     const model = aiChat.model;
+    const sessions = aiChat.sessions;
+    const previousSessionId = aiChat.sessionId;
     const seq = ++aiChatOpenSeqRef.current;
-    setAiChat(createOpeningAiChatState(isMobile, apiKey, model));
+    setAiChat({
+      ...createOpeningAiChatState(isMobile, apiKey, model),
+      sessions,
+    });
     try {
+      if (previousSessionId) {
+        await invoke("close_ai_chat_session", { sessionId: previousSessionId, apiKey }).catch(() => undefined);
+      }
       const openedSession = await invoke("open_ai_chat_session", { contextSpec });
       if (seq !== aiChatOpenSeqRef.current) {
-        invoke("close_ai_chat_session", { sessionId: openedSession?.session_id ?? "" }).catch(() => undefined);
         return;
       }
-      setAiChat(applyOpenedAiChatSession(openedSession, isMobile, apiKey, model));
+      setAiChat({
+        ...applyOpenedAiChatSession(openedSession, isMobile, apiKey, model),
+        sessions,
+      });
+      void refreshAiChatSessions();
+    } catch (error) {
+      if (seq !== aiChatOpenSeqRef.current) {
+        return;
+      }
+      setAiChat((current) => ({
+        ...current,
+        loadingSession: false,
+        error: formatError(normalizeError(error)),
+      }));
+    }
+  }
+
+  async function handleSelectAiChatSession(sessionId) {
+    if (!sessionId || sessionId === aiChat.sessionId || aiChat.loadingSession || aiChat.sending) {
+      return;
+    }
+    const apiKey = aiChat.apiKey;
+    const model = aiChat.model;
+    const sessions = aiChat.sessions;
+    const previousSessionId = aiChat.sessionId;
+    const seq = ++aiChatOpenSeqRef.current;
+    setAiChat((current) => ({
+      ...current,
+      isOpen: true,
+      loadingSession: true,
+      sending: false,
+      presentation: isMobile ? "mobile" : "desktop",
+      error: "",
+    }));
+    try {
+      if (previousSessionId) {
+        await invoke("close_ai_chat_session", { sessionId: previousSessionId, apiKey }).catch(() => undefined);
+      }
+      const session = await invoke("get_ai_chat_session", { sessionId });
+      if (seq !== aiChatOpenSeqRef.current) {
+        return;
+      }
+      setAiChat({
+        ...applyLoadedAiChatSession(session, aiChat, isMobile, apiKey, model),
+        sessions,
+      });
+      void refreshAiChatSessions();
     } catch (error) {
       if (seq !== aiChatOpenSeqRef.current) {
         return;
@@ -1288,7 +1361,12 @@ export default function App() {
   async function handleSubmitAiChat(event) {
     event.preventDefault();
     const latestUserMessage = aiChat.draft.trim();
-    if (!latestUserMessage || !aiChat.sessionId || aiChat.loadingSession || aiChat.sending) {
+    if (
+      !latestUserMessage
+      || aiChat.loadingSession
+      || aiChat.sending
+      || (!aiChat.sessionId && !aiChat.contextSpec)
+    ) {
       return;
     }
     const apiKey = aiChat.apiKey.trim();
@@ -1302,10 +1380,8 @@ export default function App() {
     }
 
     const sessionId = aiChat.sessionId;
-    const priorMessages = aiChat.messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
+    const contextSpec = aiChat.contextSpec;
+    const requestSeq = aiChatOpenSeqRef.current;
     const nextUserState = appendAiChatMessage(aiChat, "user", latestUserMessage);
     setAiChat({
       ...nextUserState,
@@ -1317,14 +1393,30 @@ export default function App() {
     try {
       const response = await invoke("ai_chat", {
         sessionId,
-        priorMessages,
+        contextSpec,
+        priorMessages: [],
         latestUserMessage,
         apiKey,
         model,
       });
       setAiChat((current) => {
-        if (current.sessionId !== sessionId) {
+        if (requestSeq !== aiChatOpenSeqRef.current || current.sessionId !== sessionId) {
           return current;
+        }
+        const savedSession = response.session;
+        if (savedSession?.session_id) {
+          return {
+            ...current,
+            sessionId: savedSession.session_id,
+            sessionTitle: savedSession.title ?? current.sessionTitle,
+            previewSummary: savedSession.preview_summary ?? current.previewSummary,
+            truncated: Boolean(savedSession.truncated),
+            messages: Array.isArray(savedSession.messages)
+              ? savedSession.messages
+              : appendAiChatMessage(current, "assistant", response.assistant_text ?? "").messages,
+            sending: false,
+            error: "",
+          };
         }
         return {
           ...appendAiChatMessage(current, "assistant", response.assistant_text ?? ""),
@@ -1332,9 +1424,10 @@ export default function App() {
           error: "",
         };
       });
+      void refreshAiChatSessions();
     } catch (error) {
       setAiChat((current) => {
-        if (current.sessionId !== sessionId) {
+        if (requestSeq !== aiChatOpenSeqRef.current || current.sessionId !== sessionId) {
           return current;
         }
         return {
@@ -1922,7 +2015,7 @@ export default function App() {
   }
 
   async function handleCloseWorkspace() {
-    handleCloseAiChat();
+    await handleCloseAiChat();
     await invoke("close_workspace");
     setWorkspace(null);
     setPages([]);
@@ -4261,6 +4354,9 @@ export default function App() {
             <AiChatPanel
               isOpen={aiChat.isOpen}
               presentation={aiChat.presentation}
+              sessionTitle={aiChat.sessionTitle}
+              sessions={aiChat.sessions}
+              activeSessionId={aiChat.sessionId}
               previewSummary={aiChat.previewSummary}
               truncated={aiChat.truncated}
               messages={aiChat.messages}
@@ -4272,6 +4368,7 @@ export default function App() {
               sending={aiChat.sending}
               error={aiChat.error}
               onClose={handleCloseAiChat}
+              onSelectSession={(sessionId) => void handleSelectAiChatSession(sessionId)}
               onDraftChange={(draft) => setAiChat((current) => ({ ...current, draft }))}
               onApiKeyChange={handleAiChatApiKeyChange}
               onModelChange={handleAiChatModelChange}

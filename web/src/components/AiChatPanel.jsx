@@ -31,6 +31,9 @@ function AiChatMessage({ message }) {
 export default function AiChatPanel({
   isOpen,
   presentation,
+  sessionTitle,
+  sessions,
+  activeSessionId,
   previewSummary,
   truncated,
   messages,
@@ -42,6 +45,7 @@ export default function AiChatPanel({
   sending,
   error,
   onClose,
+  onSelectSession,
   onDraftChange,
   onApiKeyChange,
   onModelChange,
@@ -49,7 +53,8 @@ export default function AiChatPanel({
 }) {
   const transcriptRef = useRef(null);
   const textareaRef = useRef(null);
-  const [keyExpanded, setKeyExpanded] = useState(!apiKey);
+  const settingsRef = useRef(null);
+  const [settingsExpanded, setSettingsExpanded] = useState(!apiKey);
 
   useEffect(() => {
     const el = transcriptRef.current;
@@ -76,11 +81,20 @@ export default function AiChatPanel({
     onSubmit(event);
   }
 
+  function handleSettingsBlur(event) {
+    if (!apiKey) return;
+    const nextFocus = event.relatedTarget;
+    if (nextFocus && settingsRef.current?.contains(nextFocus)) return;
+    setSettingsExpanded(false);
+  }
+
   if (!isOpen) return null;
 
   const panelClassName = presentation === "mobile"
     ? "ai-chat-panel ai-chat-panel--mobile"
     : "ai-chat-panel ai-chat-panel--desktop";
+  const selectedModel = models.find((entry) => entry.value === model);
+  const selectedModelLabel = selectedModel?.label ?? model;
 
   return (
     <div
@@ -95,6 +109,7 @@ export default function AiChatPanel({
               <strong>AI Chat</strong>
               <span className="feature-badge feature-badge--soft">Beta</span>
             </div>
+            {!loadingSession && sessionTitle ? <span>{sessionTitle}</span> : null}
             {loadingSession && <span>Loading context...</span>}
           </div>
           <button
@@ -108,103 +123,152 @@ export default function AiChatPanel({
             </svg>
           </button>
         </header>
-        <section className="ai-chat-settings">
-          {apiKey && !keyExpanded ? (
-            <div className="ai-chat-key-compact">
-              <span className="ai-chat-key-set">API key set</span>
-              <button
-                type="button"
-                className="ai-chat-key-edit"
-                onClick={() => setKeyExpanded(true)}
-              >
-                Edit
-              </button>
-            </div>
-          ) : (
-            <label className="field ai-chat-field">
-              <span>Gemini API key</span>
-              <input
-                className="ai-chat-key-input"
-                type="password"
-                value={apiKey}
-                placeholder="Paste your Gemini API key"
-                autoComplete="off"
-                spellCheck="false"
-                onChange={(event) => onApiKeyChange(event.target.value)}
-                onBlur={() => { if (apiKey) setKeyExpanded(false); }}
-              />
-            </label>
-          )}
-          <label className="field ai-chat-field">
-            <span>Model</span>
-            <select value={model} onChange={(event) => onModelChange(event.target.value)}>
-              {models.map((entry) => (
-                <option key={entry.value} value={entry.value}>
-                  {entry.label} ({entry.status})
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="ai-chat-hint">Stored locally and sent only with AI chat requests.</p>
-        </section>
-
-        {(loadingSession || previewSummary) && (
-          <section className="ai-chat-preview">
-            {loadingSession ? (
-              <p>Preparing a snapshot of the current notes...</p>
-            ) : (
-              <>
-                <p>{previewSummary}</p>
-                {truncated && (
-                  <div className="ai-chat-preview-meta">
-                    <span>Oldest notes were trimmed to fit.</span>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-        )}
-
-        <div className="ai-chat-transcript" ref={transcriptRef} aria-live="polite">
-          {messages.length === 0 ? null : (
-            messages.map((message, index) => (
-              <AiChatMessage
-                key={`${message.role}-${index}`}
-                message={message}
-              />
-            ))
-          )}
-          {sending && <AiChatThinking />}
-        </div>
-
-        <form className="ai-chat-composer" onSubmit={onSubmit}>
-          <textarea
-            ref={textareaRef}
-            className="ai-chat-input"
-            rows={1}
-            value={draft}
-            placeholder="Ask about the current notes"
-            onChange={handleDraftChange}
-            onKeyDown={handleKeyDown}
-            disabled={loadingSession || sending}
-          />
-          <div className="ai-chat-composer-footer">
-            {error ? (
-              <p className="ai-chat-error">{error}</p>
-            ) : (
-              <span className="ai-chat-hint">
-                <kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline
-              </span>
-            )}
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={loadingSession || sending || !draft.trim() || !apiKey.trim()}
+        <div className="ai-chat-layout">
+          <aside className="ai-chat-sidebar">
+            <section
+              className="ai-chat-settings"
+              ref={settingsRef}
+              onBlur={handleSettingsBlur}
             >
-              Send
-            </button>
-          </div>
-        </form>
+              {apiKey && !settingsExpanded ? (
+                <div className="ai-chat-settings-compact">
+                  <div className="ai-chat-settings-summary">
+                    <span>API key set</span>
+                    <small>{selectedModelLabel}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="ai-chat-key-edit"
+                    onClick={() => setSettingsExpanded(true)}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {apiKey ? (
+                    <div className="ai-chat-settings-compact">
+                      <div className="ai-chat-settings-summary">
+                        <span>AI settings</span>
+                        <small>{selectedModelLabel}</small>
+                      </div>
+                      <button
+                        type="button"
+                        className="ai-chat-key-edit"
+                        onClick={() => setSettingsExpanded(false)}
+                      >
+                        Done
+                      </button>
+                    </div>
+                  ) : null}
+                  <label className="field ai-chat-field">
+                    <span>Gemini API key</span>
+                    <input
+                      className="ai-chat-key-input"
+                      type="password"
+                      value={apiKey}
+                      placeholder="Paste your Gemini API key"
+                      autoComplete="off"
+                      spellCheck="false"
+                      onChange={(event) => onApiKeyChange(event.target.value)}
+                    />
+                  </label>
+                  <label className="field ai-chat-field">
+                    <span>Model</span>
+                    <select value={model} onChange={(event) => onModelChange(event.target.value)}>
+                      {models.map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.label} ({entry.status})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+              {settingsExpanded ? (
+                <p className="ai-chat-hint">Session and memory are stored locally and sent only with AI chat requests.</p>
+              ) : null}
+            </section>
+
+            {Array.isArray(sessions) && sessions.length > 0 ? (
+              <section className="ai-chat-sessions" aria-label="AI chat sessions">
+                {sessions.slice(0, 24).map((session) => (
+                  <button
+                    key={session.session_id}
+                    type="button"
+                    className={`ai-chat-session${session.session_id === activeSessionId ? " ai-chat-session--active" : ""}`}
+                    onClick={() => onSelectSession(session.session_id)}
+                    disabled={loadingSession || sending}
+                    title={session.preview_summary}
+                  >
+                    <span>{session.title || "New chat"}</span>
+                    <small>{session.message_count ?? 0} messages</small>
+                  </button>
+                ))}
+              </section>
+            ) : null}
+          </aside>
+
+          <main className="ai-chat-main">
+            {(loadingSession || previewSummary) && (
+              <section className="ai-chat-preview">
+                {loadingSession ? (
+                  <p>Preparing a snapshot of the current notes...</p>
+                ) : (
+                  <>
+                    <p>{previewSummary}</p>
+                    {truncated && (
+                      <div className="ai-chat-preview-meta">
+                        <span>Oldest notes were trimmed to fit.</span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
+            )}
+
+            <div className="ai-chat-transcript" ref={transcriptRef} aria-live="polite">
+              {messages.length === 0 ? null : (
+                messages.map((message, index) => (
+                  <AiChatMessage
+                    key={`${message.role}-${index}`}
+                    message={message}
+                  />
+                ))
+              )}
+              {sending && <AiChatThinking />}
+            </div>
+
+            <form className="ai-chat-composer" onSubmit={onSubmit}>
+              <textarea
+                ref={textareaRef}
+                className="ai-chat-input"
+                rows={1}
+                value={draft}
+                placeholder="Ask about the current notes"
+                onChange={handleDraftChange}
+                onKeyDown={handleKeyDown}
+                disabled={loadingSession || sending}
+              />
+              <div className="ai-chat-composer-footer">
+                {error ? (
+                  <p className="ai-chat-error">{error}</p>
+                ) : (
+                  <span className="ai-chat-hint">
+                    <kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline
+                  </span>
+                )}
+                <button
+                  className="primary-button"
+                  type="submit"
+                  disabled={loadingSession || sending || !draft.trim() || !apiKey.trim()}
+                >
+                  Send
+                </button>
+              </div>
+            </form>
+          </main>
+        </div>
       </section>
     </div>
   );

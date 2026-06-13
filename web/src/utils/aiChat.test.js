@@ -44,14 +44,16 @@ test("opening a new AI session discards prior transcript state", () => {
   );
 
   const reopened = applyOpenedAiChatSession({
-    session_id: "ai-session-2",
+    session_id: "",
+    context_spec: { kind: "page", page_id: "pages:Fresh" },
     preview_summary: "Fresh preview",
     truncated: true,
   }, false, "test-key", "gemini-2.5-pro");
 
   assert.equal(prior.messages.length, 2);
   assert.equal(reopened.messages.length, 0);
-  assert.equal(reopened.sessionId, "ai-session-2");
+  assert.equal(reopened.sessionId, "");
+  assert.deepEqual(reopened.contextSpec, { kind: "page", page_id: "pages:Fresh" });
   assert.equal(reopened.previewSummary, "Fresh preview");
   assert.equal(reopened.truncated, true);
   assert.equal(reopened.apiKey, "test-key");
@@ -61,13 +63,16 @@ test("opening a new AI session discards prior transcript state", () => {
 test("preview summary is available before the first message is sent", () => {
   const opening = createOpeningAiChatState(false, "test-key", "gemini-2.5-flash");
   const opened = applyOpenedAiChatSession({
-    session_id: "ai-session-3",
+    session_id: "",
+    context_spec: { kind: "stream_single", stream_name: "journals" },
     preview_summary: "Start chat based on journals from 2026-05-20 to 2026-05-21.",
     truncated: false,
   }, false, "test-key", "gemini-2.5-flash");
 
   assert.equal(shouldShowAiChatPreview(opening), false);
   assert.equal(shouldShowAiChatPreview(opened), true);
+  assert.equal(opened.sessionId, "");
+  assert.deepEqual(opened.contextSpec, { kind: "stream_single", stream_name: "journals" });
   assert.equal(opened.messages.length, 0);
   assert.equal(opening.apiKey, "test-key");
   assert.equal(opening.model, "gemini-2.5-flash");

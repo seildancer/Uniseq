@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::Duration;
-
-#[cfg(test)]
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -31,6 +28,10 @@ const SYNC_PROGRESS_EVENT: &str = "sync-progress";
 const DEFAULT_WORKSPACE_FOLDER_NAME: &str = "default_workspace";
 const AI_CHAT_CONTEXT_TOKEN_BUDGET: usize = 100_000;
 const AI_CHAT_APPROX_CHARS_PER_TOKEN: usize = 4;
+const AI_MEMORY_MODEL: &str = "gemini-2.5-flash-lite";
+const AI_MEMORY_USER_TURN_CHECKPOINT: usize = 10;
+const AI_RECENT_MESSAGE_WINDOW: usize = 20;
+const AI_MEMORY_TARGET_WORDS: usize = 1_500;
 
 #[derive(Default)]
 struct AppState {
@@ -63,7 +64,6 @@ struct WorkspaceController {
     session: Option<WorkspaceSession>,
     sync_loop: Option<SyncLoop>,
     active_ai_chat_session: Option<ActiveAiChatSession>,
-    next_ai_chat_session_nonce: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -263,7 +263,7 @@ struct WorkspacePageOrder {
     sibling_order_by_parent: BTreeMap<String, Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum AiChatContextSpecDto {
     Page { page_id: String },
@@ -274,19 +274,73 @@ enum AiChatContextSpecDto {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct AiChatSessionOpenDto {
     session_id: String,
+    title: String,
+    context_spec: AiChatContextSpecDto,
     preview_summary: String,
     truncated: bool,
+    messages: Vec<AiChatMessageDto>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct AiChatResponseDto {
     assistant_text: String,
+    session: AiChatSessionDto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct AiChatMessageDto {
     role: String,
     content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AiChatSessionStatus {
+    Active,
+    Closed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistedAiChatSession {
+    session_id: String,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    context_spec: AiChatContextSpecDto,
+    preview_summary: String,
+    truncated: bool,
+    system_prompt: String,
+    messages: Vec<AiChatMessageDto>,
+    user_turn_count: usize,
+    last_memory_checkpoint_message_index: usize,
+    status: AiChatSessionStatus,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct AiChatSessionDto {
+    session_id: String,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    context_spec: AiChatContextSpecDto,
+    preview_summary: String,
+    truncated: bool,
+    messages: Vec<AiChatMessageDto>,
+    user_turn_count: usize,
+    last_memory_checkpoint_message_index: usize,
+    status: AiChatSessionStatus,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct AiChatSessionSummaryDto {
+    session_id: String,
+    title: String,
+    created_at: String,
+    updated_at: String,
+    preview_summary: String,
+    truncated: bool,
+    message_count: usize,
+    status: AiChatSessionStatus,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -301,7 +355,39 @@ struct PreparedAiChatSession {
 #[derive(Debug, Clone)]
 struct ActiveAiChatSession {
     session_id: String,
-    system_prompt: String,
+}
+
+impl From<PersistedAiChatSession> for AiChatSessionDto {
+    fn from(value: PersistedAiChatSession) -> Self {
+        Self {
+            session_id: value.session_id,
+            title: value.title,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            context_spec: value.context_spec,
+            preview_summary: value.preview_summary,
+            truncated: value.truncated,
+            messages: value.messages,
+            user_turn_count: value.user_turn_count,
+            last_memory_checkpoint_message_index: value.last_memory_checkpoint_message_index,
+            status: value.status,
+        }
+    }
+}
+
+impl From<&PersistedAiChatSession> for AiChatSessionSummaryDto {
+    fn from(value: &PersistedAiChatSession) -> Self {
+        Self {
+            session_id: value.session_id.clone(),
+            title: value.title.clone(),
+            created_at: value.created_at.clone(),
+            updated_at: value.updated_at.clone(),
+            preview_summary: value.preview_summary.clone(),
+            truncated: value.truncated,
+            message_count: value.messages.len(),
+            status: value.status.clone(),
+        }
+    }
 }
 
 type CommandResult<T> = Result<T, ErrorDto>;
@@ -394,25 +480,33 @@ impl WorkspaceController {
         &mut self,
         context_spec: AiChatContextSpecDto,
     ) -> CommandResult<AiChatSessionOpenDto> {
-        let prepared = build_ai_chat_session(
-            self.session()?,
-            &context_spec,
-            ai_context_char_budget(),
-        )?;
-        self.next_ai_chat_session_nonce = self.next_ai_chat_session_nonce.saturating_add(1);
-        let session_id = format!("ai-session-{}", self.next_ai_chat_session_nonce);
-        self.active_ai_chat_session = Some(ActiveAiChatSession {
-            session_id: session_id.clone(),
-            system_prompt: prepared.system_prompt,
-        });
+        let prepared =
+            build_ai_chat_session(self.session()?, &context_spec, ai_context_char_budget())?;
         Ok(AiChatSessionOpenDto {
-            session_id,
+            session_id: String::new(),
+            title: "New chat".to_owned(),
+            context_spec,
             preview_summary: prepared.preview_summary,
             truncated: prepared.truncated,
+            messages: Vec::new(),
         })
     }
 
-    fn close_ai_chat_session(&mut self, session_id: String) -> bool {
+    fn activate_ai_chat_session(&mut self, session_id: String) -> CommandResult<AiChatSessionDto> {
+        let workspace_root = self.session()?.workspace_root();
+        let session = read_ai_chat_session(&workspace_root, &session_id)?;
+        self.active_ai_chat_session = Some(ActiveAiChatSession {
+            session_id: session_id.clone(),
+        });
+        Ok(AiChatSessionDto::from(session))
+    }
+
+    fn list_ai_chat_sessions(&self) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
+        let workspace_root = self.session()?.workspace_root();
+        list_ai_chat_session_summaries(&workspace_root)
+    }
+
+    fn close_ai_chat_session(&mut self, session_id: &str) -> bool {
         if self
             .active_ai_chat_session
             .as_ref()
@@ -1076,16 +1170,6 @@ impl WorkspaceController {
         self.session
             .as_mut()
             .ok_or_else(ErrorDto::no_workspace_open)
-    }
-
-    fn active_ai_chat_session(
-        &self,
-        session_id: &str,
-    ) -> CommandResult<&ActiveAiChatSession> {
-        self.active_ai_chat_session
-            .as_ref()
-            .filter(|session| session.session_id == session_id)
-            .ok_or_else(ErrorDto::ai_chat_session_missing)
     }
 
     fn remap_page_order_subtree(
@@ -2001,19 +2085,62 @@ fn open_ai_chat_session(
 }
 
 #[tauri::command]
-fn close_ai_chat_session(state: State<'_, AppState>, session_id: String) -> bool {
+fn list_ai_chat_sessions(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
+    state.controller.lock().unwrap().list_ai_chat_sessions()
+}
+
+#[tauri::command]
+fn get_ai_chat_session(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> CommandResult<AiChatSessionDto> {
     state
         .controller
         .lock()
         .unwrap()
-        .close_ai_chat_session(session_id)
+        .activate_ai_chat_session(session_id)
+}
+
+#[tauri::command]
+async fn close_ai_chat_session(
+    state: State<'_, AppState>,
+    session_id: String,
+    api_key: String,
+) -> CommandResult<bool> {
+    let workspace_root = {
+        let mut controller = state.controller.lock().unwrap();
+        let workspace_root = controller.session()?.workspace_root();
+        controller.close_ai_chat_session(&session_id);
+        workspace_root
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut session = read_ai_chat_session(&workspace_root, &session_id)?;
+        if session.messages.is_empty() {
+            let path = ai_chat_session_path(&workspace_root, &session_id)?;
+            match fs::remove_file(&path) {
+                Ok(()) => return Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+                Err(error) => return Err(ErrorDto::io(&path, &error)),
+            }
+        }
+        session.status = AiChatSessionStatus::Closed;
+        session.updated_at = unix_timestamp_string();
+        let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
+        write_ai_chat_session(&workspace_root, &session)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat close task failed: {error}")))?
 }
 
 #[tauri::command]
 async fn ai_chat(
     state: State<'_, AppState>,
     session_id: String,
-    prior_messages: Vec<AiChatMessageDto>,
+    context_spec: Option<AiChatContextSpecDto>,
+    _prior_messages: Vec<AiChatMessageDto>,
     latest_user_message: String,
     api_key: String,
     model: String,
@@ -2029,32 +2156,103 @@ async fn ai_chat(
         return Err(ErrorDto::ai_chat_config("Gemini API key is required"));
     }
 
-    let system_prompt = {
-        let controller = state.controller.lock().unwrap();
-        let active_session = controller.active_ai_chat_session(&session_id)?;
-        active_session.system_prompt.clone()
+    let session_id = session_id.trim().to_owned();
+    let (workspace_root, new_session) = {
+        let mut controller = state.controller.lock().unwrap();
+        let workspace_root = controller.session()?.workspace_root();
+        if session_id.is_empty() {
+            let context_spec = context_spec.ok_or_else(|| {
+                ErrorDto::invalid_ai_chat_message(
+                    "AI chat context is required before the first message",
+                )
+            })?;
+            let prepared = build_ai_chat_session(
+                controller.session()?,
+                &context_spec,
+                ai_context_char_budget(),
+            )?;
+            let new_session_id = next_ai_chat_session_id();
+            let now = unix_timestamp_string();
+            controller.active_ai_chat_session = Some(ActiveAiChatSession {
+                session_id: new_session_id.clone(),
+            });
+            (
+                workspace_root,
+                Some(PersistedAiChatSession {
+                    session_id: new_session_id,
+                    title: "New chat".to_owned(),
+                    created_at: now.clone(),
+                    updated_at: now,
+                    context_spec,
+                    preview_summary: prepared.preview_summary,
+                    truncated: prepared.truncated,
+                    system_prompt: prepared.system_prompt,
+                    messages: Vec::new(),
+                    user_turn_count: 0,
+                    last_memory_checkpoint_message_index: 0,
+                    status: AiChatSessionStatus::Active,
+                }),
+            )
+        } else {
+            controller.active_ai_chat_session = Some(ActiveAiChatSession {
+                session_id: session_id.clone(),
+            });
+            (workspace_root, None)
+        }
     };
 
     tauri::async_runtime::spawn_blocking(move || {
-        let prior_messages = prior_messages
-            .into_iter()
-            .map(|message| ai::ChatMessage {
-                role: message.role,
-                content: message.content,
-            })
-            .collect::<Vec<_>>();
-        ai::chat_completion(
+        let mut session = match new_session {
+            Some(session) => session,
+            None => read_ai_chat_session(&workspace_root, &session_id)?,
+        };
+        let memory = read_ai_chat_memory(&workspace_root)?;
+        let system_prompt = build_ai_prompt_with_memory(&session.system_prompt, &memory);
+        let prior_messages = recent_ai_chat_messages(&session.messages);
+        let assistant_text = ai::chat_completion(
             &system_prompt,
             &prior_messages,
             &latest_user_message,
             &api_key,
             &model,
         )
-            .map(|assistant_text| AiChatResponseDto { assistant_text })
-            .map_err(|error| match error {
-                ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
-                ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
-            })
+        .map_err(|error| match error {
+            ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
+            ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
+        })?;
+
+        if session.messages.is_empty() {
+            session.title = derive_ai_chat_title(&latest_user_message);
+        }
+        session.messages.push(AiChatMessageDto {
+            role: "user".to_owned(),
+            content: latest_user_message,
+        });
+        session.messages.push(AiChatMessageDto {
+            role: "assistant".to_owned(),
+            content: assistant_text.clone(),
+        });
+        session.user_turn_count = session.user_turn_count.saturating_add(1);
+        session.status = AiChatSessionStatus::Active;
+        session.updated_at = unix_timestamp_string();
+        let checkpointed_user_turns = session
+            .messages
+            .iter()
+            .take(session.last_memory_checkpoint_message_index)
+            .filter(|message| message.role == "user")
+            .count();
+        if session
+            .user_turn_count
+            .saturating_sub(checkpointed_user_turns)
+            >= AI_MEMORY_USER_TURN_CHECKPOINT
+        {
+            let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
+        }
+        write_ai_chat_session(&workspace_root, &session)?;
+        Ok(AiChatResponseDto {
+            assistant_text,
+            session: AiChatSessionDto::from(session),
+        })
     })
     .await
     .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat task failed: {error}")))?
@@ -2526,6 +2724,8 @@ pub fn run() {
             set_workspace_sync_enabled,
             sync_now,
             open_ai_chat_session,
+            list_ai_chat_sessions,
+            get_ai_chat_session,
             close_ai_chat_session,
             ai_chat,
             notify_user_activity,
@@ -2631,8 +2831,11 @@ fn build_page_ai_chat_session(
         let page_content = session
             .page_content(&subtree_page.page_id)
             .map_err(ErrorDto::from)?;
-        let hierarchy_label =
-            subtree_page_hierarchy_label(page_id, &subtree_page.page_id, &subtree_title_by_hierarchy);
+        let hierarchy_label = subtree_page_hierarchy_label(
+            page_id,
+            &subtree_page.page_id,
+            &subtree_title_by_hierarchy,
+        );
         let depth = subtree_page_depth(page_id, &subtree_page.page_id);
         let section_heading = if depth == 0 {
             format!("Page: {hierarchy_label}")
@@ -2660,8 +2863,11 @@ fn build_page_ai_chat_session(
             let linked_refs = session
                 .page_linked_refs(&subtree_page.page_id)
                 .map_err(ErrorDto::from)?;
-            let target_label =
-                subtree_page_hierarchy_label(page_id, &subtree_page.page_id, &subtree_title_by_hierarchy);
+            let target_label = subtree_page_hierarchy_label(
+                page_id,
+                &subtree_page.page_id,
+                &subtree_title_by_hierarchy,
+            );
             for linked_ref in linked_refs {
                 let target_prefix = if &linked_ref.target_page_id == page_id {
                     "Related note".to_owned()
@@ -2841,9 +3047,9 @@ fn build_stream_ai_chat_session(
         .all_pages()
         .into_iter()
         .filter(|page| match &page.location {
-            PageLocation::Stream { stream_name } => {
-                stream_names.iter().any(|value| value == stream_name.as_str())
-            }
+            PageLocation::Stream { stream_name } => stream_names
+                .iter()
+                .any(|value| value == stream_name.as_str()),
             PageLocation::Pages => false,
         })
         .collect::<Vec<_>>();
@@ -2860,7 +3066,9 @@ fn build_stream_ai_chat_session(
             .unwrap_or_default()
             .to_owned();
         let date_name = page.page_id.leaf_name().as_str().to_owned();
-        let content = session.page_content(&page.page_id).map_err(ErrorDto::from)?;
+        let content = session
+            .page_content(&page.page_id)
+            .map_err(ErrorDto::from)?;
         let fragment = format!(
             "{}\n{}\n\n{}\n\n",
             format_date_name(&date_name),
@@ -3139,6 +3347,237 @@ fn days_since_date_name(date_name: &str) -> Option<u64> {
 
 fn workspace_page_order_path(workspace_root: &Path) -> PathBuf {
     workspace_root.join("uniseq").join(PAGE_ORDER_FILE_NAME)
+}
+
+fn ai_chat_dir_path(workspace_root: &Path) -> PathBuf {
+    workspace_root.join("uniseq").join("ai")
+}
+
+fn ai_chat_sessions_dir_path(workspace_root: &Path) -> PathBuf {
+    ai_chat_dir_path(workspace_root).join("sessions")
+}
+
+fn ai_chat_memory_path(workspace_root: &Path) -> PathBuf {
+    ai_chat_dir_path(workspace_root).join("memory.md")
+}
+
+fn ai_chat_session_path(workspace_root: &Path, session_id: &str) -> CommandResult<PathBuf> {
+    if session_id.is_empty()
+        || !session_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(ErrorDto::invalid_ai_chat_message(
+            "invalid AI chat session id",
+        ));
+    }
+    Ok(ai_chat_sessions_dir_path(workspace_root).join(format!("{session_id}.json")))
+}
+
+fn read_ai_chat_memory(workspace_root: &Path) -> CommandResult<String> {
+    let path = ai_chat_memory_path(workspace_root);
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
+}
+
+fn write_ai_chat_memory(workspace_root: &Path, memory: &str) -> CommandResult<()> {
+    let path = ai_chat_memory_path(workspace_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
+    }
+    fs::write(&path, memory).map_err(|error| ErrorDto::io(&path, &error))
+}
+
+fn read_ai_chat_session(
+    workspace_root: &Path,
+    session_id: &str,
+) -> CommandResult<PersistedAiChatSession> {
+    let path = ai_chat_session_path(workspace_root, session_id)?;
+    let contents = fs::read_to_string(&path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ErrorDto::ai_chat_session_missing()
+        } else {
+            ErrorDto::io(&path, &error)
+        }
+    })?;
+    serde_json::from_str(&contents).map_err(|error| ErrorDto {
+        code: "ai_chat_session_invalid",
+        message: format!("failed to parse AI chat session: {error}"),
+        path: Some(workspace_path_to_string(&path)),
+    })
+}
+
+fn write_ai_chat_session(
+    workspace_root: &Path,
+    session: &PersistedAiChatSession,
+) -> CommandResult<()> {
+    let path = ai_chat_session_path(workspace_root, &session.session_id)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| ErrorDto::io(parent, &error))?;
+    }
+    let contents = serde_json::to_string_pretty(session).map_err(|error| ErrorDto {
+        code: "ai_chat_session_invalid",
+        message: format!("failed to serialize AI chat session: {error}"),
+        path: Some(workspace_path_to_string(&path)),
+    })?;
+    fs::write(&path, contents).map_err(|error| ErrorDto::io(&path, &error))
+}
+
+fn list_ai_chat_session_summaries(
+    workspace_root: &Path,
+) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
+    let sessions_dir = ai_chat_sessions_dir_path(workspace_root);
+    let entries = match fs::read_dir(&sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(ErrorDto::io(&sessions_dir, &error)),
+    };
+    let mut sessions = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| ErrorDto::io(&sessions_dir, &error))?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path).map_err(|error| ErrorDto::io(&path, &error))?;
+        let session =
+            serde_json::from_str::<PersistedAiChatSession>(&contents).map_err(|error| {
+                ErrorDto {
+                    code: "ai_chat_session_invalid",
+                    message: format!("failed to parse AI chat session: {error}"),
+                    path: Some(workspace_path_to_string(&path)),
+                }
+            })?;
+        sessions.push(AiChatSessionSummaryDto::from(&session));
+    }
+    sessions.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| right.session_id.cmp(&left.session_id))
+    });
+    Ok(sessions)
+}
+
+fn next_ai_chat_session_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("ai-session-{nanos}")
+}
+
+fn unix_timestamp_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string()
+}
+
+fn derive_ai_chat_title(first_user_message: &str) -> String {
+    let trimmed = first_user_message.trim();
+    let sentence_end = trimmed.char_indices().find_map(|(index, ch)| {
+        matches!(ch, '.' | '?' | '!' | '\n').then_some(index + ch.len_utf8())
+    });
+    let candidate = sentence_end
+        .and_then(|end| trimmed.get(..end))
+        .unwrap_or(trimmed)
+        .trim();
+    let mut title = candidate.chars().take(80).collect::<String>();
+    if title.trim().is_empty() {
+        title = "New chat".to_owned();
+    }
+    title
+}
+
+fn build_ai_prompt_with_memory(base_system_prompt: &str, memory: &str) -> String {
+    let memory = memory.trim();
+    if memory.is_empty() {
+        return base_system_prompt.to_owned();
+    }
+    format!(
+        "{base_system_prompt}\n\nWorkspace memory:\n{memory}\n\nUse workspace memory as long-term context. If it conflicts with the current conversation or the notes above, prefer the current conversation and notes."
+    )
+}
+
+fn recent_ai_chat_messages(messages: &[AiChatMessageDto]) -> Vec<ai::ChatMessage> {
+    let start = messages.len().saturating_sub(AI_RECENT_MESSAGE_WINDOW);
+    messages[start..]
+        .iter()
+        .map(|message| ai::ChatMessage {
+            role: message.role.clone(),
+            content: message.content.clone(),
+        })
+        .collect()
+}
+
+fn format_ai_memory_delta(messages: &[AiChatMessageDto]) -> String {
+    messages
+        .iter()
+        .filter(|message| !message.content.trim().is_empty())
+        .map(|message| {
+            let role = if message.role == "assistant" {
+                "Assistant"
+            } else {
+                "User"
+            };
+            format!("{role}: {}", message.content.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn update_ai_memory_from_session_delta(
+    workspace_root: &Path,
+    session: &mut PersistedAiChatSession,
+    api_key: &str,
+) -> CommandResult<bool> {
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Ok(false);
+    }
+    let checkpoint = session
+        .last_memory_checkpoint_message_index
+        .min(session.messages.len());
+    if checkpoint >= session.messages.len() {
+        return Ok(false);
+    }
+    let delta = format_ai_memory_delta(&session.messages[checkpoint..]);
+    if delta.trim().is_empty() {
+        session.last_memory_checkpoint_message_index = session.messages.len();
+        return Ok(false);
+    }
+    let current_memory = read_ai_chat_memory(workspace_root)?;
+    let system_prompt = format!(
+        "You maintain a concise long-term memory file for this workspace.\n\
+Rewrite the memory from the existing memory and the new transcript delta.\n\
+Preserve durable user preferences, active projects, stable facts, decisions, and open loops.\n\
+Remove stale, contradicted, one-off, or transcript-like detail.\n\
+Return only Markdown for memory.md. Keep it under about {AI_MEMORY_TARGET_WORDS} words."
+    );
+    let latest_user_message = format!(
+        "Existing memory.md:\n---\n{}\n---\n\nNew transcript delta:\n---\n{}\n---",
+        current_memory.trim(),
+        delta.trim()
+    );
+    let rewritten_memory = ai::chat_completion(
+        &system_prompt,
+        &[],
+        &latest_user_message,
+        api_key,
+        AI_MEMORY_MODEL,
+    )
+    .map_err(|error| match error {
+        ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
+        ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
+    })?;
+    write_ai_chat_memory(workspace_root, rewritten_memory.trim())?;
+    session.last_memory_checkpoint_message_index = session.messages.len();
+    Ok(true)
 }
 
 fn old_page_order_store_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -3478,6 +3917,65 @@ mod tests {
     }
 
     #[test]
+    fn ai_chat_session_open_prepares_without_persisting_empty_session() {
+        let root = unique_temp_dir("uniseq-app-ai-session-persist");
+        write_workspace_file(&root, "pages/Target.md", "main body");
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let opened = controller
+            .open_ai_chat_session(AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(opened.session_id, "");
+        assert_eq!(opened.title, "New chat");
+        assert!(opened.messages.is_empty());
+        assert_eq!(
+            opened.context_spec,
+            AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            }
+        );
+
+        let summaries = controller.list_ai_chat_sessions().unwrap();
+        assert!(summaries.is_empty());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_chat_title_uses_first_sentence_with_fallback_cap() {
+        assert_eq!(
+            derive_ai_chat_title("Can we improve memory? I have another thought."),
+            "Can we improve memory?"
+        );
+        assert_eq!(
+            derive_ai_chat_title("   no sentence boundary but enough useful text   "),
+            "no sentence boundary but enough useful text"
+        );
+        assert_eq!(derive_ai_chat_title("   "), "New chat");
+        assert!(derive_ai_chat_title(&"x".repeat(120)).len() <= 80);
+    }
+
+    #[test]
+    fn ai_chat_recent_messages_are_bounded_to_latest_window() {
+        let messages = (0..25)
+            .map(|index| AiChatMessageDto {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.to_owned(),
+                content: format!("message {index}"),
+            })
+            .collect::<Vec<_>>();
+        let recent = recent_ai_chat_messages(&messages);
+        assert_eq!(recent.len(), AI_RECENT_MESSAGE_WINDOW);
+        assert_eq!(recent[0].content, "message 5");
+        assert_eq!(recent.last().unwrap().content, "message 24");
+    }
+
+    #[test]
     fn open_workspace_reads_pages_and_exposes_watcher_status() {
         let root = unique_temp_dir("uniseq-app-open");
         fs::create_dir_all(root.join("pages")).unwrap();
@@ -3547,7 +4045,6 @@ mod tests {
             session: Some(WorkspaceSession::open(&root).unwrap()),
             sync_loop: None,
             active_ai_chat_session: None,
-            next_ai_chat_session_nonce: 0,
         };
         let _ = controller.drain_workspace_events().unwrap();
 
@@ -4007,22 +4504,30 @@ mod tests {
                 .contains("  - Target / Subpage\n    - Target / Subpage / Deep")
         );
         assert!(prepared.system_prompt.contains("Page: Target"));
-        assert!(prepared
-            .system_prompt
-            .contains("Subpage (depth 1): Target / Subpage"));
-        assert!(prepared
-            .system_prompt
-            .contains("Subpage (depth 2): Target / Subpage / Deep"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("Subpage (depth 1): Target / Subpage")
+        );
+        assert!(
+            prepared
+                .system_prompt
+                .contains("Subpage (depth 2): Target / Subpage / Deep")
+        );
         assert!(prepared.system_prompt.contains("child body"));
         assert!(prepared.system_prompt.contains("deep body"));
         assert!(prepared.system_prompt.contains("root linked thought"));
-        assert!(prepared
-            .system_prompt
-            .contains("Related note for Target / Subpage:"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("Related note for Target / Subpage:")
+        );
         assert!(prepared.system_prompt.contains("child linked thought"));
-        assert!(prepared
-            .system_prompt
-            .contains("Related note for Target / Subpage / Deep:"));
+        assert!(
+            prepared
+                .system_prompt
+                .contains("Related note for Target / Subpage / Deep:")
+        );
         assert!(prepared.system_prompt.contains("deep linked thought"));
         assert!(prepared.system_prompt.contains(
             "included subpages should be treated as relatively time-agnostic reference information"
