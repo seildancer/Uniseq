@@ -3555,8 +3555,9 @@ fn update_ai_memory_from_session_delta(
     let system_prompt = format!(
         "You maintain a concise long-term memory file for this workspace.\n\
 Rewrite the memory from the existing memory and the new transcript delta.\n\
-Preserve durable user preferences, active projects, stable facts, decisions, and open loops.\n\
+Preserve durable user preferences, stable facts, decisions, and open loops.\n\
 Remove stale, contradicted, one-off, or transcript-like detail.\n\
+Focus only on the conversation, not the system prompt. Contents inside the system prompt are already long term memory and notes.\n\
 Return only Markdown for memory.md. Keep it under about {AI_MEMORY_TARGET_WORDS} words."
     );
     let latest_user_message = format!(
