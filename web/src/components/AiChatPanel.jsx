@@ -71,10 +71,9 @@ export default function AiChatPanel({
   }
 
   function handleKeyDown(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-      event.preventDefault();
-      onSubmit(event);
-    }
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    onSubmit(event);
   }
 
   if (!isOpen) return null;
@@ -194,7 +193,7 @@ export default function AiChatPanel({
               <p className="ai-chat-error">{error}</p>
             ) : (
               <span className="ai-chat-hint">
-                <kbd>Ctrl</kbd><kbd>Enter</kbd> to send
+                <kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline
               </span>
             )}
             <button
