@@ -278,6 +278,7 @@ struct AiChatSessionOpenDto {
     preview_summary: String,
     truncated: bool,
     messages: Vec<AiChatMessageDto>,
+    is_private: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -328,6 +329,7 @@ struct AiChatSessionDto {
     user_turn_count: usize,
     last_memory_checkpoint_message_index: usize,
     status: AiChatSessionStatus,
+    is_private: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -352,12 +354,13 @@ struct PreparedAiChatSession {
 }
 
 #[derive(Debug, Clone)]
-struct ActiveAiChatSession {
-    session_id: String,
+enum ActiveAiChatSession {
+    Persisted { session_id: String },
+    Private { session: PersistedAiChatSession },
 }
 
-impl From<PersistedAiChatSession> for AiChatSessionDto {
-    fn from(value: PersistedAiChatSession) -> Self {
+impl AiChatSessionDto {
+    fn from_session(value: PersistedAiChatSession, is_private: bool) -> Self {
         Self {
             session_id: value.session_id,
             title: value.title,
@@ -370,6 +373,7 @@ impl From<PersistedAiChatSession> for AiChatSessionDto {
             user_turn_count: value.user_turn_count,
             last_memory_checkpoint_message_index: value.last_memory_checkpoint_message_index,
             status: value.status,
+            is_private,
         }
     }
 }
@@ -478,9 +482,40 @@ impl WorkspaceController {
     fn open_ai_chat_session(
         &mut self,
         context_spec: AiChatContextSpecDto,
+        private_mode: bool,
     ) -> CommandResult<AiChatSessionOpenDto> {
         let prepared =
             build_ai_chat_session(self.session()?, &context_spec, ai_context_char_budget())?;
+        if private_mode {
+            let now = unix_timestamp_string();
+            let session = PersistedAiChatSession {
+                session_id: next_private_ai_chat_session_id(),
+                title: "Private chat".to_owned(),
+                created_at: now.clone(),
+                updated_at: now,
+                context_spec: context_spec.clone(),
+                preview_summary: prepared.preview_summary.clone(),
+                truncated: prepared.truncated,
+                system_prompt: prepared.system_prompt,
+                messages: Vec::new(),
+                user_turn_count: 0,
+                last_memory_checkpoint_message_index: 0,
+                status: AiChatSessionStatus::Active,
+            };
+            self.active_ai_chat_session = Some(ActiveAiChatSession::Private {
+                session: session.clone(),
+            });
+            return Ok(AiChatSessionOpenDto {
+                session_id: session.session_id,
+                title: session.title,
+                context_spec,
+                preview_summary: session.preview_summary,
+                truncated: session.truncated,
+                messages: session.messages,
+                is_private: true,
+            });
+        }
+        self.active_ai_chat_session = None;
         Ok(AiChatSessionOpenDto {
             session_id: String::new(),
             title: "New chat".to_owned(),
@@ -488,16 +523,17 @@ impl WorkspaceController {
             preview_summary: prepared.preview_summary,
             truncated: prepared.truncated,
             messages: Vec::new(),
+            is_private: false,
         })
     }
 
     fn activate_ai_chat_session(&mut self, session_id: String) -> CommandResult<AiChatSessionDto> {
         let workspace_root = self.session()?.workspace_root();
         let session = read_ai_chat_session(&workspace_root, &session_id)?;
-        self.active_ai_chat_session = Some(ActiveAiChatSession {
+        self.active_ai_chat_session = Some(ActiveAiChatSession::Persisted {
             session_id: session_id.clone(),
         });
-        Ok(AiChatSessionDto::from(session))
+        Ok(AiChatSessionDto::from_session(session, false))
     }
 
     fn list_ai_chat_sessions(&self) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
@@ -505,16 +541,23 @@ impl WorkspaceController {
         list_ai_chat_session_summaries(&workspace_root)
     }
 
-    fn close_ai_chat_session(&mut self, session_id: &str) -> bool {
-        if self
-            .active_ai_chat_session
-            .as_ref()
-            .is_some_and(|session| session.session_id == session_id)
-        {
+    fn delete_ai_chat_session(&mut self, session_id: &str) -> CommandResult<bool> {
+        let workspace_root = self.session()?.workspace_root();
+        delete_ai_chat_session_file(&workspace_root, session_id)?;
+        if self.active_ai_chat_session_matches(session_id) {
             self.active_ai_chat_session = None;
-            return true;
         }
-        false
+        Ok(true)
+    }
+
+    fn active_ai_chat_session_matches(&self, session_id: &str) -> bool {
+        match self.active_ai_chat_session.as_ref() {
+            Some(ActiveAiChatSession::Persisted {
+                session_id: active_session_id,
+            }) => active_session_id == session_id,
+            Some(ActiveAiChatSession::Private { session }) => session.session_id == session_id,
+            None => false,
+        }
     }
 
     fn all_pages(&self) -> CommandResult<Vec<PageSummaryDto>> {
@@ -2075,12 +2118,13 @@ fn sync_now_blocking(app: AppHandle) -> CommandResult<sync::SyncRunSummary> {
 fn open_ai_chat_session(
     state: State<'_, AppState>,
     context_spec: AiChatContextSpecDto,
+    private_mode: bool,
 ) -> CommandResult<AiChatSessionOpenDto> {
     state
         .controller
         .lock()
         .unwrap()
-        .open_ai_chat_session(context_spec)
+        .open_ai_chat_session(context_spec, private_mode)
 }
 
 #[tauri::command]
@@ -2103,35 +2147,15 @@ fn get_ai_chat_session(
 }
 
 #[tauri::command]
-async fn close_ai_chat_session(
+fn delete_ai_chat_session(
     state: State<'_, AppState>,
     session_id: String,
-    api_key: String,
 ) -> CommandResult<bool> {
-    let workspace_root = {
-        let mut controller = state.controller.lock().unwrap();
-        let workspace_root = controller.session()?.workspace_root();
-        controller.close_ai_chat_session(&session_id);
-        workspace_root
-    };
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut session = read_ai_chat_session(&workspace_root, &session_id)?;
-        if session.messages.is_empty() {
-            let path = ai_chat_session_path(&workspace_root, &session_id)?;
-            match fs::remove_file(&path) {
-                Ok(()) => return Ok(true),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
-                Err(error) => return Err(ErrorDto::io(&path, &error)),
-            }
-        }
-        session.status = AiChatSessionStatus::Closed;
-        session.updated_at = unix_timestamp_string();
-        let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
-        write_ai_chat_session(&workspace_root, &session)?;
-        Ok(true)
-    })
-    .await
-    .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat close task failed: {error}")))?
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .delete_ai_chat_session(session_id.trim())
 }
 
 #[tauri::command]
@@ -2143,6 +2167,7 @@ async fn ai_chat(
     latest_user_message: String,
     api_key: String,
     model: String,
+    private_mode: bool,
 ) -> CommandResult<AiChatResponseDto> {
     let latest_user_message = latest_user_message.trim().to_owned();
     if latest_user_message.is_empty() {
@@ -2155,8 +2180,14 @@ async fn ai_chat(
         return Err(ErrorDto::ai_chat_config("Gemini API key is required"));
     }
 
+    #[derive(Clone)]
+    enum SessionExecution {
+        PersistedById(String),
+        Inline(PersistedAiChatSession),
+    }
+
     let session_id = session_id.trim().to_owned();
-    let (workspace_root, new_session) = {
+    let (workspace_root, session_execution, session_is_private) = {
         let mut controller = state.controller.lock().unwrap();
         let workspace_root = controller.session()?.workspace_root();
         if session_id.is_empty() {
@@ -2170,42 +2201,78 @@ async fn ai_chat(
                 &context_spec,
                 ai_context_char_budget(),
             )?;
-            let new_session_id = next_ai_chat_session_id();
             let now = unix_timestamp_string();
-            controller.active_ai_chat_session = Some(ActiveAiChatSession {
-                session_id: new_session_id.clone(),
+            let session = PersistedAiChatSession {
+                session_id: if private_mode {
+                    next_private_ai_chat_session_id()
+                } else {
+                    next_ai_chat_session_id()
+                },
+                title: if private_mode {
+                    "Private chat".to_owned()
+                } else {
+                    "New chat".to_owned()
+                },
+                created_at: now.clone(),
+                updated_at: now,
+                context_spec,
+                preview_summary: prepared.preview_summary,
+                truncated: prepared.truncated,
+                system_prompt: prepared.system_prompt,
+                messages: Vec::new(),
+                user_turn_count: 0,
+                last_memory_checkpoint_message_index: 0,
+                status: AiChatSessionStatus::Active,
+            };
+            controller.active_ai_chat_session = Some(if private_mode {
+                ActiveAiChatSession::Private {
+                    session: session.clone(),
+                }
+            } else {
+                ActiveAiChatSession::Persisted {
+                    session_id: session.session_id.clone(),
+                }
             });
-            (
-                workspace_root,
-                Some(PersistedAiChatSession {
-                    session_id: new_session_id,
-                    title: "New chat".to_owned(),
-                    created_at: now.clone(),
-                    updated_at: now,
-                    context_spec,
-                    preview_summary: prepared.preview_summary,
-                    truncated: prepared.truncated,
-                    system_prompt: prepared.system_prompt,
-                    messages: Vec::new(),
-                    user_turn_count: 0,
-                    last_memory_checkpoint_message_index: 0,
-                    status: AiChatSessionStatus::Active,
-                }),
-            )
+            (workspace_root, SessionExecution::Inline(session), private_mode)
         } else {
-            controller.active_ai_chat_session = Some(ActiveAiChatSession {
-                session_id: session_id.clone(),
+            let session_execution = if private_mode {
+                match controller.active_ai_chat_session.as_ref() {
+                    Some(ActiveAiChatSession::Private { session })
+                        if session.session_id == session_id =>
+                    {
+                        SessionExecution::Inline(session.clone())
+                    }
+                    _ => return Err(ErrorDto::ai_chat_session_missing()),
+                }
+            } else {
+                SessionExecution::PersistedById(session_id.clone())
+            };
+            controller.active_ai_chat_session = Some(if private_mode {
+                match session_execution.clone() {
+                    SessionExecution::Inline(session) => ActiveAiChatSession::Private { session },
+                    SessionExecution::PersistedById(_) => unreachable!(),
+                }
+            } else {
+                ActiveAiChatSession::Persisted {
+                    session_id: session_id.clone(),
+                }
             });
-            (workspace_root, None)
+            (workspace_root, session_execution, private_mode)
         }
     };
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut session = match new_session {
-            Some(session) => session,
-            None => read_ai_chat_session(&workspace_root, &session_id)?,
+    let (assistant_text, session) = tauri::async_runtime::spawn_blocking(move || {
+        let mut session = match session_execution {
+            SessionExecution::Inline(session) => session,
+            SessionExecution::PersistedById(session_id) => {
+                read_ai_chat_session(&workspace_root, &session_id)?
+            }
         };
-        let memory = read_ai_chat_memory(&workspace_root)?;
+        let memory = if session_is_private {
+            String::new()
+        } else {
+            read_ai_chat_memory(&workspace_root)?
+        };
         let system_prompt = build_ai_prompt_with_memory(&session.system_prompt, &memory);
         let prior_messages = recent_ai_chat_messages(&session.messages);
         let assistant_text = ai::chat_completion(
@@ -2234,14 +2301,35 @@ async fn ai_chat(
         session.user_turn_count = session.user_turn_count.saturating_add(1);
         session.status = AiChatSessionStatus::Active;
         session.updated_at = unix_timestamp_string();
-        write_ai_chat_session(&workspace_root, &session)?;
-        Ok(AiChatResponseDto {
-            assistant_text,
-            session: AiChatSessionDto::from(session),
-        })
+        if !session_is_private {
+            write_ai_chat_session(&workspace_root, &session)?;
+            let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
+            write_ai_chat_session(&workspace_root, &session)?;
+        }
+        Ok((assistant_text, session))
     })
     .await
-    .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat task failed: {error}")))?
+    .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat task failed: {error}")))
+    .and_then(|result| result)?;
+
+    if session_is_private {
+        state.controller.lock().unwrap().active_ai_chat_session = Some(
+            ActiveAiChatSession::Private {
+                session: session.clone(),
+            },
+        );
+    } else {
+        state.controller.lock().unwrap().active_ai_chat_session = Some(
+            ActiveAiChatSession::Persisted {
+                session_id: session.session_id.clone(),
+            },
+        );
+    }
+
+    Ok(AiChatResponseDto {
+        assistant_text,
+        session: AiChatSessionDto::from_session(session, session_is_private),
+    })
 }
 
 #[tauri::command]
@@ -2712,7 +2800,7 @@ pub fn run() {
             open_ai_chat_session,
             list_ai_chat_sessions,
             get_ai_chat_session,
-            close_ai_chat_session,
+            delete_ai_chat_session,
             ai_chat,
             notify_user_activity,
             sync_conflict_detail,
@@ -3412,6 +3500,15 @@ fn write_ai_chat_session(
     fs::write(&path, contents).map_err(|error| ErrorDto::io(&path, &error))
 }
 
+fn delete_ai_chat_session_file(workspace_root: &Path, session_id: &str) -> CommandResult<()> {
+    let path = ai_chat_session_path(workspace_root, session_id)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ErrorDto::io(&path, &error)),
+    }
+}
+
 fn list_ai_chat_session_summaries(
     workspace_root: &Path,
 ) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
@@ -3454,6 +3551,14 @@ fn next_ai_chat_session_id() -> String {
         .unwrap_or_default()
         .as_nanos();
     format!("ai-session-{nanos}")
+}
+
+fn next_private_ai_chat_session_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("ai-private-session-{nanos}")
 }
 
 fn unix_timestamp_string() -> String {
@@ -3915,17 +4020,46 @@ mod tests {
         let opened = controller
             .open_ai_chat_session(AiChatContextSpecDto::Page {
                 page_id: "pages:Target".to_owned(),
-            })
+            }, false)
             .unwrap();
         assert_eq!(opened.session_id, "");
         assert_eq!(opened.title, "New chat");
         assert!(opened.messages.is_empty());
+        assert!(!opened.is_private);
         assert_eq!(
             opened.context_spec,
             AiChatContextSpecDto::Page {
                 page_id: "pages:Target".to_owned(),
             }
         );
+
+        let summaries = controller.list_ai_chat_sessions().unwrap();
+        assert!(summaries.is_empty());
+
+        controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_chat_private_session_open_prepares_without_persisting_history() {
+        let root = unique_temp_dir("uniseq-app-ai-private-session");
+        write_workspace_file(&root, "pages/Secret.md", "private notes");
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+
+        let opened = controller
+            .open_ai_chat_session(
+                AiChatContextSpecDto::Page {
+                    page_id: "pages:Secret".to_owned(),
+                },
+                true,
+            )
+            .unwrap();
+        assert!(opened.session_id.starts_with("ai-private-session-"));
+        assert_eq!(opened.title, "Private chat");
+        assert!(opened.is_private);
 
         let summaries = controller.list_ai_chat_sessions().unwrap();
         assert!(summaries.is_empty());

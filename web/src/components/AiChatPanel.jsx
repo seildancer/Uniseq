@@ -28,9 +28,29 @@ function AiChatMessage({ message }) {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+      <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function GhostIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
+      <path
+        d="M12 2.75a6.75 6.75 0 0 0-6.75 6.75v10.24c0 .44.5.7.86.45L8.9 18.3l2.6 1.88c.3.21.7.21 1 0l2.6-1.88 2.8 1.89c.36.25.85-.01.85-.45V9.5A6.75 6.75 0 0 0 12 2.75Zm-2.45 7.1a1.05 1.05 0 1 1 0 2.1 1.05 1.05 0 0 1 0-2.1Zm4.9 5.48c-.61.53-1.43.8-2.45.8s-1.84-.27-2.45-.8a.78.78 0 1 1 1.03-1.16c.27.23.74.4 1.42.4s1.15-.17 1.42-.4a.78.78 0 1 1 1.03 1.16Zm0-3.38a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 export default function AiChatPanel({
   isOpen,
   sessionTitle,
+  isPrivate,
   sessions,
   activeSessionId,
   previewSummary,
@@ -47,7 +67,10 @@ export default function AiChatPanel({
   keyboardHeight,
   keyboardVisible,
   onClose,
+  onNewChat,
+  onNewPrivateChat,
   onSelectSession,
+  onDeleteSession,
   onDraftChange,
   onApiKeyChange,
   onModelChange,
@@ -115,13 +138,15 @@ export default function AiChatPanel({
         onClick={(event) => event.stopPropagation()}
       >
         <header className="ai-chat-header">
-          <div className="ai-chat-header-copy">
-            <div className="ai-chat-header-title">
-              <strong>AI Chat</strong>
-              <span className="feature-badge feature-badge--soft">Beta</span>
-            </div>
-            {!loadingSession && sessionTitle ? <span>{sessionTitle}</span> : null}
-            {loadingSession && <span>Loading context...</span>}
+            <div className="ai-chat-header-copy">
+              <div className="ai-chat-header-title">
+                <strong>AI Chat</strong>
+                <span className="feature-badge feature-badge--soft">Beta</span>
+                {isPrivate ? (
+                  <span className="ai-chat-mode-badge">Private</span>
+                ) : null}
+              </div>
+              {sessionTitle ? <span>{sessionTitle}</span> : null}
           </div>
           <button
             className="ai-chat-close"
@@ -197,43 +222,78 @@ export default function AiChatPanel({
                 </>
               )}
               {settingsExpanded ? (
-                <p className="ai-chat-hint">Session and memory are stored locally and sent only with AI chat requests.</p>
+                <p className="ai-chat-hint">
+                  {isPrivate
+                    ? "Private chats stay in memory only. They are not saved to history or workspace memory."
+                    : "Saved chats are stored locally. Deleting a chat removes the transcript only; workspace memory is kept."}
+                </p>
               ) : null}
             </section>
+            <div className="ai-chat-actions">
+              <button
+                type="button"
+                className="ai-chat-action-button"
+                onClick={onNewChat}
+                disabled={loadingSession || sending}
+              >
+                <PlusIcon />
+                <span>New chat</span>
+              </button>
+              <button
+                type="button"
+                className="ai-chat-action-button ai-chat-action-button--private"
+                aria-label="Start private chat"
+                title="Private chat"
+                onClick={onNewPrivateChat}
+                disabled={loadingSession || sending}
+              >
+                <GhostIcon />
+              </button>
+            </div>
 
             {Array.isArray(sessions) && sessions.length > 0 ? (
               <section className="ai-chat-sessions" aria-label="AI chat sessions">
                 {sessions.slice(0, 24).map((session) => (
-                  <button
+                  <div
                     key={session.session_id}
-                    type="button"
                     className={`ai-chat-session${session.session_id === activeSessionId ? " ai-chat-session--active" : ""}`}
-                    onClick={() => onSelectSession(session.session_id)}
-                    disabled={loadingSession || sending}
-                    title={session.preview_summary}
                   >
-                    <span>{session.title || "New chat"}</span>
-                    <small>{session.message_count ?? 0} msg</small>
-                  </button>
+                    <button
+                      type="button"
+                      className="ai-chat-session-main"
+                      onClick={() => onSelectSession(session.session_id)}
+                      disabled={loadingSession || sending}
+                      title={session.preview_summary}
+                    >
+                      <span>{session.title || "New chat"}</span>
+                      <small>{session.message_count ?? 0} msg</small>
+                    </button>
+                    <button
+                      type="button"
+                      className="ai-chat-session-delete"
+                      aria-label={`Delete ${session.title || "chat"}`}
+                      title="Delete chat"
+                      onClick={() => onDeleteSession(session.session_id)}
+                      disabled={loadingSession || sending}
+                    >
+                      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+                        <path d="M5.25 5.25 10.75 10.75M10.75 5.25 5.25 10.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
                 ))}
               </section>
             ) : null}
           </aside>
 
           <main className="ai-chat-main">
-            {(loadingSession || previewSummary) && (
+            {previewSummary && (
               <section className="ai-chat-preview">
-                {loadingSession ? (
-                  <p>Preparing a snapshot of the current notes...</p>
-                ) : (
-                  <>
-                    <p>{previewSummary}</p>
-                    {truncated && (
-                      <div className="ai-chat-preview-meta">
-                        <span>Oldest notes were trimmed to fit.</span>
-                      </div>
-                    )}
-                  </>
+                <p>{previewSummary}</p>
+                {truncated && (
+                  <div className="ai-chat-preview-meta">
+                    <span>Oldest notes were trimmed to fit.</span>
+                  </div>
                 )}
               </section>
             )}
@@ -251,33 +311,26 @@ export default function AiChatPanel({
             </div>
 
             <form className="ai-chat-composer" onSubmit={onSubmit}>
-              <textarea
-                ref={textareaRef}
-                className="ai-chat-input"
-                rows={1}
-                value={draft}
-                placeholder="Ask about the current notes"
-                onChange={handleDraftChange}
-                onKeyDown={handleKeyDown}
-                disabled={loadingSession || sending}
-              />
-              <div className="ai-chat-composer-footer">
-                {error ? (
-                  <p className="ai-chat-error">{error}</p>
-                ) : (
-                  <span className="ai-chat-hint">
-                    <span className="ai-chat-hint-desktop"><kbd>Enter</kbd> to send, <kbd>Shift</kbd><kbd>Enter</kbd> for newline</span>
-                    <span className="ai-chat-hint-compact">Ask about the current notes</span>
-                  </span>
-                )}
+              <div className="ai-chat-composer-row">
+                <textarea
+                  ref={textareaRef}
+                  className="ai-chat-input"
+                  rows={1}
+                  value={draft}
+                  placeholder="Ask about the current notes"
+                  onChange={handleDraftChange}
+                  onKeyDown={handleKeyDown}
+                  disabled={loadingSession || sending}
+                />
                 <button
-                  className="primary-button"
+                  className="primary-button ai-chat-send-button"
                   type="submit"
                   disabled={loadingSession || sending || !draft.trim() || !apiKey.trim()}
                 >
                   Send
                 </button>
               </div>
+              {error ? <p className="ai-chat-error">{error}</p> : null}
             </form>
           </main>
         </div>

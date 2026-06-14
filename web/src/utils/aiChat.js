@@ -52,6 +52,7 @@ export function createClosedAiChatState(apiKey = "", model = DEFAULT_AI_CHAT_MOD
     presentation: "desktop",
     sessionId: "",
     sessionTitle: "",
+    isPrivate: false,
     contextSpec: null,
     sessions: [],
     previewSummary: "",
@@ -84,6 +85,7 @@ export function applyOpenedAiChatSession(
     loadingSession: false,
     sessionId: openedSession?.session_id ?? "",
     sessionTitle: openedSession?.title ?? "New chat",
+    isPrivate: Boolean(openedSession?.is_private),
     contextSpec: openedSession?.context_spec ?? null,
     previewSummary: openedSession?.preview_summary ?? "",
     truncated: Boolean(openedSession?.truncated),
@@ -106,6 +108,7 @@ export function applyLoadedAiChatSession(
     presentation: resolveAiChatPresentation(isMobile),
     sessionId: session?.session_id ?? "",
     sessionTitle: session?.title ?? "New chat",
+    isPrivate: Boolean(session?.is_private),
     contextSpec: session?.context_spec ?? null,
     previewSummary: session?.preview_summary ?? "",
     truncated: Boolean(session?.truncated),
@@ -121,6 +124,17 @@ export function appendAiChatMessage(state, role, content) {
   return {
     ...state,
     messages: [...(state?.messages ?? []), { role, content }],
+  };
+}
+
+export function reopenAiChatState(state, isMobile) {
+  return {
+    ...state,
+    isOpen: true,
+    loadingSession: false,
+    sending: false,
+    presentation: resolveAiChatPresentation(isMobile),
+    error: "",
   };
 }
 

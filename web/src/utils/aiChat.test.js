@@ -9,6 +9,7 @@ import {
   buildAiChatContextSpec,
   createOpeningAiChatState,
   normalizeAiChatModel,
+  reopenAiChatState,
   resolveAiChatPresentation,
   shouldShowAiChatPreview,
 } from "./aiChat.js";
@@ -56,6 +57,7 @@ test("opening a new AI session discards prior transcript state", () => {
   assert.deepEqual(reopened.contextSpec, { kind: "page", page_id: "pages:Fresh" });
   assert.equal(reopened.previewSummary, "Fresh preview");
   assert.equal(reopened.truncated, true);
+  assert.equal(reopened.isPrivate, false);
   assert.equal(reopened.apiKey, "test-key");
   assert.equal(reopened.model, "gemini-2.5-pro");
 });
@@ -72,10 +74,32 @@ test("preview summary is available before the first message is sent", () => {
   assert.equal(shouldShowAiChatPreview(opening), false);
   assert.equal(shouldShowAiChatPreview(opened), true);
   assert.equal(opened.sessionId, "");
+  assert.equal(opened.isPrivate, false);
   assert.deepEqual(opened.contextSpec, { kind: "stream_single", stream_name: "journals" });
   assert.equal(opened.messages.length, 0);
   assert.equal(opening.apiKey, "test-key");
   assert.equal(opening.model, "gemini-2.5-flash");
+});
+
+test("private sessions stay marked private across open and reopen state helpers", () => {
+  const opened = applyOpenedAiChatSession({
+    session_id: "ai-private-session-1",
+    title: "Private chat",
+    is_private: true,
+    context_spec: { kind: "page", page_id: "pages:Secret" },
+    preview_summary: "Private preview",
+    truncated: false,
+    messages: [],
+  }, true, "test-key", "gemini-2.5-flash");
+
+  const closed = { ...opened, isOpen: false, error: "stale" };
+  const reopened = reopenAiChatState(closed, true);
+
+  assert.equal(opened.isPrivate, true);
+  assert.equal(reopened.isOpen, true);
+  assert.equal(reopened.isPrivate, true);
+  assert.equal(reopened.error, "");
+  assert.equal(reopened.presentation, "mobile");
 });
 
 test("resolveAiChatPresentation switches mobile sessions to full-screen mode", () => {
