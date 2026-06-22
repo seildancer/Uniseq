@@ -14,24 +14,12 @@
 
 ## Screenshots
 
-<p align="center">
-  <strong>Streams</strong>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <strong>Pages</strong>
-</p>
-<p align="center">
-  <img src="promo/streams.png" alt="Streams view" width="49%">
-  <img src="promo/pages.png" alt="Pages view" width="49%">
-</p>
-<p align="center">
-  <strong>AI chat</strong>
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <strong>Sync</strong>
-</p>
-<p align="center">
-  <img src="promo/aichat.png" alt="AI chat panel" width="49%">
-  <img src="promo/sync.png" alt="Sync setup and status" width="49%">
-</p>
+<p><strong>Streams</strong></p>
+<p align="center"><img src="promo/streams.png" alt="Streams view" width="100%"></p>
+<p><strong>Pages</strong></p>
+<p align="center"><img src="promo/pages.png" alt="Pages view" width="100%"></p>
+<pre>AI chat                                             Sync</pre>
+<p align="center"><img src="promo/aichat.png" alt="AI chat panel" width="50%"><img src="promo/sync.png" alt="Sync setup and status" width="50%"></p>
 
 ## What Uniseq Is
 
