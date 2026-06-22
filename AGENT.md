@@ -1,63 +1,94 @@
 ## Uniseq
 
-Local-first, file-first outliner PKM desktop app built with Tauri + React + Milkdown. Markdown files are the only durable product truth. All other state (caches, refs, hierarchy, watcher state) is derived and disposable.
+Uniseq is a local-first personal knowledge app for people who want plain files, fast capture, and durable structure without giving up a focused desktop writing experience.
 
-## Codebase Layout
+Its center of gravity is simple:
 
-- `src/` — Rust backend crate (`uniseq-backend`). Core types, parser, page identity, reference indexing, filesystem ops, watcher.
-- `src-tauri/` — Tauri desktop shell. Bridges backend to the frontend via Tauri commands, owns DTO serialization and app-level persistence (last workspace path, page order store).
-- `web/` — React frontend. Editor UI, page tree, stream UI, navigation, polling.
+- Your notes are files.
+- The app should help you think, not trap you in app-only data.
+- Organization should feel lightweight while still supporting long-term knowledge building.
 
-## Page Model
+## Product Thesis
 
-Two page kinds, both file-backed:
+Uniseq treats Markdown files as the product, not as an export format.
 
-| Kind | Location | File naming | Page ID |
-|---|---|---|---|
-| Regular | `pages/` | flat: `A___B___C.md` | `pages:A/B/C` |
-| Stream | top-level stream folder | `yyyy_mm_dd.md` | `stream:journals/2026_05_07` |
+The app exists to make a folder of notes feel alive:
 
-Stream folders (`journals/`, `diary/`, any non-reserved folder containing only `yyyy_mm_dd.md` files) are storage buckets only — they have no page hierarchy. Regular and stream pages with the same visible segments are distinct identities. Stream pages are not targetable via `[[Page]]` syntax.
+- daily writing should be frictionless
+- evergreen notes should stay easy to navigate and refactor
+- links between notes should accumulate naturally over time
+- sync, AI, and interface state should support the notes, not become the notes
 
-Reserved top-level folders: `pages/`, `assets/`, `uniseq/`. `prepare_workspace_root` backfills these plus `journals/` and `diary/` on open.
+## Core Mental Model
 
-## Block Model
+There are two complementary modes of writing:
 
-The backend only understands two block kinds:
-- `Outliner` — line starting with `-` followed by end-of-line, space, or tab
-- `Plaintext` — everything else (including blank lines that survive as separators)
+- **Pages** for durable, organized knowledge
+- **Streams** for date-based capture such as journals, logs, or diaries
 
-No general Markdown parsing. References inside fenced code blocks are ignored. Indentation-only code blocks are not special.
+Pages are where information becomes intentional and reusable. Streams are where information starts life quickly, with less ceremony.
 
-Page references: `[[Page]]` and `#Page`. Only `block → page` references, never `block → block`. Missing reference targets are materialized as empty files on discovery.
+The app should make it easy to move between the two modes:
 
-## Write Model
+- capture quickly in a stream
+- promote ideas into pages when they become stable
+- connect pages through references so knowledge becomes navigable
 
-- **Content writes** are frontend-driven via `write_page_content`.
-- **Structural mutations** are backend-owned: create, rename, move, merge, delete (pages and streams). These go through `apply_*` operations with transaction recovery — interrupted ops replay to their recorded final state rather than rolling back.
-- **Virtual stream writes** (`write_virtual_stream_page`) create the file only if content is non-empty. This enables lazy file creation in the stream editor.
+## Main Values
 
-## Discovery And Reconciliation
+- **File-first.** User content should remain understandable and useful outside the app.
+- **Local-first.** The app should feel reliable even without network services.
+- **Low magic.** Behavior should be legible and predictable. Hidden complexity is a cost.
+- **Fast capture, calm structure.** Writing something new should be easy; organizing it later should also be easy.
+- **Durable knowledge over novelty.** Features should strengthen long-term note ownership and retrieval.
+- **Optional augmentation.** AI and sync can be important, but they are supporting layers around the notes rather than the canonical source of truth.
 
-- Discovery scans the workspace, loads pages into `WorkspaceCache`, and materializes missing parent pages and missing reference targets.
-- `WorkspaceSession` owns the live cache, filesystem snapshot, event queue, and watcher.
-- Watcher: native by default, polling fallback on failure.
-- Incremental reconciliation handles known-file modifications. Full refresh handles structural changes (creates, deletes, renames, watcher bursts).
-- Frontend invalidation events: `WorkspaceReloaded`, `PagesChanged`, `PageRemoved`, watcher mode/degradation events. Frontend polls `drain_workspace_events`.
+## What The App Is Trying To Be Good At
 
-## Page Ordering
+- Daily note-taking with minimal friction
+- Building a personal wiki over time
+- Linking transient writing to durable notes
+- Restructuring note hierarchies without fear
+- Browsing and revisiting ideas through references, search, and context
+- Keeping the user close to their actual files
 
-Page sibling order is stored in `workspace-page-order.json` in the app config directory (not inside the workspace). The store is normalized on every read — unknown page IDs are dropped, new pages appended alphabetically. Rename, move, and delete automatically remap or remove the affected subtree in the store.
+## UX Priorities
 
-## Search
+- Opening the app should feel immediate and grounded in a real workspace.
+- Writing should feel lightweight, especially for short notes and incremental edits.
+- Navigation should make both hierarchy and recency useful.
+- References should help notes discover each other without requiring heavy manual bookkeeping.
+- Stream workflows should support routine capture without turning into clutter.
+- Destructive actions should be explicit and unsurprising.
 
-`search_pages` queries title, page ID, and content. Results are ranked (title matches first) and include a content snippet for content matches.
+## Role Of AI And Sync
 
-## Design Decisions
+AI and sync matter, but they are not the core identity of Uniseq.
 
-- **File-first, no hidden DB.** The markdown files are the product. The cache is always reconstructible from files.
-- **Flat block model.** No durable block UUIDs. Block identity is a source span within a page revision (`BlockHandle`). Stale handles are rejected.
-- **Single parser, minimal semantics.** The backend only parses what it needs (block structure + page refs). It does not implement general Markdown.
-- **Frontend owns content, backend owns structure.** The line is clear: content text through `write_page_content`; creates/renames/moves/deletes through structural commands.
-- **Stream pages are append-only date buckets.** They don't participate in hierarchy, aren't ref targets, and support lazy creation via virtual writes.
-- **No `block → block` references, no global block IDs.** These are explicit non-goals.
+- **AI** is for contextual assistance around the user's notes.
+- **Sync** is for moving a file-first workspace across devices or locations.
+
+Neither should redefine the note model. The notes remain primary.
+
+## Non-Goals
+
+Uniseq is not trying to be:
+
+- a database-first workspace where notes are trapped behind app schemas
+- a highly abstract block system with complex hidden identities
+- a general-purpose document editor with every Markdown feature as a first-class concern
+- a cloud-first collaboration product
+- an app where automation matters more than clarity and ownership
+
+## Guidance For Future Changes
+
+When evaluating new features or refactors, preserve these questions:
+
+- Does this strengthen the file-first model or erode it?
+- Does this make capture or retrieval meaningfully better?
+- Does this keep the user's mental model simple?
+- Does this reduce friction without hiding important behavior?
+- Does this help pages and streams complement each other?
+- Does this treat AI and sync as support systems rather than the product core?
+
+If a change improves implementation elegance but weakens user ownership, legibility, or note durability, it is probably the wrong trade.
