@@ -20,8 +20,8 @@
   <strong>Pages</strong>
 </p>
 <p align="center">
-  <img src="promo/streams.png" alt="Streams view" width="44%">
-  <img src="promo/pages.png" alt="Pages view" width="44%">
+  <img src="promo/streams.png" alt="Streams view" width="49%">
+  <img src="promo/pages.png" alt="Pages view" width="49%">
 </p>
 <p align="center">
   <strong>AI chat</strong>
@@ -29,8 +29,8 @@
   <strong>Sync</strong>
 </p>
 <p align="center">
-  <img src="promo/aichat.png" alt="AI chat panel" width="44%">
-  <img src="promo/sync.png" alt="Sync setup and status" width="44%">
+  <img src="promo/aichat.png" alt="AI chat panel" width="49%">
+  <img src="promo/sync.png" alt="Sync setup and status" width="49%">
 </p>
 
 ## What Uniseq Is
