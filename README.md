@@ -18,8 +18,8 @@
 <p align="center"><img src="promo/streams.png" alt="Streams view" width="100%"></p>
 <p><strong>Pages</strong></p>
 <p align="center"><img src="promo/pages.png" alt="Pages view" width="100%"></p>
-<pre>Sync & AI Chat</pre>
-<p align="center">width="50%"><img src="promo/sync.png" alt="Sync setup and status" width="50%"><img src="promo/aichat.png" alt="AI chat panel" width="50%"></p>
+<p><strong>Sync & AI Chat</strong></p>
+<p align="center"><img src="promo/sync.png" alt="Sync setup and status" width="50%"><img src="promo/aichat.png" alt="AI chat panel" width="50%"></p>
 
 ## What Uniseq Is
 
