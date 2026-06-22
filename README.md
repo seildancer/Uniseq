@@ -39,7 +39,11 @@ with extra features:
 
 I used Notion as my main note app, but I also kept a sticky note widget on my phone because it was the fastest place to capture thoughts. Over time, more and more notes piled up in the widget, and I had to periodically move them into Notion. That extra step became friction.
 
-I later tried Logseq and liked its daily note workflow, especially how small pieces of writing could accumulate naturally under linked topics. But not long after, logseq announced diverging into a DB version that handles reference system better, in the cost of losing markdown nativeness. While trying to understand why the migration was necessary I realized that if we give up block-to-block references and just keep block-to-page references, we can keep things simple and lightweight while not losing much functionality, as not many people use manual block embeddings. Manual block embeds/tags requires giving every block a UUID which makes references complex and adds artifacts that go against markdown native spirit. So Uniseq only allows block-to-page tags, but not page-to-blocks, making references unidirectional, hence the name Uniseq.
+I later tried Logseq and liked its daily note workflow, especially how small pieces of writing could accumulate naturally under linked topics. But not long after, logseq announced diverging into a DB version that handles reference system better, in the cost of losing markdown nativeness. 
+
+While trying to understand why the migration was necessary I realized that if we give up block-to-block references and just keep block-to-page references, we can keep things simple and lightweight while not losing much functionality, as not many people use manual block embeddings. Manual block embeds/tags requires giving every block a UUID which makes references complex and adds artifacts that go against markdown native spirit. 
+
+So Uniseq only allows block-to-page tags, but not page-to-blocks, making references unidirectional, hence the name Uniseq.
 
 That is the core of Uniseq:
 
