@@ -5,7 +5,7 @@
 <h1 align="center">Uniseq</h1>
 
 <p align="center">
-  A local-first, Markdown-native note app for fast capture and durable knowledge.
+  A local-first, Markdown-native, cross-platform note app for fast capture and durable knowledge.
 </p>
 
 <p align="center">
@@ -18,8 +18,8 @@
 <p align="center"><img src="promo/streams.png" alt="Streams view" width="100%"></p>
 <p><strong>Pages</strong></p>
 <p align="center"><img src="promo/pages.png" alt="Pages view" width="100%"></p>
-<pre>AI chat                                             Sync</pre>
-<p align="center"><img src="promo/aichat.png" alt="AI chat panel" width="50%"><img src="promo/sync.png" alt="Sync setup and status" width="50%"></p>
+<pre>Sync & AI Chat</pre>
+<p align="center">width="50%"><img src="promo/sync.png" alt="Sync setup and status" width="50%"><img src="promo/aichat.png" alt="AI chat panel" width="50%"></p>
 
 ## What Uniseq Is
 
@@ -29,7 +29,11 @@ Uniseq combines three ideas:
 - Notion-style page hierarchy
 - plain Markdown files as the permanent source of truth
 
-It is built for people who want a personal knowledge app that stays close to the underlying folder, supports both streams and structured pages, and treats AI and sync as optional layers around the notes rather than the notes themselves.
+with extra features:
+
+- cross-platform support (tested in Windows and Android, Mac and IOS not built nor tested)
+- sync across devices (supports builtin & custom solution)
+- AI Chat with your notes
 
 ## Why Uniseq Exists
 
@@ -70,28 +74,6 @@ Capture something quickly in a stream, link it to a durable page, and let that p
 
 This keeps capture lightweight without giving up long-term structure.
 
-## What Uniseq Is Good At
-
-- fast daily note-taking
-- building a personal wiki over time
-- linking transient writing to durable topics
-- keeping notes in plain Markdown files
-- browsing by hierarchy, recency, references, and search
-- separating different areas of life or work into distinct streams
-- syncing a file-first workspace across devices
-- using AI to talk with your own notes instead of a detached knowledge base
-
-## Key Capabilities
-
-- Local-first workspace with plain Markdown files
-- Pages with hierarchy and linked-reference views
-- Multiple date-based streams, including diary-specific privacy blur
-- Mixed writing model: bullets when you want them, normal Markdown when you do not
-- Search across page titles, page ids, and note content
-- AI chat over your notes with saved chats and private in-memory chats
-- Optional sync with conflict handling
-- Desktop and mobile-oriented Tauri app shell
-
 ## Workspace Format
 
 Uniseq is file-first by design. A workspace is just a folder with a few conventional roots:
@@ -117,9 +99,18 @@ Important details:
 - App state such as ordering and sync metadata lives under `uniseq/`.
 - Notes stay readable and movable outside the app.
 
-## AI and Sync
+## Sync and AI
 
 AI and sync are support layers, not the core product.
+
+### Sync
+
+- Sync is optional.
+- The app can connect to the built-in Uniseq provider flow or a custom sync URL.
+- The built-in solution is also opensourced [here](https://github.com/seildancer/UniseqSync)
+- Sync is file-by-file, local-first, and conflict-aware.
+- The custom backend contract is documented in [SYNC_SERVICE.md](SYNC_SERVICE.md).
+- There is also a backend smoke-test checklist in [SYNC_SERVICE_SMOKE_TEST.md](SYNC_SERVICE_SMOKE_TEST.md).
 
 ### AI chat
 
@@ -128,13 +119,6 @@ AI and sync are support layers, not the core product.
 - Regular chats are stored locally.
 - Private chats stay in memory only and do not enter saved chat history.
 
-### Sync
-
-- Sync is optional.
-- The app can connect to the built-in Uniseq provider flow or a custom sync URL.
-- Sync is file-by-file, local-first, and conflict-aware.
-- The custom backend contract is documented in [SYNC_SERVICE.md](SYNC_SERVICE.md).
-- There is also a backend smoke-test checklist in [SYNC_SERVICE_SMOKE_TEST.md](SYNC_SERVICE_SMOKE_TEST.md).
 
 ## Current Status
 
