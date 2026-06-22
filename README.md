@@ -14,24 +14,24 @@
 
 ## Screenshots
 
-<table align="center" width="88%">
-  <tr>
-    <td align="center" width="50%"><strong>Streams</strong></td>
-    <td align="center" width="50%"><strong>Pages</strong></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="promo/streams.png" alt="Streams view" width="92%"></td>
-    <td align="center"><img src="promo/pages.png" alt="Pages view" width="92%"></td>
-  </tr>
-  <tr>
-    <td align="center" width="50%"><strong>AI chat</strong></td>
-    <td align="center" width="50%"><strong>Sync</strong></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="promo/aichat.png" alt="AI chat panel" width="92%"></td>
-    <td align="center"><img src="promo/sync.png" alt="Sync setup and status" width="92%"></td>
-  </tr>
-</table>
+<p align="center">
+  <strong>Streams</strong>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>Pages</strong>
+</p>
+<p align="center">
+  <img src="promo/streams.png" alt="Streams view" width="44%">
+  <img src="promo/pages.png" alt="Pages view" width="44%">
+</p>
+<p align="center">
+  <strong>AI chat</strong>
+  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+  <strong>Sync</strong>
+</p>
+<p align="center">
+  <img src="promo/aichat.png" alt="AI chat panel" width="44%">
+  <img src="promo/sync.png" alt="Sync setup and status" width="44%">
+</p>
 
 ## What Uniseq Is
 
