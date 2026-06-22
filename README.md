@@ -12,20 +12,6 @@
   Streams for daily writing. Pages for long-term structure. Plain files as the source of truth.
 </p>
 
-## Why Uniseq Exists
-
-Uniseq started from a very ordinary problem: fast capture and durable organization usually live in different apps.
-
-Sticky notes, phone widgets, scratchpads, and daily logs are great for getting thoughts down quickly. Structured tools like Notion are better once those thoughts need hierarchy, reuse, and long-term maintenance. Moving notes from one system into another becomes friction, and friction is exactly what capture workflows cannot afford.
-
-Logseq gets much closer to the right shape with its daily-note workflow and linked thinking, but Uniseq takes a different tradeoff: keep the files simple, stay Markdown-native, and avoid a heavy block-identity model. If most real note-making value comes from linking notes to durable topics rather than manually embedding blocks everywhere, a lighter system can preserve the important parts without turning the note folder into app-owned infrastructure.
-
-That is the core of Uniseq:
-
-- capture quickly on a time axis
-- organize gradually on a structure axis
-- keep everything in files you still own without the app
-
 ## What Uniseq Is
 
 Uniseq combines three ideas:
@@ -44,21 +30,31 @@ It is built for people who want a personal knowledge app that stays close to the
 | AI chat | Sync |
 | ![AI chat panel](promo/aichat.png) | ![Sync setup and status](promo/sync.png) |
 
+## Why Uniseq Exists
+
+I used Notion as my main note app, but I also kept a sticky note widget on my phone because it was the fastest place to capture thoughts. Over time, more and more notes piled up in the widget, and I had to periodically move them into Notion. That extra step became friction.
+
+I later tried Logseq and liked its daily note workflow, especially how small pieces of writing could accumulate naturally under linked topics. But not long after, logseq announced diverging into a DB version that handles reference system better, in the cost of losing markdown nativeness. While trying to understand why the migration was necessary I realized that if we give up block-to-block references and just keep block-to-page references, we can keep things simple and lightweight while not losing much functionality, as not many people use manual block embeddings. Manual block embeds/tags requires giving every block a UUID which makes references complex and adds artifacts that go against markdown native spirit. So Uniseq only allows block-to-page tags, but not page-to-blocks, making references unidirectional, hence the name Uniseq.
+
+That is the core of Uniseq:
+
+- capture quickly on a time axis (streams)
+- organize gradually on a structure axis (pages)
+- keep everything in files you still own without the app
+
 ## Mental Model
+
+### Streams
+
+Streams are where your notes start.
+
+By default there are two streams - journal and diary. You can use the journal for projects and ideas, diary for thoughts and reflection (diary streams come with a blur feature).
 
 ### Pages
 
 Pages are for durable knowledge.
 
 They are where notes become intentional, organized, and reusable. Use them for project docs, topic pages, reference material, wiki-like structures, and anything you expect to revisit over time.
-
-### Streams
-
-Streams are for date-based capture.
-
-Use them for journals, work logs, diaries, research notes, project logs, and the kinds of writing that should be easy to start before you know exactly where they belong.
-
-Uniseq ships with `journals/` and `diary/` as the default streams, but additional streams can be created inside the app.
 
 ### References
 
@@ -198,12 +194,12 @@ For local-only use, or for custom sync backends where you paste a bearer token m
 
 Issues and pull requests are welcome, especially around:
 
+- PDF and attachment support
 - Windows and Android workflows
 - mobile polish
 - macOS and iOS validation
 - sync backend compatibility
 - Markdown and file-model edge cases
-- improving the streams-to-pages workflow without weakening file ownership
 
 If you are proposing a larger change, the project bar is simple: preserve the file-first model, keep behavior legible, and make capture or retrieval meaningfully better.
 
@@ -214,9 +210,4 @@ Uniseq is not trying to be:
 - a database-first workspace
 - a cloud-first collaboration product
 - a complex block-identity system
-- a full Notion replacement
 - an automation-heavy productivity platform
-
-## License
-
-This repository does not currently include a license file.
