@@ -12,6 +12,27 @@
   Streams for daily writing. Pages for long-term structure. Plain files as the source of truth.
 </p>
 
+## Screenshots
+
+<table align="center" width="88%">
+  <tr>
+    <td align="center" width="50%"><strong>Streams</strong></td>
+    <td align="center" width="50%"><strong>Pages</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="promo/streams.png" alt="Streams view" width="92%"></td>
+    <td align="center"><img src="promo/pages.png" alt="Pages view" width="92%"></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><strong>AI chat</strong></td>
+    <td align="center" width="50%"><strong>Sync</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="promo/aichat.png" alt="AI chat panel" width="92%"></td>
+    <td align="center"><img src="promo/sync.png" alt="Sync setup and status" width="92%"></td>
+  </tr>
+</table>
+
 ## What Uniseq Is
 
 Uniseq combines three ideas:
@@ -21,14 +42,6 @@ Uniseq combines three ideas:
 - plain Markdown files as the permanent source of truth
 
 It is built for people who want a personal knowledge app that stays close to the underlying folder, supports both streams and structured pages, and treats AI and sync as optional layers around the notes rather than the notes themselves.
-
-## Screenshots
-
-| Streams | Pages |
-| --- | --- |
-| ![Streams view](promo/streams.png) | ![Pages view](promo/pages.png) |
-| AI chat | Sync |
-| ![AI chat panel](promo/aichat.png) | ![Sync setup and status](promo/sync.png) |
 
 ## Why Uniseq Exists
 
