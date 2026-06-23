@@ -128,7 +128,7 @@ AI and sync are support layers, not the core product.
 
 Uniseq is still early and personal-use-driven.
 
-- The current tested path is Windows and Android.
+- The current tested path is Windows and Android. (android app is in closed testing phase. Join this [google group](https://groups.google.com/g/lumberjackapp) and install from [play store](https://play.google.com/store/apps/details?id=com.seildancer.uniseq))
 - The codebase includes Tauri desktop/mobile targets, but macOS and iOS are not verified in practice here.
 - The app is designed for single-user personal knowledge work, not real-time collaboration.
 - The file model and sync contract are intentional parts of the project, not temporary implementation details.
