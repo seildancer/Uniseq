@@ -3526,14 +3526,12 @@ fn list_ai_chat_session_summaries(
             continue;
         }
         let contents = fs::read_to_string(&path).map_err(|error| ErrorDto::io(&path, &error))?;
-        let session =
-            serde_json::from_str::<PersistedAiChatSession>(&contents).map_err(|error| {
-                ErrorDto {
-                    code: "ai_chat_session_invalid",
-                    message: format!("failed to parse AI chat session: {error}"),
-                    path: Some(workspace_path_to_string(&path)),
-                }
-            })?;
+        // Session files are independent records. A manually edited or stale file must not
+        // prevent every other chat from appearing in the history list. Opening that specific
+        // session still returns the detailed parse error from `read_ai_chat_session`.
+        let Ok(session) = serde_json::from_str::<PersistedAiChatSession>(&contents) else {
+            continue;
+        };
         sessions.push(AiChatSessionSummaryDto::from(&session));
     }
     sessions.sort_by(|left, right| {
@@ -4065,6 +4063,42 @@ mod tests {
         assert!(summaries.is_empty());
 
         controller.close_workspace();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ai_chat_session_listing_skips_an_invalid_session_file() {
+        let root = unique_temp_dir("uniseq-app-ai-invalid-session");
+        let sessions_dir = ai_chat_sessions_dir_path(&root);
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let valid = PersistedAiChatSession {
+            session_id: "valid-session".to_owned(),
+            title: "Valid chat".to_owned(),
+            created_at: "1".to_owned(),
+            updated_at: "2".to_owned(),
+            context_spec: AiChatContextSpecDto::Page {
+                page_id: "pages:Target".to_owned(),
+            },
+            preview_summary: String::new(),
+            truncated: false,
+            system_prompt: String::new(),
+            messages: Vec::new(),
+            user_turn_count: 0,
+            last_memory_checkpoint_message_index: 0,
+            status: AiChatSessionStatus::Active,
+        };
+        write_ai_chat_session(&root, &valid).unwrap();
+        fs::write(
+            sessions_dir.join("edited-session.json"),
+            r#"{"session_id": 7}"#,
+        )
+        .unwrap();
+
+        let summaries = list_ai_chat_session_summaries(&root).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, "valid-session");
+
         let _ = fs::remove_dir_all(root);
     }
 

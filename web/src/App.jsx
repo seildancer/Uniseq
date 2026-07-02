@@ -3731,6 +3731,18 @@ export default function App() {
     }
   }, [mode, pages, streamSelection]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Chat transcripts belong to the open workspace. Load them at startup and clear any
+  // transcript state retained from the previously open workspace.
+  useEffect(() => {
+    if (mode !== "workspace" || !workspace) {
+      return;
+    }
+
+    aiChatOpenSeqRef.current += 1;
+    setAiChat((current) => createClosedAiChatState(current.apiKey, current.model));
+    void refreshAiChatSessions();
+  }, [mode, workspace?.root_path]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load blocks when the selected page changes.
   // `selectedPageId` is a string ??React compares it by value, so this fires exactly once per navigation.
   useEffect(() => {
