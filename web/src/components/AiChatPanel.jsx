@@ -198,12 +198,12 @@ export default function AiChatPanel({
                     </div>
                   ) : null}
                   <label className="field ai-chat-field">
-                    <span>Gemini API key</span>
+                    <span>OpenAI API key</span>
                     <input
                       className="ai-chat-key-input"
                       type="password"
                       value={apiKey}
-                      placeholder="Paste your Gemini API key"
+                      placeholder="Paste your OpenAI API key"
                       autoComplete="off"
                       spellCheck="false"
                       onChange={(event) => onApiKeyChange(event.target.value)}

@@ -25,16 +25,11 @@ export function resolveAiChatPresentation(isMobile) {
   return isMobile ? "mobile" : "desktop";
 }
 
-export const DEFAULT_AI_CHAT_MODEL = "gemini-3.5-flash";
+export const DEFAULT_AI_CHAT_MODEL = "gpt-6-luna";
 
 export const AI_CHAT_MODELS = [
-  { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash", status: "Stable" },
-  { value: "gemini-3-flash-preview", label: "Gemini 3 Flash", status: "Preview" },
-  { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro", status: "Preview" },
-  { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite", status: "Stable" },
-  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro", status: "Stable" },
-  { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash", status: "Stable" },
-  { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite", status: "Stable" },
+  { value: "gpt-6-luna", label: "GPT-6 Luna", status: "Stable" },
+  { value: "gpt-6.1-sol", label: "GPT-6.1 Sol", status: "Stable" },
 ];
 
 export function normalizeAiChatModel(model) {

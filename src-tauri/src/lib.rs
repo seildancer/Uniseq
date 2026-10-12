@@ -28,7 +28,7 @@ const SYNC_PROGRESS_EVENT: &str = "sync-progress";
 const DEFAULT_WORKSPACE_FOLDER_NAME: &str = "default_workspace";
 const AI_CHAT_CONTEXT_TOKEN_BUDGET: usize = 100_000;
 const AI_CHAT_APPROX_CHARS_PER_TOKEN: usize = 4;
-const AI_MEMORY_MODEL: &str = "gemini-2.5-flash-lite";
+const AI_MEMORY_MODEL: &str = "gpt-6-luna";
 const AI_RECENT_MESSAGE_WINDOW: usize = 20;
 const AI_MEMORY_TARGET_WORDS: usize = 1_500;
 
@@ -2191,7 +2191,7 @@ async fn ai_chat(
     }
     let api_key = api_key.trim().to_owned();
     if api_key.is_empty() {
-        return Err(ErrorDto::ai_chat_config("Gemini API key is required"));
+        return Err(ErrorDto::ai_chat_config("OpenAI API key is required"));
     }
 
     #[derive(Clone)]

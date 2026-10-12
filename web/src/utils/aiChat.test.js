@@ -36,7 +36,7 @@ test("opening a new AI session discards prior transcript state", () => {
         session_id: "ai-session-1",
         preview_summary: "Old preview",
         truncated: false,
-      }, false, "test-key", "gemini-2.5-pro"),
+      }, false, "test-key", "gpt-6.1-sol"),
       "user",
       "First question",
     ),
@@ -49,7 +49,7 @@ test("opening a new AI session discards prior transcript state", () => {
     context_spec: { kind: "page", page_id: "pages:Fresh" },
     preview_summary: "Fresh preview",
     truncated: true,
-  }, false, "test-key", "gemini-2.5-pro");
+  }, false, "test-key", "gpt-6.1-sol");
 
   assert.equal(prior.messages.length, 2);
   assert.equal(reopened.messages.length, 0);
@@ -59,17 +59,17 @@ test("opening a new AI session discards prior transcript state", () => {
   assert.equal(reopened.truncated, true);
   assert.equal(reopened.isPrivate, false);
   assert.equal(reopened.apiKey, "test-key");
-  assert.equal(reopened.model, "gemini-2.5-pro");
+  assert.equal(reopened.model, "gpt-6.1-sol");
 });
 
 test("preview summary is available before the first message is sent", () => {
-  const opening = createOpeningAiChatState(false, "test-key", "gemini-2.5-flash");
+  const opening = createOpeningAiChatState(false, "test-key", "gpt-6-luna");
   const opened = applyOpenedAiChatSession({
     session_id: "",
     context_spec: { kind: "stream_single", stream_name: "journals" },
     preview_summary: "Start chat based on journals from 2026-05-20 to 2026-05-21.",
     truncated: false,
-  }, false, "test-key", "gemini-2.5-flash");
+  }, false, "test-key", "gpt-6-luna");
 
   assert.equal(shouldShowAiChatPreview(opening), false);
   assert.equal(shouldShowAiChatPreview(opened), true);
@@ -78,7 +78,7 @@ test("preview summary is available before the first message is sent", () => {
   assert.deepEqual(opened.contextSpec, { kind: "stream_single", stream_name: "journals" });
   assert.equal(opened.messages.length, 0);
   assert.equal(opening.apiKey, "test-key");
-  assert.equal(opening.model, "gemini-2.5-flash");
+  assert.equal(opening.model, "gpt-6-luna");
 });
 
 test("private sessions stay marked private across open and reopen state helpers", () => {
@@ -90,7 +90,7 @@ test("private sessions stay marked private across open and reopen state helpers"
     preview_summary: "Private preview",
     truncated: false,
     messages: [],
-  }, true, "test-key", "gemini-2.5-flash");
+  }, true, "test-key", "gpt-6-luna");
 
   const closed = { ...opened, isOpen: false, error: "stale" };
   const reopened = reopenAiChatState(closed, true);
@@ -108,8 +108,10 @@ test("resolveAiChatPresentation switches mobile sessions to full-screen mode", (
 });
 
 test("normalizeAiChatModel falls back to the default for unknown values", () => {
-  assert.equal(normalizeAiChatModel("gemini-2.5-pro"), "gemini-2.5-pro");
+  assert.equal(normalizeAiChatModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(normalizeAiChatModel(""), DEFAULT_AI_CHAT_MODEL);
   assert.equal(normalizeAiChatModel("not-a-real-model"), DEFAULT_AI_CHAT_MODEL);
-  assert.ok(AI_CHAT_MODELS.length >= 7);
+  assert.equal(normalizeAiChatModel("gemini-3.5-flash"), DEFAULT_AI_CHAT_MODEL);
+  assert.equal(normalizeAiChatModel("  gpt-6.1-sol  "), "gpt-6.1-sol");
+  assert.deepEqual(AI_CHAT_MODELS.map((entry) => entry.value), ["gpt-6-luna", "gpt-6.1-sol"]);
 });

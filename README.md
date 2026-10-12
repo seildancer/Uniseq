@@ -119,7 +119,9 @@ AI and sync are support layers, not the core product.
 ### AI chat
 
 - AI chat works against your local notes.
-- You bring your own Gemini API key in the app UI.
+- You bring your own OpenAI API key in the app UI.
+- Choose GPT-6 Luna (default) or GPT-6.1 Sol. Workspace memory updates use GPT-6 Luna.
+- Requests use the OpenAI Responses API with response storage disabled.
 - Regular chats are stored locally.
 - Private chats stay in memory only and do not enter saved chat history.
 

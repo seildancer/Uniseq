@@ -79,8 +79,8 @@ const DRAG_MOVE_SLOP_PX = 8;
 const AUTO_EXPAND_ON_HOVER_MS = 600;
 const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
-const AI_CHAT_API_KEY_STORAGE_KEY = "aiChatGoogleApiKey";
-const AI_CHAT_MODEL_STORAGE_KEY = "aiChatGeminiModel";
+const AI_CHAT_API_KEY_STORAGE_KEY = "aiChatOpenAiApiKey";
+const AI_CHAT_MODEL_STORAGE_KEY = "aiChatOpenAiModel";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
 const MOBILE_WINDOW_CHROME_MEDIA_QUERY = "(max-width: 820px), (pointer: coarse)";
@@ -1257,7 +1257,7 @@ export default function App() {
     setAiChat((current) => ({
       ...current,
       apiKey,
-      error: current.error === "Enter your Gemini API key first." ? "" : current.error,
+      error: current.error === "Enter your OpenAI API key first." ? "" : current.error,
     }));
   }
 
@@ -1411,7 +1411,7 @@ export default function App() {
     if (!apiKey) {
       setAiChat((current) => ({
         ...current,
-        error: "Enter your Gemini API key first.",
+        error: "Enter your OpenAI API key first.",
       }));
       return;
     }
