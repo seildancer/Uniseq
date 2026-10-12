@@ -37,6 +37,7 @@ import { platform } from "@tauri-apps/plugin-os";
 import { useMobileKeyboard, useMobileKeyboardForced } from "./hooks/useMobileKeyboard.js";
 import { MobileKeyboardBar } from "./components/MobileKeyboardBar.jsx";
 import { coerceSyncProgress } from "./utils/syncProgress.js";
+import { resolveRemoteWorkspaceSelection, retainRemoteWorkspaceSelection } from "./utils/remoteWorkspace.js";
 import { attachTouchDragListeners, startLongPressTouchDrag } from "./utils/touchDrag.js";
 
 const INITIAL_CREATE_STATE = {
@@ -1937,7 +1938,7 @@ export default function App() {
       setRemoteState((current) => ({
         ...current,
         workspaces: normalized,
-        selectedWorkspaceId: normalized[0]?.id ?? "",
+        selectedWorkspaceId: retainRemoteWorkspaceSelection(normalized, current.selectedWorkspaceId),
         loadedRootUrl: syncRootUrl,
       }));
       return normalized;
@@ -1952,16 +1953,13 @@ export default function App() {
   async function ensureRemoteWorkspace(explicitWorkspaceName = "") {
     const syncRootUrl = syncRootFromRemoteState(remoteState);
     const requestedWorkspaceName = explicitWorkspaceName.trim();
-    if (!requestedWorkspaceName) {
-      const selected = selectedRemoteWorkspace(remoteState);
-      if (selected) {
-        return selected;
-      }
-    }
-    const workspaceName = requestedWorkspaceName || remoteState.newWorkspaceName.trim();
-    if (!workspaceName) {
-      throw new Error("Choose or create a remote workspace.");
-    }
+    const selection = resolveRemoteWorkspaceSelection({
+      ...remoteState,
+      selectedWorkspaceId: requestedWorkspaceName ? "__new__" : remoteState.selectedWorkspaceId,
+      newWorkspaceName: requestedWorkspaceName || remoteState.newWorkspaceName,
+    });
+    if (selection.workspace) return selection.workspace;
+    const workspaceName = selection.name;
     const created = await invoke("create_remote_workspace", {
       provider: remoteState.provider,
       syncRootUrl,
@@ -2004,6 +2002,7 @@ export default function App() {
       selectedWorkspaceId: workspace.id,
       newWorkspaceName: "",
     }));
+    if (modal?.type === "sync-setup") return;
     if (showDesktopWindowControls) {
       setRemoteLocalState((current) => ({
         ...current,
@@ -2296,7 +2295,7 @@ export default function App() {
     setBusyAction("configure-sync");
     setActionError(null);
     try {
-      const remoteWorkspace = await ensureRemoteWorkspace(currentWorkspaceName);
+      const remoteWorkspace = await ensureRemoteWorkspace();
       console.info("[uniseq-debug] handleConfigureSync remote workspace ready", remoteWorkspace);
       const status = await invoke("configure_workspace_sync", {
         provider: remoteState.provider,
@@ -2460,7 +2459,7 @@ export default function App() {
         authDiscovery: discovery,
         authLoadedRootUrl: syncRootUrl,
         workspaces,
-        selectedWorkspaceId: workspaces[0]?.id ?? "",
+        selectedWorkspaceId: retainRemoteWorkspaceSelection(workspaces, current.selectedWorkspaceId),
         newWorkspaceName: "",
         loadedRootUrl: syncRootUrl,
       }));
@@ -2590,7 +2589,7 @@ export default function App() {
                   placeholder="you@example.com"
                   autoComplete="username"
                   onChange={(e) => setRemoteState((c) => ({ ...c, loginEmail: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(!isSyncSetup); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
                 />
               </div>
               <div className="field">
@@ -2601,14 +2600,14 @@ export default function App() {
                   placeholder="••••••••"
                   autoComplete={remoteState.loginMode === "signup" ? "new-password" : "current-password"}
                   onChange={(e) => setRemoteState((c) => ({ ...c, loginPassword: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(!isSyncSetup); } }}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleUniseqAuth(); } }}
                 />
               </div>
               <button
                 className="secondary-button"
                 type="button"
                 disabled={!remoteState.loginEmail.trim() || !remoteState.loginPassword.trim() || busyAction === "uniseq-login"}
-                onClick={() => void handleUniseqAuth(!isSyncSetup)}
+                onClick={() => void handleUniseqAuth()}
               >
                 {busyAction === "uniseq-login"
                   ? "Please wait..."
@@ -2675,10 +2674,10 @@ export default function App() {
             ) : null}
           </>
         )}
-        {isSyncSetup && syncSetupWorkspaceName ? (
-          <p className="modal-hint">This will create a remote workspace named <strong>{syncSetupWorkspaceName}</strong>.</p>
+        {isSyncSetup ? (
+          <p className="modal-hint">Select an existing remote workspace to reconnect, or choose Create new workspace.</p>
         ) : null}
-        {!isSyncSetup && workspacesLoaded ? (
+        {workspacesLoaded ? (
           <div className="field">
             <span>Workspace</span>
             <ul className="workspace-picker">
@@ -2688,7 +2687,12 @@ export default function App() {
                   className={`workspace-picker-item${remoteState.selectedWorkspaceId === ws.id ? " workspace-picker-item--selected" : ""}`}
                   onClick={() => handleSelectRemoteWorkspace(ws)}
                 >
-                  <span className="workspace-picker-label">{ws.name || ws.id}</span>
+                  <span className="workspace-picker-label">
+                    {ws.name || ws.id}
+                    {remoteState.workspaces.some((other) => other.id !== ws.id && other.name === ws.name) ? (
+                      <small> ({ws.id})</small>
+                    ) : null}
+                  </span>
                   <button
                     className="workspace-picker-delete"
                     type="button"
@@ -2715,6 +2719,7 @@ export default function App() {
                 onClick={() => setRemoteState((current) => ({
                   ...current,
                   selectedWorkspaceId: "__new__",
+                  newWorkspaceName: isSyncSetup ? syncSetupWorkspaceName : current.newWorkspaceName,
                 }))}
               >
                 + Create new workspace
@@ -3389,7 +3394,7 @@ export default function App() {
           authDiscovery: discovery,
           authLoadedRootUrl: syncRootUrl,
           workspaces,
-          selectedWorkspaceId: workspaces[0]?.id ?? "",
+          selectedWorkspaceId: retainRemoteWorkspaceSelection(workspaces, current.selectedWorkspaceId),
           newWorkspaceName: "",
           loadedRootUrl: syncRootUrl,
           loginMode: "login",
@@ -3946,9 +3951,7 @@ export default function App() {
   const remoteWorkspace = selectedRemoteWorkspace(remoteState);
   const remoteWorkspaceName = remoteWorkspace?.name ?? remoteState.newWorkspaceName.trim();
   const remoteWorkspaceId = remoteWorkspace?.id ?? "";
-  const canUseRemoteWorkspace = modal?.type === "sync-setup"
-    ? Boolean(currentWorkspaceName)
-    : remoteState.selectedWorkspaceId === "__new__"
+  const canUseRemoteWorkspace = remoteState.selectedWorkspaceId === "__new__"
       ? Boolean(remoteState.newWorkspaceName.trim())
       : Boolean(remoteWorkspaceId);
   const remoteBearerRequired = syncRequiresBearer(remoteState);

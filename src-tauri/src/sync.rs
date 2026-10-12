@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::hash::Hasher;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -797,7 +799,7 @@ fn supabase_url_from_sync_root(sync_root_url: &str) -> Option<String> {
 pub fn read_sync_config(root: &Path) -> SyncResult<Option<SyncConfig>> {
     let path = sync_config_path(root);
     match fs::read_to_string(&path) {
-        Ok(contents) => Ok(Some(serde_json::from_str(&contents)?)),
+        Ok(contents) => Ok(Some(parse_sync_metadata(&path, &contents)?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -810,7 +812,7 @@ pub fn write_sync_config(root: &Path, config: &SyncConfig) -> SyncResult<()> {
 pub fn read_sync_auth_secrets(root: &Path) -> SyncResult<SyncAuthSecrets> {
     let path = sync_auth_path(root);
     match fs::read_to_string(&path) {
-        Ok(contents) => Ok(serde_json::from_str(&contents)?),
+        Ok(contents) => parse_sync_metadata(&path, &contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             Ok(SyncAuthSecrets::default())
         }
@@ -825,7 +827,7 @@ pub fn write_sync_auth_secrets(root: &Path, secrets: &SyncAuthSecrets) -> SyncRe
 pub fn read_sync_state(root: &Path) -> SyncResult<SyncState> {
     let path = sync_state_path(root);
     match fs::read_to_string(&path) {
-        Ok(contents) => Ok(serde_json::from_str(&contents)?),
+        Ok(contents) => parse_sync_metadata(&path, &contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SyncState::default()),
         Err(error) => Err(error.into()),
     }
@@ -1647,13 +1649,53 @@ fn insert_conflict(
     );
 }
 
+fn parse_sync_metadata<T: serde::de::DeserializeOwned>(
+    path: &Path,
+    contents: &str,
+) -> SyncResult<T> {
+    serde_json::from_str(contents).map_err(|error| {
+        SyncError::new(format!(
+            "Could not read sync metadata '{}': {error}",
+            path.display()
+        ))
+    })
+}
+
 fn write_json<T: Serialize>(path: &Path, value: &T) -> SyncResult<()> {
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let contents = serde_json::to_string_pretty(value)?;
-    fs::write(path, contents)?;
-    Ok(())
+    // Readers (including UI status checks) must see a complete old or new file,
+    // never the empty/truncated file exposed by writing the destination directly.
+    let (temp_path, mut file) = loop {
+        let temp_path = path.with_extension(format!(
+            "json.{}-{}.tmp",
+            std::process::id(),
+            NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => break (temp_path, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temp_path, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result.map_err(SyncError::from)
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -1854,6 +1896,62 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metadata_errors_identify_the_file_and_preserve_its_contents() {
+        let root = test_root("uniseq-sync-invalid-metadata");
+        fs::create_dir_all(root.join(UNISEQ_DIR)).unwrap();
+        for path in [
+            sync_config_path(&root),
+            sync_auth_path(&root),
+            sync_state_path(&root),
+        ] {
+            for contents in ["", "{\"files\":"] {
+                fs::write(&path, contents).unwrap();
+                let error = if path == sync_config_path(&root) {
+                    read_sync_config(&root).unwrap_err()
+                } else if path == sync_auth_path(&root) {
+                    read_sync_auth_secrets(&root).unwrap_err()
+                } else {
+                    read_sync_state(&root).unwrap_err()
+                };
+                assert!(error.message().contains(&path.display().to_string()));
+                assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_remains_readable_during_concurrent_replacement() {
+        let root = test_root("uniseq-sync-atomic-metadata");
+        write_sync_state(&root, &SyncState::default()).unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        std::thread::scope(|scope| {
+            let root = &root;
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                for timestamp in 0..100 {
+                    write_sync_state(
+                        root,
+                        &SyncState {
+                            last_synced_at: Some(timestamp),
+                            ..SyncState::default()
+                        },
+                    )
+                    .unwrap();
+                }
+            });
+            barrier.wait();
+            for _ in 0..1000 {
+                read_sync_state(root).unwrap();
+            }
+        });
+        assert_eq!(read_sync_state(&root).unwrap().last_synced_at, Some(99));
+        assert_eq!(fs::read_dir(root.join(UNISEQ_DIR)).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     struct MockProvider {
         list_result: SyncResult<Vec<RemoteFileMeta>>,

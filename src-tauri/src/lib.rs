@@ -417,6 +417,9 @@ mod u64_string {
 impl WorkspaceController {
     fn open_workspace(&mut self, root_path: String) -> CommandResult<WorkspaceOpenDto> {
         let root_path = PathBuf::from(root_path);
+        // Opening a renamed or unavailable workspace must not create an empty
+        // replacement at its remembered path and lose its sync identity.
+        fs::metadata(&root_path).map_err(|error| ErrorDto::io(&root_path, &error))?;
         prepare_workspace_root(&root_path).map_err(ErrorDto::from)?;
         let mut session = WorkspaceSession::open(&root_path).map_err(ErrorDto::from)?;
         session.start_watching_default();
@@ -1082,6 +1085,17 @@ impl WorkspaceController {
                 kind: auth_kind.unwrap_or_default(),
             },
         );
+        let previous_config = sync::read_sync_config(&workspace_root).map_err(ErrorDto::from)?;
+        let same_remote = previous_config.as_ref().is_some_and(|previous| {
+            previous.sync_root_url == config.sync_root_url
+                && previous.remote_workspace_id == config.remote_workspace_id
+        });
+        if !same_remote {
+            // Versions from a different remote cannot be used to infer deletes
+            // or decide which copy changed on the newly selected remote.
+            sync::write_sync_state(&workspace_root, &sync::SyncState::default())
+                .map_err(ErrorDto::from)?;
+        }
         sync::write_sync_config(&workspace_root, &config).map_err(ErrorDto::from)?;
         sync::write_sync_auth_secrets(
             &workspace_root,
@@ -4004,6 +4018,60 @@ mod tests {
 
         let error = controller.all_pages().unwrap_err();
         assert_eq!(error.code, "no_workspace_open");
+    }
+
+    #[test]
+    fn opening_a_renamed_workspace_does_not_recreate_its_old_path() {
+        let parent = unique_temp_dir("uniseq-app-renamed-workspace");
+        let original = parent.join("Notebook");
+        let renamed = parent.join("Notebook_backup");
+        write_workspace_file(&original, "pages/A.md", "keep this note");
+        fs::rename(&original, &renamed).unwrap();
+
+        let mut controller = WorkspaceController::default();
+        assert!(
+            controller
+                .open_workspace(original.to_string_lossy().to_string())
+                .is_err()
+        );
+        assert!(!original.exists());
+        assert_eq!(
+            fs::read_to_string(renamed.join("pages/A.md")).unwrap(),
+            "keep this note"
+        );
+        assert!(controller.session.is_none());
+        fs::remove_dir_all(parent).unwrap();
+    }
+
+    #[test]
+    fn reconnect_preserves_history_but_switching_remote_resets_it() {
+        let root = unique_temp_dir("uniseq-app-reconnect-identity");
+        write_workspace_file(&root, "pages/A.md", "keep this note");
+        let mut controller = WorkspaceController::default();
+        controller.open_workspace(root.to_string_lossy().to_string()).unwrap();
+        let configure = |url: &str, id: &str| {
+            controller.configure_sync(
+                SyncProviderKindDto::Custom,
+                url.to_owned(), id.to_owned(), "Notebook".to_owned(),
+                None, None, None, None,
+            ).unwrap()
+        };
+        configure("https://sync.example.com/account", "original");
+        let saved = sync::SyncState {
+            last_synced_at: Some(42),
+            ..sync::SyncState::default()
+        };
+        sync::write_sync_state(&root, &saved).unwrap();
+        configure("https://sync.example.com/account/", "original");
+        assert_eq!(sync::read_sync_state(&root).unwrap(), saved);
+        configure("https://sync.example.com/account", "different");
+        assert_eq!(sync::read_sync_state(&root).unwrap(), sync::SyncState::default());
+        sync::write_sync_state(&root, &saved).unwrap();
+        configure("https://sync.example.com/other-account", "different");
+        assert_eq!(sync::read_sync_state(&root).unwrap(), sync::SyncState::default());
+        assert_eq!(fs::read_to_string(root.join("pages/A.md")).unwrap(), "keep this note");
+        controller.close_workspace();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
