@@ -1108,13 +1108,8 @@ where
                             synced_state(Some(remote_version), &local, now),
                         );
                     }
-                    PushResult::Conflict { current } => {
-                        insert_conflict(
-                            &mut state,
-                            &path,
-                            Some(local.hash),
-                            Some(current.remote_version),
-                        );
+                    PushResult::Conflict { .. } => {
+                        reconcile_file_conflict(root, provider, &mut state, &path, now)?;
                     }
                 }
             }
@@ -1133,17 +1128,12 @@ where
                             synced_state(Some(remote_version), &local, now),
                         );
                     }
-                    PushResult::Conflict { current } => {
-                        insert_conflict(
-                            &mut state,
-                            &path,
-                            Some(local.hash),
-                            Some(current.remote_version),
-                        );
+                    PushResult::Conflict { .. } => {
+                        reconcile_file_conflict(root, provider, &mut state, &path, now)?;
                     }
                 }
             }
-            (Some(_local), Some(remote), _previous, false, true) => {
+            (Some(_local), Some(_remote), _previous, false, true) => {
                 let blob = provider.pull(&path)?;
                 write_workspace_file(root, &path, &blob.content)?;
                 let updated = local_file_for_path(root, &path)?;
@@ -1151,10 +1141,10 @@ where
                 state.conflicts.remove(&path);
                 state.files.insert(
                     path.clone(),
-                    synced_state(Some(remote.remote_version.clone()), &updated, now),
+                    synced_state(Some(blob.meta.remote_version), &updated, now),
                 );
             }
-            (None, Some(remote), _previous, false, true) => {
+            (None, Some(_remote), _previous, false, true) => {
                 let blob = provider.pull(&path)?;
                 write_workspace_file(root, &path, &blob.content)?;
                 let updated = local_file_for_path(root, &path)?;
@@ -1162,16 +1152,11 @@ where
                 state.conflicts.remove(&path);
                 state.files.insert(
                     path.clone(),
-                    synced_state(Some(remote.remote_version.clone()), &updated, now),
+                    synced_state(Some(blob.meta.remote_version), &updated, now),
                 );
             }
-            (Some(local), Some(remote), _previous, true, true) => {
-                insert_conflict(
-                    &mut state,
-                    &path,
-                    Some(local.hash),
-                    Some(remote.remote_version.clone()),
-                );
+            (Some(_local), Some(_remote), _previous, true, true) => {
+                reconcile_file_conflict(root, provider, &mut state, &path, now)?;
             }
             (None, Some(remote), Some(_previous), true, false) => {
                 let result = provider.delete(DeleteFileRequest {
@@ -1196,6 +1181,7 @@ where
                 state.files.remove(&path);
             }
             (Some(local), Some(remote), _previous, false, false) => {
+                state.conflicts.remove(&path);
                 state.files.insert(
                     path.clone(),
                     synced_state(Some(remote.remote_version.clone()), &local, now),
@@ -1632,6 +1618,38 @@ fn synced_state(remote_version: Option<String>, local: &LocalFileMeta, now: u64)
     }
 }
 
+// Compare current bytes, rather than change history or hashes alone. Never
+// normalize whitespace here: it can carry meaning in Markdown and other files.
+fn reconcile_file_conflict(
+    root: &Path,
+    provider: &dyn SyncProvider,
+    state: &mut SyncState,
+    path: &str,
+    now: u64,
+) -> SyncResult<()> {
+    let remote = provider.pull(path)?;
+    let content = fs::read(root.join(path_from_remote(path)?))?;
+    let local = LocalFileMeta {
+        hash: hash_bytes(&content),
+        size: content.len() as u64,
+    };
+    if content == remote.content {
+        state.conflicts.remove(path);
+        state.files.insert(
+            path.to_owned(),
+            synced_state(Some(remote.meta.remote_version), &local, now),
+        );
+    } else {
+        insert_conflict(
+            state,
+            path,
+            Some(local.hash),
+            Some(remote.meta.remote_version),
+        );
+    }
+    Ok(())
+}
+
 fn insert_conflict(
     state: &mut SyncState,
     path: &str,
@@ -1977,6 +1995,237 @@ mod tests {
 
     fn test_root(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("{name}-{}", now_unix_secs()))
+    }
+
+    struct FileProvider {
+        content: Vec<u8>,
+        listed_version: String,
+        pulled_version: String,
+        fail_pull: bool,
+        push_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FileProvider {
+        fn meta(&self, version: &str) -> RemoteFileMeta {
+            RemoteFileMeta {
+                path: "pages/A.md".to_owned(),
+                remote_version: version.to_owned(),
+                size: self.content.len() as u64,
+                updated_at: None,
+            }
+        }
+    }
+
+    impl SyncProvider for FileProvider {
+        fn list(&self) -> SyncResult<Vec<RemoteFileMeta>> {
+            Ok(vec![self.meta(&self.listed_version)])
+        }
+
+        fn pull(&self, path: &str) -> SyncResult<RemoteFileBlob> {
+            assert_eq!(path, "pages/A.md");
+            if self.fail_pull {
+                return Err(SyncError::new("network timeout"));
+            }
+            Ok(RemoteFileBlob {
+                meta: self.meta(&self.pulled_version),
+                content: self.content.clone(),
+            })
+        }
+
+        fn push(&self, request: PushFileRequest) -> SyncResult<PushResult> {
+            assert_eq!(request.path, "pages/A.md");
+            self.push_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(PushResult::Conflict {
+                current: self.meta(&self.pulled_version),
+            })
+        }
+
+        fn delete(&self, _request: DeleteFileRequest) -> SyncResult<PushResult> {
+            panic!("reconciliation must never delete a file");
+        }
+    }
+
+    fn conflict_test_workspace(name: &str, content: &[u8], previous: Option<&[u8]>) -> PathBuf {
+        let root = test_root(name);
+        fs::create_dir_all(root.join("pages")).unwrap();
+        fs::write(root.join("pages/A.md"), content).unwrap();
+        write_sync_config(
+            &root,
+            &SyncConfig::new_with_auth(
+                SyncProviderKind::Uniseq,
+                "https://sync.example.com".to_owned(),
+                "workspace-1".to_owned(),
+                "Workspace 1".to_owned(),
+                SyncAuthConfig::default(),
+            ),
+        )
+        .unwrap();
+        let mut state = SyncState::default();
+        if let Some(previous) = previous {
+            state.files.insert(
+                "pages/A.md".to_owned(),
+                synced_state(
+                    Some("v1".to_owned()),
+                    &LocalFileMeta {
+                        hash: hash_bytes(previous),
+                        size: previous.len() as u64,
+                    },
+                    0,
+                ),
+            );
+        }
+        insert_conflict(
+            &mut state,
+            "pages/A.md",
+            Some(hash_bytes(content)),
+            Some("v1".to_owned()),
+        );
+        write_sync_state(&root, &state).unwrap();
+        root
+    }
+
+    #[test]
+    fn identical_changes_and_existing_files_without_history_reconcile_without_writes() {
+        for (name, previous) in [
+            ("identical-edits", Some(b"old".as_slice())),
+            ("identical-no-history", None),
+        ] {
+            let root = conflict_test_workspace(name, b"same\r\n", previous);
+            let provider = FileProvider {
+                content: b"same\r\n".to_vec(),
+                listed_version: "v2".to_owned(),
+                pulled_version: "v3".to_owned(),
+                fail_pull: false,
+                push_calls: Default::default(),
+            };
+            let summary = sync_once_with_progress(&root, &provider, |_| {}).unwrap();
+            assert!(summary.conflicts.is_empty());
+            assert_eq!((summary.pushed, summary.pulled), (0, 0));
+            assert_eq!(provider.push_calls.load(Ordering::SeqCst), 0);
+            let state = read_sync_state(&root).unwrap();
+            assert_eq!(
+                state.files["pages/A.md"].remote_version.as_deref(),
+                Some("v3")
+            );
+            assert_eq!(
+                state.files["pages/A.md"].local_hash,
+                hash_bytes(b"same\r\n")
+            );
+            assert_eq!(fs::read(root.join("pages/A.md")).unwrap(), b"same\r\n");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn differing_content_including_whitespace_remains_a_conflict() {
+        for (name, local, remote) in [
+            ("different-words", b"local".as_slice(), b"remote".as_slice()),
+            ("different-newlines", b"same\r\n", b"same\n"),
+            ("different-spaces", b"same  \n", b"same\n"),
+            ("different-final-newline", b"same\n", b"same"),
+        ] {
+            let root = conflict_test_workspace(name, local, Some(b"old"));
+            let provider = FileProvider {
+                content: remote.to_vec(),
+                listed_version: "v2".to_owned(),
+                pulled_version: "v3".to_owned(),
+                fail_pull: false,
+                push_calls: Default::default(),
+            };
+            let summary = sync_once_with_progress(&root, &provider, |_| {}).unwrap();
+            assert_eq!(summary.conflicts.len(), 1);
+            assert_eq!(summary.conflicts[0].remote_version.as_deref(), Some("v3"));
+            assert_eq!(fs::read(root.join("pages/A.md")).unwrap(), local);
+            assert_eq!(provider.push_calls.load(Ordering::SeqCst), 0);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejected_upload_reconciles_identical_content_but_preserves_different_content() {
+        for (name, remote, expected_conflicts) in [
+            ("rejected-identical", b"same".as_slice(), 0),
+            ("rejected-different", b"other".as_slice(), 1),
+        ] {
+            let root = conflict_test_workspace(name, b"same", Some(b"old"));
+            let provider = FileProvider {
+                content: remote.to_vec(),
+                listed_version: "v1".to_owned(),
+                pulled_version: "v2".to_owned(),
+                fail_pull: false,
+                push_calls: Default::default(),
+            };
+            let summary = sync_once_with_progress(&root, &provider, |_| {}).unwrap();
+            assert_eq!(summary.conflicts.len(), expected_conflicts);
+            assert_eq!(summary.pushed, 0);
+            assert_eq!(provider.push_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(fs::read(root.join("pages/A.md")).unwrap(), b"same");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_comparison_preserves_sync_state_and_local_content() {
+        let root = conflict_test_workspace("failed-comparison", b"same", Some(b"old"));
+        let before = read_sync_state(&root).unwrap();
+        let provider = FileProvider {
+            content: b"same".to_vec(),
+            listed_version: "v2".to_owned(),
+            pulled_version: "v2".to_owned(),
+            fail_pull: true,
+            push_calls: Default::default(),
+        };
+        assert!(sync_once_with_progress(&root, &provider, |_| {}).is_err());
+        assert_eq!(read_sync_state(&root).unwrap(), before);
+        assert_eq!(fs::read(root.join("pages/A.md")).unwrap(), b"same");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn download_records_the_version_actually_pulled() {
+        for (name, missing) in [("download-version", false), ("download-new-file", true)] {
+            let root = conflict_test_workspace(name, b"old", Some(b"old"));
+            if missing {
+                fs::remove_file(root.join("pages/A.md")).unwrap();
+                write_sync_state(&root, &SyncState::default()).unwrap();
+            }
+            let provider = FileProvider {
+                content: b"new".to_vec(),
+                listed_version: "v2".to_owned(),
+                pulled_version: "v3".to_owned(),
+                fail_pull: false,
+                push_calls: Default::default(),
+            };
+            let summary = sync_once_with_progress(&root, &provider, |_| {}).unwrap();
+            assert_eq!(summary.pulled, 1);
+            assert!(summary.conflicts.is_empty());
+            assert_eq!(
+                read_sync_state(&root).unwrap().files["pages/A.md"]
+                    .remote_version
+                    .as_deref(),
+                Some("v3")
+            );
+            assert_eq!(fs::read(root.join("pages/A.md")).unwrap(), b"new");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn stale_conflict_clears_when_both_sides_return_to_the_synced_state() {
+        let root = conflict_test_workspace("stale-conflict", b"old", Some(b"old"));
+        let provider = FileProvider {
+            content: b"old".to_vec(),
+            listed_version: "v1".to_owned(),
+            pulled_version: "v1".to_owned(),
+            // Neither side changed, so no download should be needed.
+            fail_pull: true,
+            push_calls: Default::default(),
+        };
+        let summary = sync_once_with_progress(&root, &provider, |_| {}).unwrap();
+        assert!(summary.conflicts.is_empty());
+        assert_eq!((summary.pushed, summary.pulled), (0, 0));
+        assert_eq!(provider.push_calls.load(Ordering::SeqCst), 0);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

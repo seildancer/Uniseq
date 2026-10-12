@@ -6,6 +6,7 @@ import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorB
 import AiChatPanel from "./components/AiChatPanel.jsx";
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
+import SyncConflictComparison from "./components/SyncConflictComparison.jsx";
 import { areArraysEqual } from "./utils/arrays.js";
 import pageLeafName from "./utils/pageLeafName.js";
 import { todayDateName } from "./utils/streamDates.js";
@@ -4714,16 +4715,11 @@ export default function App() {
                                   </button>
                                 </div>
                               </div>
-                              <div className="sync-diff-grid">
-                                <div>
-                                  <span>Local</span>
-                                  <pre>{syncConflictDetail.local_content}</pre>
-                                </div>
-                                <div>
-                                  <span>Remote</span>
-                                  <pre>{syncConflictDetail.remote_content}</pre>
-                                </div>
-                              </div>
+                              <SyncConflictComparison
+                                key={syncConflictDetail.path}
+                                local={syncConflictDetail.local_content}
+                                remote={syncConflictDetail.remote_content}
+                              />
                             </div>
                           ) : null}
                         </div>
