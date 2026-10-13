@@ -269,7 +269,7 @@ test("normalizeAiChatModel falls back to the default for unknown values", () => 
   assert.equal(normalizeAiChatModel("gpt-6.1-sol"), "gpt-6.1-sol");
   assert.equal(normalizeAiChatModel(""), DEFAULT_AI_CHAT_MODEL);
   assert.equal(normalizeAiChatModel("not-a-real-model"), DEFAULT_AI_CHAT_MODEL);
-  assert.equal(normalizeAiChatModel("gemini-3.5-flash"), DEFAULT_AI_CHAT_MODEL);
+  assert.equal(normalizeAiChatModel("unsupported-model"), DEFAULT_AI_CHAT_MODEL);
   assert.equal(normalizeAiChatModel("  gpt-6.1-sol  "), "gpt-6.1-sol");
   assert.deepEqual(
     AI_CHAT_MODELS.map((entry) => entry.value),

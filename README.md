@@ -120,6 +120,7 @@ AI and sync are support layers, not the core product.
 
 - AI chat works against your local notes.
 - You bring your own OpenAI API key in the app UI.
+- The key is saved in this device's app configuration directory and restored across restarts.
 - Choose GPT-6 Luna (default) or GPT-6.1 Sol. Workspace memory updates use GPT-6 Luna.
 - Requests use the OpenAI Responses API with response storage disabled.
 - Regular chats are stored locally.

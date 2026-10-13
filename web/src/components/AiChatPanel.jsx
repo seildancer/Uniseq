@@ -69,17 +69,34 @@ function IconButton({ icon, label, ...props }) {
   );
 }
 
-function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
+function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled, loadError }) {
   const [replacing, setReplacing] = useState(false);
   const [value, setValue] = useState("");
   const [visible, setVisible] = useState(false);
   const [problem, setProblem] = useState("");
+  const [saving, setSaving] = useState(false);
   const inputRef = useRef(null);
   const entering = !apiKey || replacing;
 
   useEffect(() => {
     if (entering) inputRef.current?.focus();
   }, [entering]);
+
+  async function saveKey(key) {
+    if (saving || disabled) return;
+    setSaving(true);
+    setProblem("");
+    try {
+      await onSave(key);
+      setValue("");
+      setReplacing(false);
+      onDone();
+    } catch {
+      setProblem("Could not save your API key on this device. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function save(event) {
     event.preventDefault();
@@ -88,10 +105,7 @@ function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
       setProblem("Paste an API key to continue.");
       return;
     }
-    onSave(key);
-    setValue("");
-    setReplacing(false);
-    onDone();
+    void saveKey(key);
   }
 
   return (
@@ -117,6 +131,7 @@ function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
               autoComplete="off"
               autoCapitalize="off"
               spellCheck={false}
+              disabled={disabled || saving}
               onChange={(event) => {
                 setValue(event.target.value);
                 setProblem("");
@@ -129,22 +144,23 @@ function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
               onClick={() => setVisible(!visible)}
             />
           </div>
-          {problem && (
+          {(problem || loadError) && (
             <p className="ai-error" role="alert">
-              {problem}
+              {problem || loadError}
             </p>
           )}
           <button
             className="ai-solid-button"
             type="submit"
-            disabled={!value.trim()}
+            disabled={disabled || saving || !value.trim()}
           >
-            {replacing ? "Replace key" : "Save key"}
+            {saving ? "Saving…" : replacing ? "Replace key" : "Save key"}
           </button>
           {replacing ? (
             <button
               className="ai-text-button"
               type="button"
+              disabled={saving}
               onClick={() => {
                 setReplacing(false);
                 setValue("");
@@ -183,7 +199,7 @@ function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
             <button
               className="ai-soft-button"
               type="button"
-              disabled={disabled}
+              disabled={disabled || saving}
               onClick={() => setReplacing(true)}
             >
               Replace key
@@ -191,12 +207,13 @@ function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
             <button
               className="ai-text-button"
               type="button"
-              disabled={disabled}
-              onClick={() => onSave("")}
+              disabled={disabled || saving}
+              onClick={() => void saveKey("")}
             >
               Remove
             </button>
           </div>
+          {problem && <p className="ai-error" role="alert">{problem}</p>}
         </div>
       )}
     </div>
@@ -287,6 +304,8 @@ export default function AiChatPanel({
   messages,
   draft,
   apiKey,
+  keyLoading,
+  keyError,
   model,
   models,
   loadingSession,
@@ -569,13 +588,18 @@ export default function AiChatPanel({
         </header>
 
         {needsSetup || view === "connection" ? (
-          <KeySetup
-            apiKey={apiKey}
-            disabled={sending}
-            onSave={onApiKeyChange}
-            onDone={returnToChat}
-            onOpenLink={onOpenLink}
-          />
+          keyLoading ? (
+            <div className="ai-connection" role="status">Loading saved API key…</div>
+          ) : (
+            <KeySetup
+              apiKey={apiKey}
+              disabled={sending}
+              loadError={keyError}
+              onSave={onApiKeyChange}
+              onDone={returnToChat}
+              onOpenLink={onOpenLink}
+            />
+          )
         ) : view === "history" ? (
           <div className="ai-history">
             {!sessions.length && (

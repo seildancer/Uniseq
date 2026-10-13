@@ -18,6 +18,7 @@ use uniseq_backend::{
 };
 
 mod ai;
+mod ai_settings;
 mod sync;
 
 const LAST_WORKSPACE_FILE_NAME: &str = "last-workspace.txt";
@@ -2967,6 +2968,8 @@ pub fn run() {
             sync_status,
             set_workspace_sync_enabled,
             sync_now,
+            ai_settings::get_ai_chat_api_key,
+            ai_settings::set_ai_chat_api_key,
             open_ai_chat_session,
             list_ai_chat_sessions,
             get_ai_chat_session,

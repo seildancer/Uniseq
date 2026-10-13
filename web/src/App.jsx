@@ -4,6 +4,7 @@ import { WorkspaceContext } from "./WorkspaceContext.js";
 import Editor from "./Editor.jsx";
 import EditorBreadcrumb, { breadcrumbItemsForPageId } from "./components/EditorBreadcrumb.jsx";
 import AiChatPanel from "./components/AiChatPanel.jsx";
+import { loadAiChatApiKey, saveAiChatApiKey } from "./utils/aiChatSettings.js";
 import LinkedReferences from "./components/LinkedReferences.jsx";
 import StreamWorkspace from "./components/StreamWorkspace.jsx";
 import SyncConflictComparison from "./components/SyncConflictComparison.jsx";
@@ -83,7 +84,6 @@ const DRAG_MOVE_SLOP_PX = 8;
 const AUTO_EXPAND_ON_HOVER_MS = 600;
 const SIDEBAR_WIDTH_STORAGE_KEY = "workspaceSidebarWidth";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspaceSidebarCollapsed";
-const AI_CHAT_API_KEY_STORAGE_KEY = "aiChatOpenAiApiKey";
 const AI_CHAT_MODEL_STORAGE_KEY = "aiChatOpenAiModel";
 const SIDEBAR_MIN_WIDTH_PX = 280;
 const SIDEBAR_COLLAPSED_WIDTH_PX = 52;
@@ -529,31 +529,11 @@ function formatUnixTimestamp(unixSeconds) {
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-function readStoredAiChatApiKey() {
-  try {
-    return localStorage.getItem(AI_CHAT_API_KEY_STORAGE_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
-
 function readStoredAiChatModel() {
   try {
     return normalizeAiChatModel(localStorage.getItem(AI_CHAT_MODEL_STORAGE_KEY) ?? DEFAULT_AI_CHAT_MODEL);
   } catch {
     return DEFAULT_AI_CHAT_MODEL;
-  }
-}
-
-function persistAiChatApiKey(apiKey) {
-  try {
-    if (apiKey) {
-      localStorage.setItem(AI_CHAT_API_KEY_STORAGE_KEY, apiKey);
-    } else {
-      localStorage.removeItem(AI_CHAT_API_KEY_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage failures and keep the key only in memory.
   }
 }
 
@@ -893,8 +873,26 @@ export default function App() {
   const [selectedPageRevision, setSelectedPageRevision] = useState(null);
   const [linkedRefs, setLinkedRefs] = useState([]);
   const [aiChat, setAiChat] = useState(() => (
-    createClosedAiChatState(readStoredAiChatApiKey(), readStoredAiChatModel())
+    createClosedAiChatState("", readStoredAiChatModel())
   ));
+  const [aiChatKeyLoading, setAiChatKeyLoading] = useState(true);
+  const [aiChatKeyError, setAiChatKeyError] = useState("");
+  const aiChatKeyLoadRef = useRef(null);
+  useEffect(() => {
+    let active = true;
+    aiChatKeyLoadRef.current ??= loadAiChatApiKey(invoke, localStorage);
+    aiChatKeyLoadRef.current
+      .then((apiKey) => {
+        if (active) setAiChat((current) => ({ ...current, apiKey }));
+      })
+      .catch((error) => {
+        if (active) setAiChatKeyError(`Could not load your saved API key: ${formatError(normalizeError(error))}`);
+      })
+      .finally(() => {
+        if (active) setAiChatKeyLoading(false);
+      });
+    return () => { active = false; };
+  }, []);
   const [loadedPageId, setLoadedPageId] = useState(null);
   const [startupError, setStartupError] = useState(null);
   const [actionError, setActionError] = useState(null);
@@ -1262,12 +1260,13 @@ export default function App() {
     }
   }
 
-  function handleAiChatApiKeyChange(apiKey) {
-    persistAiChatApiKey(apiKey);
+  async function handleAiChatApiKeyChange(apiKey) {
+    await saveAiChatApiKey(invoke, localStorage, apiKey);
+    setAiChatKeyError("");
     setAiChat((current) => ({
       ...current,
-      apiKey,
-      error: current.error === "Enter your OpenAI API key first." ? "" : current.error,
+      apiKey: apiKey.trim(),
+      error: "",
     }));
   }
 
@@ -4508,6 +4507,8 @@ export default function App() {
               messages={aiChat.messages}
               draft={aiChat.draft}
               apiKey={aiChat.apiKey}
+              keyLoading={aiChatKeyLoading}
+              keyError={aiChatKeyError}
               model={aiChat.model}
               models={AI_CHAT_MODELS}
               loadingSession={aiChat.loadingSession}

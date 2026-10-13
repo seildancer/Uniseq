@@ -894,7 +894,7 @@ mod tests {
 
     #[test]
     fn openai_config_falls_back_for_unknown_model() {
-        for model in ["not-a-model", "gemini-2.5-pro", ""] {
+        for model in ["not-a-model", "unsupported-model", ""] {
             let config = OpenAiConfig::from_runtime("test-key", model).unwrap();
             assert_eq!(config.model, OPENAI_MODEL);
         }
