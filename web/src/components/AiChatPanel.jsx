@@ -1,58 +1,286 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown from "react-markdown";
 import breaks from "remark-breaks";
+import { aiChatScopeLabel, sameAiChatContext } from "../utils/aiChat.js";
+import "./AiChatPanel.css";
 
-function AiChatThinking() {
+const ICON_PATHS = {
+  close: "m5 5 10 10M15 5 5 15",
+  key: "M12 3a4 4 0 1 1-2.9 6.8L4 15.9V18H2v-4l6.9-6.9A4 4 0 0 1 12 3Z",
+  plus: "M10 4v12M4 10h12",
+  chevron: "m6 8 4 4 4-4",
+  back: "m11 5-5 5 5 5M6 10h10",
+  history: "M3 6v4h4M3.6 10a6.5 6.5 0 1 1 1.8 4.5M10 6v4l3 2",
+  send: "M10 16V4M5 9l5-5 5 5",
+  stop: "M6 6h8v8H6z",
+  copy: "M7 7h9v9H7zM4 12V4h8",
+  save: "M5 3h10v14l-5-3-5 3z",
+  lock: "M6 8V6a4 4 0 0 1 8 0v2M5 8h10v9H5z",
+  eye: "M2 10s3-5 8-5 8 5 8 5-3 5-8 5-8-5-8-5Zm8-2a2 2 0 1 0 0 4 2 2 0 0 0 0-4",
+};
+
+function Icon({ name }) {
   return (
-    <div className="ai-chat-thinking">
-      <div className="ai-chat-message-label">AI</div>
-      <div className="ai-chat-thinking-dots">
-        <span /><span /><span />
-      </div>
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+    >
+      {name === "more" ? (
+        <g fill="currentColor">
+          <circle cx="4" cy="10" r="1" />
+          <circle cx="10" cy="10" r="1" />
+          <circle cx="16" cy="10" r="1" />
+        </g>
+      ) : (
+        <path
+          d={ICON_PATHS[name]}
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
+function IconButton({ icon, label, ...props }) {
+  return (
+    <button
+      className="ai-icon-button"
+      type="button"
+      aria-label={label}
+      title={label}
+      {...props}
+    >
+      <Icon name={icon} />
+    </button>
+  );
+}
+
+function KeySetup({ apiKey, onSave, onOpenLink, onDone, disabled }) {
+  const [replacing, setReplacing] = useState(false);
+  const [value, setValue] = useState("");
+  const [visible, setVisible] = useState(false);
+  const [problem, setProblem] = useState("");
+  const inputRef = useRef(null);
+  const entering = !apiKey || replacing;
+
+  useEffect(() => {
+    if (entering) inputRef.current?.focus();
+  }, [entering]);
+
+  function save(event) {
+    event.preventDefault();
+    const key = value.trim();
+    if (!key) {
+      setProblem("Paste an API key to continue.");
+      return;
+    }
+    onSave(key);
+    setValue("");
+    setReplacing(false);
+    onDone();
+  }
+
+  return (
+    <div className="ai-connection">
+      {entering ? (
+        <form className="ai-key-setup" onSubmit={save}>
+          <div className="ai-connection-mark" aria-hidden="true">
+            <Icon name="lock" />
+          </div>
+          <h2>{replacing ? "Replace your key" : "Connect OpenAI"}</h2>
+          <p>
+            {replacing
+              ? "Your current key stays saved until you replace it."
+              : "Add your API key to chat with your notes."}
+          </p>
+          <div className="ai-key-entry">
+            <input
+              ref={inputRef}
+              type={visible ? "text" : "password"}
+              value={value}
+              aria-label="OpenAI API key"
+              placeholder="Paste your API key"
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              onChange={(event) => {
+                setValue(event.target.value);
+                setProblem("");
+              }}
+            />
+            <IconButton
+              icon="eye"
+              label={visible ? "Hide key" : "Show key"}
+              aria-pressed={visible}
+              onClick={() => setVisible(!visible)}
+            />
+          </div>
+          {problem && (
+            <p className="ai-error" role="alert">
+              {problem}
+            </p>
+          )}
+          <button
+            className="ai-solid-button"
+            type="submit"
+            disabled={!value.trim()}
+          >
+            {replacing ? "Replace key" : "Save key"}
+          </button>
+          {replacing ? (
+            <button
+              className="ai-text-button"
+              type="button"
+              onClick={() => {
+                setReplacing(false);
+                setValue("");
+              }}
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              className="ai-text-button"
+              type="button"
+              onClick={() => onOpenLink("https://platform.openai.com/api-keys")}
+            >
+              Get an API key <span aria-hidden="true">&#8599;</span>
+            </button>
+          )}
+          <small>
+            Your key is saved on this device. Selected notes and messages are
+            sent to OpenAI when you chat.
+          </small>
+        </form>
+      ) : (
+        <div className="ai-key-saved">
+          <div className="ai-connection-mark" aria-hidden="true">
+            <Icon name="lock" />
+          </div>
+          <h2>OpenAI</h2>
+          <p>
+            <span className="ai-saved-dot" /> Key saved on this device
+          </p>
+          <div className="ai-key-mask" aria-label="API key is hidden">
+            &#8226;&#8226;&#8226;&#8226; &#8226;&#8226;&#8226;&#8226;
+            &#8226;&#8226;&#8226;&#8226;
+          </div>
+          <div className="ai-key-actions">
+            <button
+              className="ai-soft-button"
+              type="button"
+              disabled={disabled}
+              onClick={() => setReplacing(true)}
+            >
+              Replace key
+            </button>
+            <button
+              className="ai-text-button"
+              type="button"
+              disabled={disabled}
+              onClick={() => onSave("")}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function AiChatMessage({ message }) {
+const ChatMessage = memo(function ChatMessage({ message, streaming, onSave }) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
+  const copyTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(copyTimerRef.current), []);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setCopyError("");
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setCopyError("Could not copy. Select the text to copy it.");
+    }
+  }
+
+  if (!message.content && !streaming) return null;
   return (
-    <article className={`ai-chat-message ai-chat-message--${message.role}`}>
-      {message.role === "assistant" && (
-        <div className="ai-chat-message-label">AI</div>
-      )}
-      <div className="ai-chat-message-body">
-        <ReactMarkdown remarkPlugins={[breaks]}>
-          {message.content}
-        </ReactMarkdown>
+    <article className={`ai-message ai-message--${message.role}`}>
+      <div className="ai-message-body">
+        {message.content ? (
+          <ReactMarkdown
+            remarkPlugins={[breaks]}
+            components={{
+              a: ({ children, ...props }) => (
+                <a {...props} target="_blank" rel="noopener noreferrer">
+                  {children}
+                </a>
+              ),
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
+        ) : (
+          <span className="ai-thinking" aria-label="Preparing response">
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
+        {streaming && message.content && (
+          <span className="ai-stream-cursor" aria-hidden="true" />
+        )}
       </div>
+      {message.role === "assistant" && message.content && !streaming && (
+        <div className="ai-message-actions">
+          <IconButton
+            icon="copy"
+            label={copied ? "Copied" : "Copy answer"}
+            onClick={copy}
+          />
+          <IconButton
+            icon="save"
+            label="Save to note"
+            onClick={() => onSave(message.content)}
+          />
+          {copied && <span role="status">Copied</span>}
+        </div>
+      )}
+      {copyError && (
+        <p className="ai-error" role="status">
+          {copyError}
+        </p>
+      )}
     </article>
   );
-}
-
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-      <path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function GhostIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true">
-      <path
-        d="M12 2.75a6.75 6.75 0 0 0-6.75 6.75v10.24c0 .44.5.7.86.45L8.9 18.3l2.6 1.88c.3.21.7.21 1 0l2.6-1.88 2.8 1.89c.36.25.85-.01.85-.45V9.5A6.75 6.75 0 0 0 12 2.75Zm-2.45 7.1a1.05 1.05 0 1 1 0 2.1 1.05 1.05 0 0 1 0-2.1Zm4.9 5.48c-.61.53-1.43.8-2.45.8s-1.84-.27-2.45-.8a.78.78 0 1 1 1.03-1.16c.27.23.74.4 1.42.4s1.15-.17 1.42-.4a.78.78 0 1 1 1.03 1.16Zm0-3.38a1.05 1.05 0 1 1 0-2.1 1.05 1.05 0 0 1 0 2.1Z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
+});
 
 export default function AiChatPanel({
   isOpen,
-  sessionTitle,
+  isMobile,
   isPrivate,
-  sessions,
+  sessions = [],
   activeSessionId,
+  contextSpec,
+  openingContextSpec,
+  scopeOptions = [],
   previewSummary,
   truncated,
   messages,
@@ -62,10 +290,12 @@ export default function AiChatPanel({
   models,
   loadingSession,
   sending,
+  stopping,
+  requestReady,
   error,
+  responseStatus,
+  canRetry,
   viewportHeight,
-  keyboardHeight,
-  keyboardVisible,
   onClose,
   onNewChat,
   onNewPrivateChat,
@@ -75,265 +305,543 @@ export default function AiChatPanel({
   onApiKeyChange,
   onModelChange,
   onSubmit,
+  onStop,
+  onRetry,
+  onSaveToNote,
+  onOpenLink,
 }) {
+  const dialogRef = useRef(null);
   const transcriptRef = useRef(null);
   const textareaRef = useRef(null);
-  const settingsRef = useRef(null);
-  const [settingsExpanded, setSettingsExpanded] = useState(!apiKey);
+  const previousFocusRef = useRef(document.activeElement);
+  const followRef = useRef(true);
+  const [view, setView] = useState("chat");
+  const [showLatest, setShowLatest] = useState(false);
+  const [saveContent, setSaveContent] = useState("");
+  const [saveTitle, setSaveTitle] = useState("AI notes");
+  const [saveParent, setSaveParent] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const newThread = messages.length === 0;
+  const needsSetup = view === "chat" && !apiKey && newThread;
+  const compact = view === "chat" && newThread && apiKey;
+  const busy = sending || loadingSession;
+  const scopeLabel = aiChatScopeLabel(contextSpec);
+  const contextKey = JSON.stringify(contextSpec);
+  const choices = scopeOptions.some((option) =>
+    sameAiChatContext(option.spec, contextSpec),
+  )
+    ? scopeOptions
+    : [{ label: scopeLabel, spec: contextSpec }, ...scopeOptions].filter(
+        (option) => option.spec,
+      );
+  const selectedScope = JSON.stringify(
+    choices.find((option) => sameAiChatContext(option.spec, contextSpec))
+      ?.spec ?? contextSpec,
+  );
+  const scopeHelp =
+    contextSpec?.kind === "page"
+      ? "Includes subtopics and related notes. Fixed after sending."
+      : "Includes notes across dates. Fixed after sending.";
 
-  useEffect(() => {
-    const el = transcriptRef.current;
-    if (el) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, sending]);
-
-  useEffect(() => {
-    const ta = textareaRef.current;
-    if (ta) {
-      ta.style.height = "auto";
-      ta.style.height = `${ta.scrollHeight}px`;
-    }
-  }, [draft]);
-
-  function handleDraftChange(event) {
-    onDraftChange(event.target.value);
+  const previewSave = useCallback((content) => {
+    setSaveContent(content);
+    setSaveError("");
+    setView("save");
+  }, []);
+  function returnToChat() {
+    setView("chat");
   }
-
-  function handleKeyDown(event) {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+  function newChat(
+    privateMode = isPrivate,
+    spec = openingContextSpec ?? contextSpec,
+    preserveDraft = false,
+  ) {
+    if (privateMode) onNewPrivateChat(spec, preserveDraft);
+    else onNewChat(spec, preserveDraft);
+    returnToChat();
+  }
+  function jumpToLatest() {
+    followRef.current = true;
+    transcriptRef.current?.scrollTo({
+      top: transcriptRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+    setShowLatest(false);
+  }
+  async function saveNote(event) {
     event.preventDefault();
-    onSubmit(event);
+    setSavingNote(true);
+    setSaveError("");
+    try {
+      await onSaveToNote({
+        content: saveContent,
+        title: saveTitle,
+        parentPageId: saveParent,
+      });
+      returnToChat();
+    } catch (problem) {
+      setSaveError(problem.message);
+    } finally {
+      setSavingNote(false);
+    }
   }
 
-  function handleSettingsBlur(event) {
-    if (!apiKey) return;
-    const nextFocus = event.relatedTarget;
-    if (nextFocus && settingsRef.current?.contains(nextFocus)) return;
-    setSettingsExpanded(false);
-  }
+  useLayoutEffect(() => {
+    followRef.current = true;
+  }, [contextKey, messages[0]?.content]);
+  useLayoutEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    if (followRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowLatest(false);
+    } else setShowLatest(true);
+  }, [messages, sending, activeSessionId, view]);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+    }
+  }, [draft, view, needsSetup, newThread]);
+  useEffect(() => {
+    if (view === "chat" && apiKey && !isMobile && !loadingSession)
+      textareaRef.current?.focus();
+  }, [view, needsSetup, activeSessionId, isMobile, loadingSession]);
+  useEffect(() => {
+    const previous = previousFocusRef.current;
+    if (!dialogRef.current?.contains(document.activeElement))
+      dialogRef.current?.focus();
+    return () => {
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+  useEffect(() => {
+    function keyDown(event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (view !== "chat") returnToChat();
+        else onClose();
+      }
+      if (event.key === "Tab") {
+        const nodes = Array.from(
+          dialogRef.current?.querySelectorAll(
+            "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
+          ) ?? [],
+        ).filter((node) => node.getClientRects().length > 0);
+        if (!nodes.length) return;
+        const first = nodes[0],
+          last = nodes[nodes.length - 1];
+        if (
+          event.shiftKey &&
+          (document.activeElement === first ||
+            !dialogRef.current.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (
+          !event.shiftKey &&
+          (document.activeElement === last ||
+            !dialogRef.current.contains(document.activeElement))
+        ) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", keyDown, true);
+    return () => document.removeEventListener("keydown", keyDown, true);
+  }, [view, onClose]);
 
   if (!isOpen) return null;
-
-  const selectedModel = models.find((entry) => entry.value === model);
-  const selectedModelLabel = selectedModel?.label ?? model;
-  const overlayStyle = {
-    "--ai-chat-visible-height": viewportHeight ? `${viewportHeight}px` : "100dvh",
-    "--ai-chat-keyboard-height": `${keyboardHeight ?? 0}px`,
-    "--ai-chat-keyboard-active": keyboardVisible ? "1" : "0",
-  };
-
   return (
     <div
       className="ai-chat-overlay"
       data-no-window-drag="true"
-      style={overlayStyle}
-      onClick={onClose}
+      style={{
+        "--ai-chat-visible-height": viewportHeight
+          ? `${viewportHeight}px`
+          : "100dvh",
+      }}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
     >
       <section
-        className="ai-chat-panel"
+        className={`ai-chat-dialog${compact ? " ai-chat-dialog--compose" : ""}${needsSetup || view === "connection" ? " ai-chat-dialog--connection" : ""}`}
+        ref={dialogRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label="AI Chat"
-        onClick={(event) => event.stopPropagation()}
+        aria-label="AI chat"
       >
         <header className="ai-chat-header">
-            <div className="ai-chat-header-copy">
-              <div className="ai-chat-header-title">
-                <strong>AI Chat</strong>
-                <span className="feature-badge feature-badge--soft">Beta</span>
-                {isPrivate ? (
-                  <span className="ai-chat-mode-badge">Private</span>
-                ) : null}
-              </div>
-              {sessionTitle ? <span>{sessionTitle}</span> : null}
-          </div>
-          <button
-            className="ai-chat-close"
-            type="button"
-            aria-label="Close AI chat"
-            onClick={onClose}
-          >
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-              <path d="M4 4 12 12M12 4 4 12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-          </button>
-        </header>
-        <div className="ai-chat-layout">
-          <aside className="ai-chat-sidebar">
-            <section
-              className="ai-chat-settings"
-              ref={settingsRef}
-              onBlur={handleSettingsBlur}
-            >
-              {apiKey && !settingsExpanded ? (
-                <div className="ai-chat-settings-compact">
-                  <div className="ai-chat-settings-summary">
-                    <span>API key set</span>
-                    <small>{selectedModelLabel}</small>
-                  </div>
-                  <button
-                    type="button"
-                    className="ai-chat-key-edit"
-                    onClick={() => setSettingsExpanded(true)}
-                  >
-                    Edit
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {apiKey ? (
-                    <div className="ai-chat-settings-compact">
-                      <div className="ai-chat-settings-summary">
-                        <span>AI settings</span>
-                        <small>{selectedModelLabel}</small>
-                      </div>
-                      <button
-                        type="button"
-                        className="ai-chat-key-edit"
-                        onClick={() => setSettingsExpanded(false)}
-                      >
-                        Done
-                      </button>
-                    </div>
-                  ) : null}
-                  <label className="field ai-chat-field">
-                    <span>OpenAI API key</span>
-                    <input
-                      className="ai-chat-key-input"
-                      type="password"
-                      value={apiKey}
-                      placeholder="Paste your OpenAI API key"
-                      autoComplete="off"
-                      spellCheck="false"
-                      onChange={(event) => onApiKeyChange(event.target.value)}
-                    />
-                  </label>
-                  <label className="field ai-chat-field">
-                    <span>Model</span>
-                    <select value={model} onChange={(event) => onModelChange(event.target.value)}>
-                      {models.map((entry) => (
-                        <option key={entry.value} value={entry.value}>
-                          {entry.label} ({entry.status})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </>
-              )}
-              {settingsExpanded ? (
-                <p className="ai-chat-hint">
-                  {isPrivate
-                    ? "Private chats stay in memory only. They are not saved to history or workspace memory."
-                    : "Saved chats are stored locally. Deleting a chat removes the transcript only; workspace memory is kept."}
-                </p>
-              ) : null}
-            </section>
-            <div className="ai-chat-actions">
-              <button
-                type="button"
-                className="ai-chat-action-button"
-                onClick={onNewChat}
-                disabled={loadingSession || sending}
-              >
-                <PlusIcon />
-                <span>New chat</span>
-              </button>
-              <button
-                type="button"
-                className="ai-chat-action-button ai-chat-action-button--private"
-                aria-label="Start private chat"
-                title="Private chat"
-                onClick={onNewPrivateChat}
-                disabled={loadingSession || sending}
-              >
-                <GhostIcon />
-              </button>
-            </div>
-
-            {Array.isArray(sessions) && sessions.length > 0 ? (
-              <section className="ai-chat-sessions" aria-label="AI chat sessions">
-                {sessions.slice(0, 24).map((session) => (
-                  <div
-                    key={session.session_id}
-                    className={`ai-chat-session${session.session_id === activeSessionId ? " ai-chat-session--active" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      className="ai-chat-session-main"
-                      onClick={() => onSelectSession(session.session_id)}
-                      disabled={loadingSession || sending}
-                      title={session.preview_summary}
-                    >
-                      <span>{session.title || "New chat"}</span>
-                      <small>{session.message_count ?? 0} msg</small>
-                    </button>
-                    <button
-                      type="button"
-                      className="ai-chat-session-delete"
-                      aria-label={`Delete ${session.title || "chat"}`}
-                      title="Delete chat"
-                      onClick={() => onDeleteSession(session.session_id)}
-                      disabled={loadingSession || sending}
-                    >
-                      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
-                        <path d="M5.25 5.25 10.75 10.75M10.75 5.25 5.25 10.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                      </svg>
-                    </button>
-                  </div>
-                ))}
-              </section>
-            ) : null}
-          </aside>
-
-          <main className="ai-chat-main">
-            {previewSummary && (
-              <section className="ai-chat-preview">
-                <p>{previewSummary}</p>
-                {truncated && (
-                  <div className="ai-chat-preview-meta">
-                    <span>Oldest notes were trimmed to fit.</span>
-                  </div>
-                )}
-              </section>
+          <div className="ai-header-title">
+            {view !== "chat" && (
+              <IconButton
+                icon="back"
+                label="Back to chat"
+                onClick={returnToChat}
+              />
             )}
+            <div>
+              <strong>
+                {view === "history"
+                  ? "Conversations"
+                  : view === "connection"
+                    ? "Connection"
+                    : view === "save"
+                      ? "Save to note"
+                      : "AI Chat"}
+              </strong>
+              {view === "chat" && !newThread && (
+                <div
+                  className="ai-fixed-context"
+                  title={previewSummary}
+                  aria-label={`Fixed context: ${scopeLabel}`}
+                >
+                  <Icon name="lock" />
+                  <span>{scopeLabel}</span>
+                  {isPrivate && (
+                    <span className="ai-private-label">Private</span>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <nav className="ai-chat-toolbar" aria-label="Chat controls">
+            {view === "chat" && (
+              <>
+                {!newThread && (
+                  <IconButton
+                    icon="plus"
+                    label="New chat"
+                    disabled={busy}
+                    onClick={() => newChat()}
+                  />
+                )}
+                {(!needsSetup || sessions.length > 0) && (
+                  <IconButton
+                    icon="history"
+                    label="Chat history"
+                    onClick={() => setView("history")}
+                  />
+                )}
+                {!needsSetup && (
+                  <IconButton
+                    icon="key"
+                    label="Manage API key"
+                    onClick={() => setView("connection")}
+                  />
+                )}
+              </>
+            )}
+            <IconButton icon="close" label="Close AI chat" onClick={onClose} />
+          </nav>
+        </header>
 
-            <div className="ai-chat-transcript" ref={transcriptRef} aria-live="polite">
-              {messages.length === 0 ? null : (
-                messages.map((message, index) => (
-                  <AiChatMessage
+        {needsSetup || view === "connection" ? (
+          <KeySetup
+            apiKey={apiKey}
+            disabled={sending}
+            onSave={onApiKeyChange}
+            onDone={returnToChat}
+            onOpenLink={onOpenLink}
+          />
+        ) : view === "history" ? (
+          <div className="ai-history">
+            {!sessions.length && (
+              <div className="ai-view-empty">
+                <p>No saved conversations yet.</p>
+              </div>
+            )}
+            {sessions.map((session) => (
+              <div
+                key={session.session_id}
+                className={`ai-session${session.session_id === activeSessionId ? " ai-session--active" : ""}`}
+              >
+                <button
+                  className="ai-session-main"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    onSelectSession(session.session_id);
+                    returnToChat();
+                  }}
+                >
+                  <span>{session.title || "Untitled chat"}</span>
+                  <small>{session.preview_summary}</small>
+                </button>
+                <IconButton
+                  icon="close"
+                  label={`Delete ${session.title || "chat"}`}
+                  disabled={busy}
+                  onClick={() => onDeleteSession(session.session_id)}
+                />
+              </div>
+            ))}
+          </div>
+        ) : view === "save" ? (
+          <form className="ai-save-form" onSubmit={saveNote}>
+            <label htmlFor="ai-note-title">Note title</label>
+            <input
+              id="ai-note-title"
+              value={saveTitle}
+              disabled={savingNote}
+              onChange={(event) => setSaveTitle(event.target.value)}
+            />
+            <label htmlFor="ai-note-parent">Save under</label>
+            <select
+              id="ai-note-parent"
+              value={saveParent}
+              disabled={savingNote}
+              onChange={(event) => setSaveParent(event.target.value)}
+            >
+              <option value="">Top level</option>
+              {scopeOptions
+                .filter((option) => option.spec.kind === "page")
+                .map((option) => (
+                  <option key={option.spec.page_id} value={option.spec.page_id}>
+                    {option.label}
+                  </option>
+                ))}
+            </select>
+            <div className="ai-save-preview">
+              <ReactMarkdown remarkPlugins={[breaks]}>
+                {saveContent}
+              </ReactMarkdown>
+            </div>
+            {saveError && (
+              <p className="ai-error" role="alert">
+                {saveError}
+              </p>
+            )}
+            <button
+              className="ai-solid-button"
+              type="submit"
+              disabled={
+                savingNote ||
+                !saveTitle.trim() ||
+                /[\\/:*?"<>|]/.test(saveTitle)
+              }
+            >
+              {savingNote ? "Saving..." : "Save note"}
+            </button>
+          </form>
+        ) : (
+          <>
+            {!newThread && (
+              <div
+                className="ai-transcript"
+                ref={transcriptRef}
+                aria-label="Conversation"
+                aria-busy={busy}
+                onScroll={() => {
+                  const el = transcriptRef.current;
+                  followRef.current =
+                    el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+                  setShowLatest(!followRef.current);
+                }}
+              >
+                {messages.map((message, index) => (
+                  <ChatMessage
                     key={`${message.role}-${index}`}
                     message={message}
+                    streaming={
+                      sending &&
+                      index === messages.length - 1 &&
+                      message.role === "assistant"
+                    }
+                    onSave={previewSave}
                   />
-                ))
-              )}
-              {sending && <AiChatThinking />}
-            </div>
-
-            <form className="ai-chat-composer" onSubmit={onSubmit}>
-              <div className="ai-chat-composer-row">
-                <textarea
-                  ref={textareaRef}
-                  className="ai-chat-input"
-                  rows={1}
-                  value={draft}
-                  placeholder="Ask about the current notes"
-                  onChange={handleDraftChange}
-                  onKeyDown={handleKeyDown}
-                  disabled={loadingSession || sending}
-                />
-                <button
-                  className="primary-button ai-chat-send-button"
-                  type="submit"
-                  disabled={loadingSession || sending || !draft.trim() || !apiKey.trim()}
-                >
-                  Send
-                </button>
+                ))}
               </div>
-              {error ? <p className="ai-chat-error">{error}</p> : null}
-            </form>
-          </main>
-        </div>
+            )}
+            {!newThread && showLatest && (
+              <button
+                className="ai-latest"
+                type="button"
+                onClick={jumpToLatest}
+              >
+                &darr; Latest
+              </button>
+            )}
+            <div className="ai-status" role="status" aria-live="polite">
+              <span className="ai-sr-only">
+                {loadingSession
+                  ? "Preparing context"
+                  : sending
+                    ? stopping
+                      ? "Stopping response"
+                      : "Generating response"
+                    : responseStatus}
+              </span>
+            </div>
+            {apiKey ? (
+              <div className="ai-compose-area">
+                <form
+                  className="ai-composer"
+                  onSubmit={(event) => {
+                    followRef.current = true;
+                    onSubmit(event);
+                  }}
+                >
+                  {newThread && (
+                    <div className="ai-compose-context">
+                      <label htmlFor="ai-chat-context">Chat about</label>
+                      <select
+                        id="ai-chat-context"
+                        value={selectedScope || ""}
+                        disabled={busy}
+                        aria-describedby="ai-chat-context-help"
+                        onChange={(event) =>
+                          newChat(
+                            isPrivate,
+                            JSON.parse(event.target.value),
+                            true,
+                          )
+                        }
+                      >
+                        {choices.map((option) => (
+                          <option
+                            key={JSON.stringify(option.spec)}
+                            value={JSON.stringify(option.spec)}
+                          >
+                            {option.label}
+                            {sameAiChatContext(option.spec, openingContextSpec)
+                              ? " (current view)"
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                      <small id="ai-chat-context-help">
+                        {loadingSession
+                          ? "Preparing context..."
+                          : truncated
+                            ? "Some notes were trimmed to fit. Fixed after sending."
+                            : scopeHelp}
+                      </small>
+                    </div>
+                  )}
+                  <textarea
+                    className="ai-input"
+                    ref={textareaRef}
+                    rows={newThread ? 3 : 1}
+                    value={draft}
+                    aria-label="Message AI"
+                    placeholder={
+                      sending
+                        ? "Draft your next question..."
+                        : newThread
+                          ? "Write your first message..."
+                          : "Message..."
+                    }
+                    disabled={loadingSession}
+                    onChange={(event) => onDraftChange(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing &&
+                        !isMobile
+                      ) {
+                        event.preventDefault();
+                        if (!sending) {
+                          followRef.current = true;
+                          onSubmit(event);
+                        }
+                      }
+                    }}
+                  />
+                  <div className="ai-composer-controls">
+                    <div className="ai-composer-options">
+                      <select
+                        className="ai-model-select"
+                        aria-label="AI model"
+                        value={model}
+                        disabled={sending}
+                        onChange={(event) => onModelChange(event.target.value)}
+                      >
+                        {models.map((entry) => (
+                          <option key={entry.value} value={entry.value}>
+                            {entry.label}
+                          </option>
+                        ))}
+                      </select>
+                      {newThread && (
+                        <button
+                          className="ai-private-toggle"
+                          type="button"
+                          disabled={busy}
+                          aria-pressed={isPrivate}
+                          title="Private chats stay in memory and exclude workspace memory"
+                          onClick={() => newChat(!isPrivate, contextSpec, true)}
+                        >
+                          <Icon name="lock" />
+                          Private
+                        </button>
+                      )}
+                    </div>
+                    {sending ? (
+                      <button
+                        className="ai-send"
+                        type="button"
+                        aria-label={
+                          stopping ? "Stopping response" : "Stop response"
+                        }
+                        disabled={stopping || !requestReady}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          onStop();
+                        }}
+                      >
+                        <Icon name="stop" />
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        className="ai-send"
+                        type="submit"
+                        aria-label="Send message"
+                        disabled={loadingSession || !draft.trim()}
+                      >
+                        <Icon name="send" />
+                        Send
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+            ) : (
+              <button
+                className="ai-connect-prompt"
+                type="button"
+                onClick={() => setView("connection")}
+              >
+                Add an API key to reply
+              </button>
+            )}
+            {error ? (
+              <div className="ai-feedback ai-error" role="alert">
+                <span>{error}</span>
+                {canRetry && (
+                  <button
+                    className="ai-text-button"
+                    type="button"
+                    disabled={busy}
+                    onClick={onRetry}
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            ) : (
+              responseStatus && <p className="ai-feedback">{responseStatus}</p>
+            )}
+          </>
+        )}
       </section>
     </div>
   );

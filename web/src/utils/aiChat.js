@@ -14,7 +14,9 @@ export function buildAiChatContextSpec(selection, dualStreamNames = []) {
   if (selection.kind === "stream_dual") {
     return {
       kind: "stream_dual",
-      stream_names: Array.isArray(dualStreamNames) ? dualStreamNames.slice(0, 2) : [],
+      stream_names: Array.isArray(dualStreamNames)
+        ? dualStreamNames.slice(0, 2)
+        : [],
     };
   }
 
@@ -39,16 +41,26 @@ export function normalizeAiChatModel(model) {
     : DEFAULT_AI_CHAT_MODEL;
 }
 
-export function createClosedAiChatState(apiKey = "", model = DEFAULT_AI_CHAT_MODEL) {
+export function createClosedAiChatState(
+  apiKey = "",
+  model = DEFAULT_AI_CHAT_MODEL,
+) {
   return {
     isOpen: false,
     loadingSession: false,
     sending: false,
+    stopping: false,
+    requestId: "",
+    requestReady: false,
+    retryMessage: "",
+    retryFromIndex: null,
+    responseStatus: "",
     presentation: "desktop",
     sessionId: "",
     sessionTitle: "",
     isPrivate: false,
     contextSpec: null,
+    navigationContextSpec: null,
     sessions: [],
     previewSummary: "",
     truncated: false,
@@ -60,7 +72,11 @@ export function createClosedAiChatState(apiKey = "", model = DEFAULT_AI_CHAT_MOD
   };
 }
 
-export function createOpeningAiChatState(isMobile, apiKey = "", model = DEFAULT_AI_CHAT_MODEL) {
+export function createOpeningAiChatState(
+  isMobile,
+  apiKey = "",
+  model = DEFAULT_AI_CHAT_MODEL,
+) {
   return {
     ...createClosedAiChatState(apiKey, model),
     isOpen: true,
@@ -84,7 +100,9 @@ export function applyOpenedAiChatSession(
     contextSpec: openedSession?.context_spec ?? null,
     previewSummary: openedSession?.preview_summary ?? "",
     truncated: Boolean(openedSession?.truncated),
-    messages: Array.isArray(openedSession?.messages) ? openedSession.messages : [],
+    messages: Array.isArray(openedSession?.messages)
+      ? openedSession.messages
+      : [],
   };
 }
 
@@ -100,6 +118,12 @@ export function applyLoadedAiChatSession(
     isOpen: true,
     loadingSession: false,
     sending: false,
+    stopping: false,
+    requestReady: false,
+    requestId: "",
+    retryMessage: "",
+    retryFromIndex: null,
+    responseStatus: "",
     presentation: resolveAiChatPresentation(isMobile),
     sessionId: session?.session_id ?? "",
     sessionTitle: session?.title ?? "New chat",
@@ -127,9 +151,83 @@ export function reopenAiChatState(state, isMobile) {
     ...state,
     isOpen: true,
     loadingSession: false,
-    sending: false,
     presentation: resolveAiChatPresentation(isMobile),
+  };
+}
+
+export function aiChatScopeLabel(spec) {
+  if (spec?.kind === "stream_single") return spec.stream_name;
+  if (spec?.kind === "stream_dual")
+    return (spec.stream_names ?? []).join(" + ");
+  if (spec?.kind === "page")
+    return (spec.page_id ?? "").replace(/^pages:/, "").replaceAll("/", " / ");
+  return "Choose context";
+}
+
+export function sameAiChatContext(left, right) {
+  if (!left || !right || left.kind !== right.kind) return false;
+  if (left.kind === "page") return left.page_id === right.page_id;
+  if (left.kind === "stream_single")
+    return left.stream_name === right.stream_name;
+  if (left.kind === "stream_dual") {
+    return (
+      JSON.stringify(left.stream_names ?? []) ===
+      JSON.stringify(right.stream_names ?? [])
+    );
+  }
+  return false;
+}
+
+export function shouldStartAiChatForSelection(
+  state,
+  selection,
+  dualStreamNames,
+) {
+  const navigationContext = buildAiChatContextSpec(selection, dualStreamNames);
+  return Boolean(
+    navigationContext &&
+    !sameAiChatContext(
+      state.navigationContextSpec ?? state.contextSpec,
+      navigationContext,
+    ),
+  );
+}
+
+export function beginAiChatResponse(state, content, requestId, retry = false) {
+  const messages =
+    retry && state.retryFromIndex != null
+      ? state.messages.slice(0, state.retryFromIndex)
+      : state.messages;
+  return {
+    ...state,
+    messages: [
+      ...messages,
+      { role: "user", content },
+      { role: "assistant", content: "" },
+    ],
+    draft: retry ? state.draft : "",
+    sending: true,
+    requestReady: false,
+    stopping: false,
+    requestId,
+    retryMessage: content,
+    retryFromIndex: messages.length,
+    responseStatus: "",
     error: "",
+  };
+}
+
+export function appendAiChatDelta(state, requestId, delta) {
+  if (!state.sending || state.requestId !== requestId) return state;
+  if (!delta) return { ...state, requestReady: true };
+  const index = state.messages.length - 1;
+  if (state.messages[index]?.role !== "assistant") return state;
+  return {
+    ...state,
+    requestReady: true,
+    messages: state.messages.map((message, i) =>
+      i === index ? { ...message, content: message.content + delta } : message,
+    ),
   };
 }
 

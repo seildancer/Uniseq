@@ -36,6 +36,9 @@ const AI_MEMORY_TARGET_WORDS: usize = 1_500;
 struct AppState {
     controller: Mutex<WorkspaceController>,
     sync_lock: Arc<Mutex<()>>,
+    ai_requests: Mutex<BTreeMap<String, tokio::sync::watch::Sender<bool>>>,
+    ai_history_lock: Arc<Mutex<()>>,
+    ai_memory_lock: Arc<Mutex<()>>,
 }
 
 struct SyncLoop {
@@ -285,6 +288,13 @@ struct AiChatSessionOpenDto {
 struct AiChatResponseDto {
     assistant_text: String,
     session: AiChatSessionDto,
+    stopped: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct AiChatDeltaDto {
+    request_id: String,
+    delta: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -866,6 +876,20 @@ impl WorkspaceController {
             .apply_page_create(PageCreate { page_id })
             .map_err(ErrorDto::from);
         self.finish_local_mutation(result)
+    }
+
+    fn save_ai_chat_note(&self, page_id: String, text: String) -> CommandResult<()> {
+        self.create_page(page_id.clone())?;
+        let revision = self.page_content(page_id.clone())?.revision;
+        self.write_page_content(
+            page_id,
+            text,
+            Some(FileFingerprintInputDto {
+                len_bytes: revision.len_bytes,
+                content_hash: revision.content_hash,
+            }),
+        )?;
+        Ok(())
     }
 
     fn rename_page(
@@ -2145,6 +2169,7 @@ fn open_ai_chat_session(
 fn list_ai_chat_sessions(
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<AiChatSessionSummaryDto>> {
+    let _history = state.ai_history_lock.lock().unwrap();
     state.controller.lock().unwrap().list_ai_chat_sessions()
 }
 
@@ -2153,6 +2178,7 @@ fn get_ai_chat_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> CommandResult<AiChatSessionDto> {
+    let _history = state.ai_history_lock.lock().unwrap();
     state
         .controller
         .lock()
@@ -2165,6 +2191,7 @@ fn delete_ai_chat_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> CommandResult<bool> {
+    let _history = state.ai_history_lock.lock().unwrap();
     state
         .controller
         .lock()
@@ -2174,10 +2201,65 @@ fn delete_ai_chat_session(
 
 #[tauri::command]
 async fn ai_chat(
+    app: AppHandle,
     state: State<'_, AppState>,
+    request_id: String,
     session_id: String,
     context_spec: Option<AiChatContextSpecDto>,
     _prior_messages: Vec<AiChatMessageDto>,
+    latest_user_message: String,
+    api_key: String,
+    model: String,
+    private_mode: bool,
+) -> CommandResult<AiChatResponseDto> {
+    let (sender, cancelled) = tokio::sync::watch::channel(false);
+    {
+        let mut requests = state.ai_requests.lock().unwrap();
+        if !requests.is_empty() {
+            return Err(ErrorDto::ai_chat_request(
+                "Another response is still running.",
+            ));
+        }
+        requests.insert(request_id.clone(), sender);
+    }
+    let _ = app.emit(
+        "ai-chat-delta",
+        AiChatDeltaDto {
+            request_id: request_id.clone(),
+            delta: String::new(),
+        },
+    );
+    let result = run_ai_chat(
+        app,
+        &state,
+        &request_id,
+        cancelled,
+        session_id,
+        context_spec,
+        latest_user_message,
+        api_key,
+        model,
+        private_mode,
+    )
+    .await;
+    state.ai_requests.lock().unwrap().remove(&request_id);
+    result
+}
+
+#[tauri::command]
+fn stop_ai_chat(state: State<'_, AppState>, request_id: String) {
+    if let Some(sender) = state.ai_requests.lock().unwrap().get(&request_id) {
+        let _ = sender.send(true);
+    }
+}
+
+async fn run_ai_chat(
+    app: AppHandle,
+    state: &AppState,
+    request_id: &str,
+    cancelled: tokio::sync::watch::Receiver<bool>,
+    session_id: String,
+    context_spec: Option<AiChatContextSpecDto>,
     latest_user_message: String,
     api_key: String,
     model: String,
@@ -2275,31 +2357,52 @@ async fn ai_chat(
         }
     };
 
-    let (assistant_text, session) = tauri::async_runtime::spawn_blocking(move || {
-        let mut session = match session_execution {
+    let mut session = {
+        let _history = state.ai_history_lock.lock().unwrap();
+        match session_execution {
             SessionExecution::Inline(session) => session,
             SessionExecution::PersistedById(session_id) => {
                 read_ai_chat_session(&workspace_root, &session_id)?
             }
-        };
-        let memory = if session_is_private {
-            String::new()
-        } else {
-            read_ai_chat_memory(&workspace_root)?
-        };
-        let system_prompt = build_ai_prompt_with_memory(&session.system_prompt, &memory);
-        let prior_messages = recent_ai_chat_messages(&session.messages);
-        let assistant_text = ai::chat_completion(
-            &system_prompt,
-            &prior_messages,
-            &latest_user_message,
-            &api_key,
-            &model,
-        )
-        .map_err(|error| match error {
-            ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
-            ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
-        })?;
+        }
+    };
+    let memory = if session_is_private {
+        String::new()
+    } else {
+        let _history = state.ai_history_lock.lock().unwrap();
+        read_ai_chat_memory(&workspace_root)?
+    };
+    let system_prompt = build_ai_prompt_with_memory(&session.system_prompt, &memory);
+    let prior_messages = recent_ai_chat_messages(&session.messages);
+    let completion = ai::chat_completion_stream(
+        &system_prompt,
+        &prior_messages,
+        &latest_user_message,
+        &api_key,
+        &model,
+        cancelled,
+        |delta| {
+            let _ = app.emit(
+                "ai-chat-delta",
+                AiChatDeltaDto {
+                    request_id: request_id.to_owned(),
+                    delta: delta.to_owned(),
+                },
+            );
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
+        ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
+    })?;
+    let assistant_text = completion.text;
+    let stopped = completion.stopped;
+    let history_lock = state.ai_history_lock.clone();
+    let persist_root = workspace_root.clone();
+    let saved_text = assistant_text.clone();
+    let session = tauri::async_runtime::spawn_blocking(move || {
+        let _history = history_lock.lock().unwrap();
 
         if session.messages.is_empty() {
             session.title = derive_ai_chat_title(&latest_user_message);
@@ -2308,41 +2411,81 @@ async fn ai_chat(
             role: "user".to_owned(),
             content: latest_user_message,
         });
-        session.messages.push(AiChatMessageDto {
-            role: "assistant".to_owned(),
-            content: assistant_text.clone(),
-        });
+        if !saved_text.is_empty() {
+            session.messages.push(AiChatMessageDto {
+                role: "assistant".to_owned(),
+                content: saved_text,
+            });
+        }
         session.user_turn_count = session.user_turn_count.saturating_add(1);
         session.status = AiChatSessionStatus::Active;
         session.updated_at = unix_timestamp_string();
         if !session_is_private {
-            write_ai_chat_session(&workspace_root, &session)?;
-            let _ = update_ai_memory_from_session_delta(&workspace_root, &mut session, &api_key);
-            write_ai_chat_session(&workspace_root, &session)?;
+            if let Ok(latest) = read_ai_chat_session(&persist_root, &session.session_id) {
+                session.last_memory_checkpoint_message_index =
+                    session.last_memory_checkpoint_message_index.max(
+                        latest
+                            .last_memory_checkpoint_message_index
+                            .min(session.messages.len()),
+                    );
+            }
+            write_ai_chat_session(&persist_root, &session)?;
         }
-        Ok((assistant_text, session))
+        Ok(session)
     })
     .await
     .map_err(|error| ErrorDto::ai_chat_request(format!("AI chat task failed: {error}")))
     .and_then(|result| result)?;
 
-    if session_is_private {
-        state.controller.lock().unwrap().active_ai_chat_session = Some(
-            ActiveAiChatSession::Private {
-                session: session.clone(),
-            },
-        );
-    } else {
-        state.controller.lock().unwrap().active_ai_chat_session = Some(
-            ActiveAiChatSession::Persisted {
-                session_id: session.session_id.clone(),
-            },
-        );
+    let mut controller = state.controller.lock().unwrap();
+    let same_workspace = controller
+        .session()
+        .is_ok_and(|session| session.workspace_root() == workspace_root);
+    if same_workspace && session_is_private {
+        controller.active_ai_chat_session = Some(ActiveAiChatSession::Private {
+            session: session.clone(),
+        });
+    } else if same_workspace {
+        controller.active_ai_chat_session = Some(ActiveAiChatSession::Persisted {
+            session_id: session.session_id.clone(),
+        });
     }
+    drop(controller);
 
+    if !session_is_private && !stopped {
+        let memory_lock = state.ai_memory_lock.clone();
+        let history_lock = state.ai_history_lock.clone();
+        let session_id = session.session_id.clone();
+        // Serialize memory rewrites, but never hold up the answer or overwrite newer turns.
+        tauri::async_runtime::spawn_blocking(move || {
+            let _memory = memory_lock.lock().unwrap();
+            let snapshot = {
+                let _history = history_lock.lock().unwrap();
+                read_ai_chat_session(&workspace_root, &session_id)
+            };
+            if let Ok(mut snapshot) = snapshot {
+                if update_ai_memory_from_session_delta(
+                    &workspace_root,
+                    &mut snapshot,
+                    &api_key,
+                    &history_lock,
+                )
+                .is_ok()
+                {
+                    let _history = history_lock.lock().unwrap();
+                    if let Ok(mut latest) = read_ai_chat_session(&workspace_root, &session_id) {
+                        latest.last_memory_checkpoint_message_index =
+                            snapshot.last_memory_checkpoint_message_index;
+                        let _ = write_ai_chat_session(&workspace_root, &latest);
+                    }
+                }
+            }
+        });
+    }
     Ok(AiChatResponseDto {
         assistant_text,
         session: AiChatSessionDto::from_session(session, session_is_private),
+        stopped,
     })
 }
 
@@ -2508,6 +2651,19 @@ fn refresh_stream_workspace(
 #[tauri::command]
 fn create_page(state: State<'_, AppState>, page_id: String) -> CommandResult<()> {
     state.controller.lock().unwrap().create_page(page_id)
+}
+
+#[tauri::command]
+fn save_ai_chat_note(
+    state: State<'_, AppState>,
+    page_id: String,
+    text: String,
+) -> CommandResult<()> {
+    state
+        .controller
+        .lock()
+        .unwrap()
+        .save_ai_chat_note(page_id, text)
 }
 
 #[tauri::command]
@@ -2816,6 +2972,8 @@ pub fn run() {
             get_ai_chat_session,
             delete_ai_chat_session,
             ai_chat,
+            stop_ai_chat,
+            save_ai_chat_note,
             notify_user_activity,
             sync_conflict_detail,
             resolve_sync_conflict,
@@ -3638,6 +3796,7 @@ fn update_ai_memory_from_session_delta(
     workspace_root: &Path,
     session: &mut PersistedAiChatSession,
     api_key: &str,
+    history_lock: &Mutex<()>,
 ) -> CommandResult<bool> {
     let api_key = api_key.trim();
     if api_key.is_empty() {
@@ -3654,7 +3813,10 @@ fn update_ai_memory_from_session_delta(
         session.last_memory_checkpoint_message_index = session.messages.len();
         return Ok(false);
     }
-    let current_memory = read_ai_chat_memory(workspace_root)?;
+    let current_memory = {
+        let _history = history_lock.lock().unwrap();
+        read_ai_chat_memory(workspace_root)?
+    };
     let system_prompt = format!(
         "You maintain a concise long-term memory file for this workspace.\n\
 Rewrite the memory from the existing memory and the new transcript delta.\n\
@@ -3679,7 +3841,10 @@ Return only Markdown for memory.md. Keep it under about {AI_MEMORY_TARGET_WORDS}
         ai::ChatError::Config(message) => ErrorDto::ai_chat_config(message),
         ai::ChatError::Request(message) => ErrorDto::ai_chat_request(message),
     })?;
-    write_ai_chat_memory(workspace_root, rewritten_memory.trim())?;
+    {
+        let _history = history_lock.lock().unwrap();
+        write_ai_chat_memory(workspace_root, rewritten_memory.trim())?;
+    }
     session.last_memory_checkpoint_message_index = session.messages.len();
     Ok(true)
 }
@@ -4048,7 +4213,9 @@ mod tests {
         let root = unique_temp_dir("uniseq-app-reconnect-identity");
         write_workspace_file(&root, "pages/A.md", "keep this note");
         let mut controller = WorkspaceController::default();
-        controller.open_workspace(root.to_string_lossy().to_string()).unwrap();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
         let configure = |url: &str, id: &str| {
             controller.configure_sync(
                 SyncProviderKindDto::Custom,
@@ -4065,11 +4232,50 @@ mod tests {
         configure("https://sync.example.com/account/", "original");
         assert_eq!(sync::read_sync_state(&root).unwrap(), saved);
         configure("https://sync.example.com/account", "different");
-        assert_eq!(sync::read_sync_state(&root).unwrap(), sync::SyncState::default());
+        assert_eq!(
+            sync::read_sync_state(&root).unwrap(),
+            sync::SyncState::default()
+        );
         sync::write_sync_state(&root, &saved).unwrap();
         configure("https://sync.example.com/other-account", "different");
         assert_eq!(sync::read_sync_state(&root).unwrap(), sync::SyncState::default());
         assert_eq!(fs::read_to_string(root.join("pages/A.md")).unwrap(), "keep this note");
+        controller.close_workspace();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saving_ai_answer_creates_a_subtopic_without_overwriting_existing_notes() {
+        let root = unique_temp_dir("uniseq-app-ai-save-note");
+        write_workspace_file(&root, "pages/Research.md", "Original topic");
+        let mut controller = WorkspaceController::default();
+        controller
+            .open_workspace(root.to_string_lossy().to_string())
+            .unwrap();
+        let page_id = "pages:Research/Findings".to_owned();
+        controller
+            .save_ai_chat_note(
+                page_id.clone(),
+                "## Findings\n\nA useful answer.".to_owned(),
+            )
+            .unwrap();
+        assert_eq!(
+            controller.page_content(page_id.clone()).unwrap().text,
+            "## Findings\n\nA useful answer."
+        );
+        assert!(
+            controller
+                .save_ai_chat_note(page_id.clone(), "Overwrite".to_owned())
+                .is_err()
+        );
+        assert_eq!(
+            controller.page_content(page_id).unwrap().text,
+            "## Findings\n\nA useful answer."
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("pages/Research.md")).unwrap(),
+            "Original topic"
+        );
         controller.close_workspace();
         fs::remove_dir_all(root).unwrap();
     }
