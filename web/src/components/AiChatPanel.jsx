@@ -13,6 +13,7 @@ import "./AiChatPanel.css";
 
 const ICON_PATHS = {
   close: "m5 5 10 10M15 5 5 15",
+  collapse: "M13 3v14M3 10h7M7 7l3 3-3 3",
   key: "M12 3a4 4 0 1 1-2.9 6.8L4 15.9V18H2v-4l6.9-6.9A4 4 0 0 1 12 3Z",
   plus: "M10 4v12M4 10h12",
   chevron: "m6 8 4 4 4-4",
@@ -406,26 +407,42 @@ export default function AiChatPanel({
     }
   }, [draft, view, needsSetup, newThread]);
   useEffect(() => {
-    if (view === "chat" && apiKey && !isMobile && !loadingSession)
+    if (
+      view === "chat" &&
+      apiKey &&
+      !isMobile &&
+      !loadingSession &&
+      dialogRef.current?.contains(document.activeElement)
+    )
       textareaRef.current?.focus();
   }, [view, needsSetup, activeSessionId, isMobile, loadingSession]);
   useEffect(() => {
     const previous = previousFocusRef.current;
-    if (!dialogRef.current?.contains(document.activeElement))
-      dialogRef.current?.focus();
+    const panel = dialogRef.current;
+    if (!panel?.contains(document.activeElement)) {
+      const target =
+        !isMobile && apiKey && !loadingSession ? textareaRef.current : panel;
+      target?.focus();
+    }
     return () => {
-      if (previous?.isConnected) previous.focus();
+      if (
+        previous?.isConnected &&
+        (panel?.contains(document.activeElement) ||
+          document.activeElement === document.body)
+      )
+        previous.focus();
     };
   }, []);
   useEffect(() => {
     function keyDown(event) {
+      if (!isMobile && !dialogRef.current?.contains(event.target)) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
         if (view !== "chat") returnToChat();
         else onClose();
       }
-      if (event.key === "Tab") {
+      if (isMobile && event.key === "Tab") {
         const nodes = Array.from(
           dialogRef.current?.querySelectorAll(
             "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]",
@@ -453,28 +470,33 @@ export default function AiChatPanel({
     }
     document.addEventListener("keydown", keyDown, true);
     return () => document.removeEventListener("keydown", keyDown, true);
-  }, [view, onClose]);
+  }, [view, onClose, isMobile]);
 
   if (!isOpen) return null;
   return (
     <div
-      className="ai-chat-overlay"
+      className={`ai-chat-dock${isMobile ? " ai-chat-dock--mobile" : ""}`}
       data-no-window-drag="true"
       style={{
         "--ai-chat-visible-height": viewportHeight
           ? `${viewportHeight}px`
           : "100dvh",
       }}
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
     >
-      <section
+      {isMobile && (
+        <div
+          className="ai-chat-backdrop"
+          aria-hidden="true"
+          onPointerDown={onClose}
+        />
+      )}
+      <aside
+        id="ai-chat-panel"
         className={`ai-chat-dialog${compact ? " ai-chat-dialog--compose" : ""}${needsSetup || view === "connection" ? " ai-chat-dialog--connection" : ""}`}
         ref={dialogRef}
         tabIndex={-1}
-        role="dialog"
-        aria-modal="true"
+        role={isMobile ? "dialog" : "complementary"}
+        aria-modal={isMobile ? "true" : undefined}
         aria-label="AI chat"
       >
         <header className="ai-chat-header">
@@ -538,7 +560,11 @@ export default function AiChatPanel({
                 )}
               </>
             )}
-            <IconButton icon="close" label="Close AI chat" onClick={onClose} />
+            <IconButton
+              icon="collapse"
+              label="Collapse AI chat"
+              onClick={onClose}
+            />
           </nav>
         </header>
 
@@ -842,7 +868,7 @@ export default function AiChatPanel({
             )}
           </>
         )}
-      </section>
+      </aside>
     </div>
   );
 }

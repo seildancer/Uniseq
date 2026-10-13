@@ -1347,6 +1347,30 @@ export default function App() {
     await startAiChatSession(false);
   }
 
+  useLayoutEffect(() => {
+    // Follow navigation only before the first turn. An explicit dropdown choice
+    // stays selected until the main panel moves to a different scope.
+    if (
+      aiChat.isOpen &&
+      !aiChat.loadingSession &&
+      !aiChat.sending &&
+      aiChat.messages.length === 0 &&
+      shouldStartAiChatForSelection(aiChat, selection, dualStreamNames)
+    ) {
+      void startAiChatSession(aiChat.isPrivate, null, true);
+    }
+  }, [
+    selection,
+    dualStreamNames,
+    aiChat.isOpen,
+    aiChat.loadingSession,
+    aiChat.sending,
+    aiChat.messages.length,
+    aiChat.navigationContextSpec,
+    aiChat.contextSpec,
+    aiChat.isPrivate,
+  ]);
+
   async function handleNewAiChat(scope, preserveDraft = false) {
     await startAiChatSession(false, scope, preserveDraft);
   }
@@ -1569,6 +1593,7 @@ export default function App() {
               aria-label={aiChat.isOpen ? "Close AI chat" : "Open AI chat"}
               title={aiChat.isOpen ? "Close AI chat" : "Open AI chat"}
               aria-expanded={aiChat.isOpen}
+              aria-controls="ai-chat-panel"
               onClick={() => aiChat.isOpen ? handleCloseAiChat() : void handleOpenAiChat()}
             >
               <WindowAiIcon />
@@ -4203,7 +4228,8 @@ export default function App() {
     return (
       <WorkspaceContext.Provider value={workspace.root_path}>
         <main className="app-shell app-shell--workspace" style={mobileViewportStyle}>
-          <section className="workspace-shell" inert={aiChat.isOpen ? "" : undefined}>
+          <div className="workspace-layout">
+          <section className="workspace-shell" inert={isMobile && aiChat.isOpen ? "" : undefined}>
             {visibleError ? (
               <div className="snackbar" role="alert" aria-live="assertive">
                 <span>{formatError(visibleError)}</span>
@@ -4456,12 +4482,12 @@ export default function App() {
             ) : null}
           </section>
 
-          {aiChat.isOpen ? createPortal(
+          {aiChat.isOpen ? (
             <AiChatPanel
               isOpen={aiChat.isOpen}
               isMobile={isMobile}
               contextSpec={aiChat.contextSpec}
-              openingContextSpec={aiChat.navigationContextSpec}
+              openingContextSpec={buildAiChatContextSpec(selection, dualStreamNames)}
               scopeOptions={[
                 ...orderedStreamNames.map((name) => ({ label: name, spec: { kind: "stream_single", stream_name: name } })),
                 ...(dualStreamNames.length >= 2 ? [{ label: dualStreamNames.slice(0, 2).join(" + "), spec: { kind: "stream_dual", stream_names: dualStreamNames.slice(0, 2) } }] : []),
@@ -4498,9 +4524,9 @@ export default function App() {
               onApiKeyChange={handleAiChatApiKeyChange}
               onModelChange={handleAiChatModelChange}
               onSubmit={(event) => void handleSubmitAiChat(event)}
-            />,
-            document.body,
+            />
           ) : null}
+          </div>
 
             {modal && (
               <div className="modal-overlay" onClick={closeModal}>

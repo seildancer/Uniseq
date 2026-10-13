@@ -33,14 +33,31 @@ pub async fn chat_completion_stream(
     on_delta: impl FnMut(&str),
 ) -> Result<StreamCompletion, ChatError> {
     let config = OpenAiConfig::from_runtime(api_key, model)?;
-    let mut body = response_request_body(
+    let body = streaming_response_request_body(
         system_prompt,
         prior_messages,
         latest_user_message,
         &config.model,
     )?;
-    body["stream"] = serde_json::json!(true);
     request_stream(&config, &body, cancelled, on_delta).await
+}
+
+fn streaming_response_request_body(
+    system_prompt: &str,
+    prior_messages: &[ChatMessage],
+    latest_user_message: &str,
+    model: &str,
+) -> Result<serde_json::Value, ChatError> {
+    let instructions = format!(
+        "{system_prompt}\n\nWeb search is available for current or external information when useful. \
+Keep information from the selected notes distinct from web findings, and cite web sources."
+    );
+    let mut body =
+        response_request_body(&instructions, prior_messages, latest_user_message, model)?;
+    body["stream"] = serde_json::json!(true);
+    body["tools"] = serde_json::json!([{ "type": "web_search" }]);
+    body["tool_choice"] = serde_json::json!("auto");
+    Ok(body)
 }
 
 async fn request_stream(
@@ -82,7 +99,14 @@ async fn request_stream(
                         text.push_str(&delta);
                         on_delta(&delta);
                     }
-                    StreamEvent::Complete => return Ok(()),
+                    StreamEvent::Complete(final_text) => {
+                        // The completed payload contains URL annotations that are absent from deltas.
+                        // Persist the linked version; the UI replaces streamed text with this result.
+                        if let Some(final_text) = final_text {
+                            text = final_text;
+                        }
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -106,7 +130,7 @@ async fn request_stream(
 #[derive(Debug, PartialEq, Eq)]
 enum StreamEvent {
     Delta(String),
-    Complete,
+    Complete(Option<String>),
 }
 
 #[derive(Default)]
@@ -143,7 +167,9 @@ impl StreamDecoder {
                             events.push(StreamEvent::Delta(delta.to_owned()));
                         }
                     }
-                    Some("response.completed") => events.push(StreamEvent::Complete),
+                    Some("response.completed") => events.push(StreamEvent::Complete(
+                        openai_message_text(&value["response"]),
+                    )),
                     Some("error" | "response.failed" | "response.incomplete") => {
                         let detail = value["message"]
                             .as_str()
@@ -315,11 +341,79 @@ fn openai_message_text(response: &serde_json::Value) -> Option<String> {
                 _ => None,
             };
             if let Some(text) = text.and_then(serde_json::Value::as_str) {
-                joined.push_str(text);
+                joined.push_str(&text_with_web_citations(text, &part["annotations"]));
             }
         }
     }
     (!joined.is_empty()).then_some(joined)
+}
+
+fn text_with_web_citations(text: &str, annotations: &serde_json::Value) -> String {
+    // OpenAI citation offsets count characters, not UTF-8 bytes.
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut citations = Vec::new();
+    for annotation in annotations.as_array().into_iter().flatten() {
+        if annotation["type"] != "url_citation" {
+            continue;
+        }
+        let Some(url) = annotation["url"]
+            .as_str()
+            .and_then(|url| reqwest::Url::parse(url).ok())
+        else {
+            continue;
+        };
+        if !matches!(url.scheme(), "http" | "https") {
+            continue;
+        }
+        let label = annotation["title"]
+            .as_str()
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(url.as_str())
+            .replace('\\', "\\\\")
+            .replace('[', "\\[")
+            .replace(']', "\\]")
+            .replace(['\r', '\n'], " ");
+        let href = url
+            .as_str()
+            .replace('(', "%28")
+            .replace(')', "%29")
+            .replace('<', "%3C")
+            .replace('>', "%3E");
+        let link = format!("[{label}]({href})");
+        let range = annotation["start_index"]
+            .as_u64()
+            .zip(annotation["end_index"].as_u64())
+            .and_then(|(start, end)| {
+                let start = usize::try_from(start).ok()?;
+                let end = usize::try_from(end).ok()?;
+                (start <= end).then_some(())?;
+                Some((*boundaries.get(start)?, *boundaries.get(end)?))
+            });
+        citations.push((range, link));
+    }
+    citations.sort_by_key(|(range, _)| range.unwrap_or((usize::MAX, usize::MAX)));
+    let mut rendered = String::new();
+    let mut cursor = 0;
+    let mut remaining = Vec::new();
+    for (range, link) in citations {
+        if let Some((start, end)) = range.filter(|(start, _)| *start >= cursor) {
+            rendered.push_str(&text[cursor..start]);
+            rendered.push_str(&link);
+            cursor = end;
+        } else if !remaining.contains(&link) {
+            remaining.push(link);
+        }
+    }
+    rendered.push_str(&text[cursor..]);
+    if !remaining.is_empty() {
+        rendered.push_str("\n\nSources: ");
+        rendered.push_str(&remaining.join(", "));
+    }
+    rendered
 }
 
 #[cfg(test)]
@@ -347,7 +441,7 @@ mod tests {
             vec![
                 StreamEvent::Delta("caf\u{e9}".into()),
                 StreamEvent::Delta(" refusal".into()),
-                StreamEvent::Complete
+                StreamEvent::Complete(None)
             ]
         );
     }
@@ -426,9 +520,9 @@ mod tests {
             ),
         ] {
             let (config, server) = stream_server(wire);
-            let mut body =
-                response_request_body("Scoped notes", &[], "Question", &config.model).unwrap();
-            body["stream"] = serde_json::json!(true);
+            let body =
+                streaming_response_request_body("Scoped notes", &[], "Question", &config.model)
+                    .unwrap();
             let (_sender, cancelled) = watch::channel(false);
             let mut deltas = String::new();
             let result =
@@ -549,6 +643,116 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn chat_requests_enable_optional_web_search_without_changing_note_scope_or_history() {
+        for model in OPENAI_ALLOWED_MODELS {
+            let history = [ChatMessage {
+                role: "assistant".into(),
+                content: "Prior answer".into(),
+            }];
+            let body = streaming_response_request_body(
+                "Selected notes",
+                &history,
+                "Latest question",
+                model,
+            )
+            .unwrap();
+            assert_eq!(body["model"], *model);
+            assert_eq!(body["tools"], serde_json::json!([{ "type": "web_search" }]));
+            assert_eq!(body["tool_choice"], "auto");
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["store"], false);
+            assert!(
+                body["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Selected notes\n\n")
+            );
+            assert_eq!(
+                body["input"],
+                serde_json::json!([
+                    { "role": "assistant", "content": "Prior answer" },
+                    { "role": "user", "content": "Latest question" }
+                ])
+            );
+            let memory_body =
+                response_request_body("Rewrite memory", &[], "Transcript", model).unwrap();
+            assert!(memory_body.get("tools").is_none());
+        }
+    }
+
+    #[test]
+    fn web_citations_are_inline_links_with_unicode_offsets_and_safe_markdown() {
+        let text = "é🙂 Answer [1] and [2].";
+        let annotations = serde_json::json!([
+            { "type": "url_citation", "start_index": 18, "end_index": 21,
+              "title": "Second", "url": "https://example.com/second" },
+            { "type": "url_citation", "start_index": 10, "end_index": 13,
+              "title": "First [source]", "url": "https://example.com/first(detail)" }
+        ]);
+        assert_eq!(
+            text_with_web_citations(text, &annotations),
+            "é🙂 Answer [First \\[source\\]](https://example.com/first%28detail%29) and [Second](https://example.com/second)."
+        );
+    }
+
+    #[test]
+    fn malformed_or_overlapping_citation_offsets_keep_text_and_sources_without_panicking() {
+        let annotations = serde_json::json!([
+            { "type": "url_citation", "start_index": 0, "end_index": 3,
+              "title": "One", "url": "https://example.com/one" },
+            { "type": "url_citation", "start_index": 0, "end_index": 3,
+              "title": "Two", "url": "https://example.com/two" },
+            { "type": "url_citation", "start_index": 900, "end_index": 901,
+              "title": "Three", "url": "https://example.com/three" },
+            { "type": "url_citation", "start_index": 0, "end_index": 3,
+              "title": "Unsafe", "url": "javascript:alert(1)" }
+        ]);
+        assert_eq!(
+            text_with_web_citations("[1] answer", &annotations),
+            "[One](https://example.com/one) answer\n\nSources: [Two](https://example.com/two), [Three](https://example.com/three)"
+        );
+        assert_eq!(
+            text_with_web_citations("No search", &serde_json::Value::Null),
+            "No search"
+        );
+    }
+
+    #[tokio::test]
+    async fn streamed_web_results_preserve_deltas_and_complete_with_clickable_citations() {
+        let wire = concat!(
+            "data: {\"type\":\"response.web_search_call.searching\",\"item_id\":\"ws_1\"}\n\n",
+            "data: {\"type\":\"response.web_search_call.completed\",\"item_id\":\"ws_1\"}\n\n",
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Answer [1]\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[",
+            "{\"type\":\"web_search_call\",\"status\":\"completed\"},",
+            "{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Answer [1]\",",
+            "\"annotations\":[{\"type\":\"url_citation\",\"start_index\":7,\"end_index\":10,\"title\":\"Source\",\"url\":\"https://example.com/source\"}]}]}]}}\n\n"
+        );
+        let (config, server) = stream_server(wire);
+        let body =
+            streaming_response_request_body("Notes", &[], "Question", &config.model).unwrap();
+        let (_sender, cancelled) = watch::channel(false);
+        let mut deltas = String::new();
+        let completion = request_stream(&config, &body, cancelled, |delta| deltas.push_str(delta))
+            .await
+            .unwrap();
+        assert_eq!(deltas, "Answer [1]");
+        assert_eq!(
+            completion.text,
+            "Answer [Source](https://example.com/source)"
+        );
+        assert!(!completion.stopped);
+        let received = tokio::task::spawn_blocking(move || server.join().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            received["tools"],
+            serde_json::json!([{ "type": "web_search" }])
+        );
+        assert_eq!(received, body);
     }
 
     // Exercise the actual HTTP path without an API key or paid API calls.
